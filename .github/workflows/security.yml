@@ -1,0 +1,43 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  grep:
+    name: forbidden strings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: no private keys or production-ZK claims
+        run: |
+          set -euo pipefail
+          fail=0
+          # Private key material must never be committed.
+          if grep -rInE 'BEGIN (RSA|EC|OPENSSH|PGP) PRIVATE KEY' --exclude-dir=.git .; then
+            echo "::error::private key material committed"; fail=1
+          fi
+          # The trusted setup is a demo until the public ceremony completes.
+          if grep -rIn --exclude-dir=.git --exclude-dir=.github -i 'production ZK' .; then
+            echo "::error::'production ZK' claim found - the setup is a demo until the ceremony lands"; fail=1
+          fi
+          exit $fail
