@@ -1,0 +1,67 @@
+name: ready labels
+
+# Bir issue kapandığında ona bağımlı olanlar açılabilir hale gelir.
+# Bu workflow native issue bağımlılıklarını okuyup `ready` etiketini
+# yeniden hesaplar ve hazır olan issue'yu sahibine geri atar.
+#
+# Sahiplik `owner:<login>` etiketinde tutulur; atama "şu an üzerinde kim var"
+# demektir. Bloke bir issue atanmamış durur ki kimse yanlışlıkla başlamasın.
+
+on:
+  issues:
+    types: [closed, reopened, opened]
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  recompute:
+    runs-on: ubuntu-latest
+    steps:
+      - name: recompute ready + assignment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+
+            for (const issue of issues) {
+              if (issue.pull_request) continue;
+              const n = issue.number;
+
+              // native bağımlılıklar
+              let blockers = [];
+              try {
+                const r = await github.request(
+                  'GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by',
+                  {owner, repo, issue_number: n});
+                blockers = r.data;
+              } catch (e) {
+                core.warning(`#${n}: bağımlılık okunamadı (${e.status})`);
+                continue;
+              }
+
+              const openBlockers = blockers.filter(b => b.state === 'open').map(b => b.number);
+              const isReady = openBlockers.length === 0;
+              const labels = issue.labels.map(l => l.name);
+              const hasReady = labels.includes('ready');
+              const ownerLabel = labels.find(l => l.startsWith('owner:'));
+              const ownerLogin = ownerLabel ? ownerLabel.slice('owner:'.length) : null;
+
+              if (isReady && !hasReady) {
+                await github.rest.issues.addLabels({owner, repo, issue_number: n, labels: ['ready']});
+                core.notice(`#${n} hazır oldu`);
+                if (ownerLogin && issue.assignees.length === 0) {
+                  await github.rest.issues.addAssignees(
+                    {owner, repo, issue_number: n, assignees: [ownerLogin]});
+                  core.notice(`#${n} → ${ownerLogin} atandı`);
+                }
+              } else if (!isReady && hasReady) {
+                await github.rest.issues.removeLabel({owner, repo, issue_number: n, name: 'ready'})
+                  .catch(() => {});
+                core.notice(`#${n} tekrar bloke: #${openBlockers.join(', #')}`);
+              }
+            }
