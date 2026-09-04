@@ -1,0 +1,72 @@
+diff --git a/README.md b/README.md
+index 7fff07c..b717a76 100644
+--- a/README.md
++++ b/README.md
+@@ -11,7 +11,7 @@ Aperture lets AI agents prove compliance with operator defined policies (spendin
+
+ ## Key Features
+
+-- **Production ZK proofs** -- Circom + snarkjs Groth16 proofs verified on-chain via the Solana alt_bn128 syscalls and groth16-solana. Ten public inputs bind every proof to its policy hash, recipient, amount, mint, daily-spent, current Solana clock timestamp, and (for MPP) the Stripe receipt commitment.
++- **On-chain ZK proofs** -- Circom + snarkjs Groth16 proofs verified on-chain via the Solana alt_bn128 syscalls and groth16-solana. The phase-2 trusted setup behind these proofs is a **demo setup**, not a public ceremony; see [Trusted setup status](#trusted-setup-status). Ten public inputs bind every proof to its policy hash, recipient, amount, mint, daily-spent, current Solana clock timestamp, and (for MPP) the Stripe receipt commitment.
+ - **Atomic verify + transfer** -- The `verify_payment_proof_v2_with_transfer` Anchor instruction verifies the Groth16 proof, cross-checks public inputs against an inner SPL Token transfer instruction (recipient ATA, amount, mint), advances `OperatorState.daily_spent`, and only then signs the inner transfer. No race window between proof and settlement.
+ - **Multi-token support** -- A single policy can whitelist multiple mints. USDC and USDT are SPL Token v1; aUSDC is SPL Token-2022 with a compliance enforcing transfer hook. The verifier accepts any whitelisted mint provided the proof binds to it.
+ - **MPP (Machine Payments Protocol)** -- Stripe-backed HTTP 402 flow. The compliance API verifies the Stripe webhook signature, builds a Poseidon receipt commitment, signs an attestation with an ed25519 authority key, and the on-chain `verify_mpp_payment_proof` instruction checks that signature via Solana's native Ed25519 precompile (read through the Sysvar Instructions account) before recording the proof.
+@@ -46,7 +46,7 @@ The dashboard and agent SDK both load this ALT into every transaction that touch
+
+ ## On-chain Verification Evidence
+
+-Every proof verification is recorded on-chain with a full audit trail. Below are live transactions on Solana Devnet demonstrating the system in production.
++Every proof verification is recorded on-chain with a full audit trail. Below are live transactions on Solana Devnet demonstrating the system end to end.
+
+ **Verifier Program Logs (atomic verify + transfer)**
+
+@@ -305,9 +305,48 @@ The prover service runs a Circom 2 circuit through snarkjs to generate Groth16 p
+ Proving time:    ~600 ms warm, single Circom witness + Groth16 prove
+ Proof size:      ~256 bytes (a, b, c) + ten 32-byte public signals
+ On-chain CUs:    ~200K compute units for verify + transfer in one tx
+-Trusted setup:   shipped under circuits/payment-prover/build/payment_final.zkey
++Trusted setup:   phase 1 = powersOfTau28_hez_final_14.ptau (Polygon Hermez, 54
++                 contributors + beacon). phase 2 = ONE contribution, no beacon.
++                 DEMO SETUP - see "Trusted setup status" below.
+ ```
+
++### Trusted setup status
++
++**The phase-2 trusted setup shipped in this repository is a demo setup. It is not
++a public ceremony, and no security claim rests on it.** We say this up front
++rather than waiting to be asked.
++
++Groth16 needs a two-phase setup. The two phases are in very different shape here:
++
++| Phase | What was used | Standing |
++|---|---|---|
++| Phase 1 (universal) | `powersOfTau28_hez_final_14.ptau` — Polygon Hermez perpetual Powers of Tau, 54 contributors plus a public beacon | Sound. Reused as-is, nothing to redo. |
++| Phase 2 (circuit-specific) | One contribution, named `aperture-mpp-1777587329`, with no beacon | **Demo only.** |
++
++A phase-2 setup is sound as long as at least one contributor destroyed their
++toxic waste. With one contribution and no beacon, that reduces to a single
++machine. Whoever held that entropy can forge a proof for **any** statement,
++including `is_compliant = 1` for a payment that violates the policy. The proofs
++still verify and the circuit still enforces what it says it enforces — but the
++soundness of the deployment rests on one party, not on nobody.
++
++Check the shipped artifact yourself:
++
++```bash
++node ../mandate/circuits/scripts/inspect-zkey-setup.mjs services/prover-service/artifacts/payment.zkey
++# phase-2 contributions    1
++# beacon applied           no
++```
++
++(`inspect-zkey-setup.mjs` lives in the
++[mandate](https://github.com/wienerlabs/mandate) repository, checked out beside
++this one; it reads the contribution list straight out of the zkey binary.)
++
++A public multi-party phase-2 ceremony is planned: contributions collected in the
++open, a beacon whose source is announced in advance, and published transcripts
++anyone can replay. Until that ceremony completes and its verifying key is
++deployed, this setup is described as a demo everywhere it is mentioned.
++
+ ### Why Circom + snarkjs
+
+ Circom + snarkjs Groth16 is the only ZK stack that targets BN254 natively, has on-chain verification primitives in Solana mainline (`alt_bn128_*` syscalls + groth16-solana), produces proofs small enough to submit in a single Solana transaction, and proves fast enough on commodity CPUs to run inside an HTTP service. Aperture previously evaluated zkVM stacks; the trade off (multi-second proving, ~250 KB receipts, additional verifier router contracts) was not justified for a payment-gating circuit of this size.

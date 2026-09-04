@@ -28,16 +28,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: no private keys or production-ZK claims
+      - name: no private key material
         run: |
           set -euo pipefail
-          fail=0
           # Private key material must never be committed.
           if grep -rInE 'BEGIN (RSA|EC|OPENSSH|PGP) PRIVATE KEY' --exclude-dir=.git .; then
-            echo "::error::private key material committed"; fail=1
+            echo "::error::private key material committed"
+            exit 1
           fi
-          # The trusted setup is a demo until the public ceremony completes.
-          if grep -rIn --exclude-dir=.git --exclude-dir=.github -i 'production ZK' .; then
-            echo "::error::'production ZK' claim found - the setup is a demo until the ceremony lands"; fail=1
-          fi
-          exit $fail
+      # The trusted setup is a demo until the public ceremony (#16) completes.
+      # Patterns live in docs/disclosure/forbidden-phrases.txt so the enforced
+      # list and the documented list cannot drift apart. The script self-tests
+      # against docs/disclosure/guard-fixtures/ first, so a gutted pattern list
+      # fails loudly instead of passing everything.
+      - name: no production-ZK claims
+        run: .github/scripts/check-forbidden-phrases.sh

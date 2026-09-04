@@ -1,0 +1,40 @@
+# Claims the guard MUST catch.
+#
+# .github/scripts/check-forbidden-phrases.sh runs every line here through the
+# patterns in ../forbidden-phrases.txt and fails if any line gets through. That
+# is what stops the pattern list from being weakened into a no-op that still
+# reports green.
+#
+# Every line below is either verbatim wording that was found on a real surface
+# during the issue #3 audit, or the phrasing a reader would most plausibly
+# reach for next. Add a line whenever a new claim shape is found in the wild.
+
+# --- Found verbatim during the audit -----------------------------------------
+
+# aperture/README.md:14, before the fix
+- **Production ZK proofs** -- Circom + snarkjs Groth16 proofs verified on-chain via the Solana alt_bn128 syscalls.
+
+# aperture/circuits/payment-prover/README.md:103, before the fix
+## Production trusted setup
+
+# aperture/dashboard/src/app/docs/page.tsx:722 (served live at a-perture.com/docs), before the fix
+Trusted setup uses the Polygon Hermez public ceremony (54 contributors). The architecture is production-grade; the deployment is on Devnet for testing.
+
+# --- Plausible next phrasings ------------------------------------------------
+
+Mandate ships production-ready zero-knowledge proofs.
+Our production-grade Groth16 circuit gates every release.
+The ZK stack is production-ready.
+A production-grade trusted setup backs the verifier.
+The trusted setup is complete and audited.
+The phase-2 ceremony completed in March.
+Multi-party ceremony done, verifying key deployed.
+production-zk
+
+# --- Turkish -----------------------------------------------------------------
+
+Üretim ZK kanıtları her serbest bırakmayı kapılıyor.
+Üretim seviyesinde kanıt üretiyoruz.
+Üretime hazır ZK devresi Arc üzerinde doğrulanıyor.
+Prodüksiyon ZK altyapısı hazır.
+Halka açık seremoni tamamlandı.
