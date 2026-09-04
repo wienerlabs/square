@@ -11,6 +11,10 @@ on:
   issues:
     types: [closed, reopened, opened]
   workflow_dispatch:
+  # Bagimliliklar issue olusturulduktan SONRA eklenirse 'opened' tetiklemesi
+  # issue'yu yanlislikla hazir sayar. Saatlik tarama bu surkulenmeyi duzeltir.
+  schedule:
+    - cron: "17 * * * *"
 
 permissions:
   issues: write
@@ -62,6 +66,14 @@ jobs:
               } else if (!isReady && hasReady) {
                 await github.rest.issues.removeLabel({owner, repo, issue_number: n, name: 'ready'})
                   .catch(() => {});
+                // Etiketi kaldirmak yetmez: bloke bir issue atanmamis durmali,
+                // yoksa "sana atanmis olani al" kurali yanlis siraya izin verir.
+                const stale = issue.assignees.map(a => a.login).filter(a => a === ownerLogin);
+                if (stale.length) {
+                  await github.rest.issues.removeAssignees(
+                    {owner, repo, issue_number: n, assignees: stale});
+                  core.notice(`#${n} atamasi geri alindi (${stale.join(', ')})`);
+                }
                 core.notice(`#${n} tekrar bloke: #${openBlockers.join(', #')}`);
               }
             }
