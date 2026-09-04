@@ -1,0 +1,31 @@
+diff --git a/services/prover-service/src/index.js b/services/prover-service/src/index.js
+index 7cb2025..5a09bf9 100644
+--- a/services/prover-service/src/index.js
++++ b/services/prover-service/src/index.js
+@@ -48,12 +48,23 @@ app.post('/prove', async (req, res) => {
+         journal_digest: result.journal_digest,
+       }),
+     );
++    // A non-compliant payment used to be logged with the entire request body
++    // attached. That body carries the operator's spending ceilings, their
++    // blocked list, their token whitelist and their endpoint category — the
++    // exact values this circuit exists to keep out of plaintext — and a log
++    // file is not a privileged place to put them.
++    //
++    // Only the operator id is recorded now. Which rule failed cannot be
++    // answered from the circuit alone (it exposes is_compliant and nothing
++    // else); the rebuilt service in wienerlabs/mandate#4 adds an off-circuit
++    // rule evaluator for that, which is more than belongs in a patch to a
++    // deployment being retired.
+     if (!result.is_compliant) {
+       console.error(
+         JSON.stringify({
+-          event: 'compliance_violation_input',
+-          input: req.body,
+-          public_signals: result.public_signals,
++          event: 'compliance_violation',
++          operator_id:
++            typeof req.body?.operator_id === 'string' ? req.body.operator_id : null,
+         }),
+       );
+     }
