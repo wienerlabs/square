@@ -240,16 +240,45 @@ For `did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2`:
       "type": "EcdsaSecp256k1RecoveryMethod2020",
       "controller": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
       "blockchainAccountId": "eip155:5042002:0x7954350d124Ff904F0D4D89CCEB4499C852C4628"
+    },
+    {
+      "id": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2#agent-wallet",
+      "type": "EcdsaSecp256k1RecoveryMethod2020",
+      "controller": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+      "blockchainAccountId": "eip155:5042002:0x7954350d124Ff904F0D4D89CCEB4499C852C4628"
     }
   ],
   "authentication": ["did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2#owner"],
   "capabilityInvocation": ["did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2#owner"],
-  "assertionMethod": ["did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2#owner"],
+  "assertionMethod": [
+    "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2#owner",
+    "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2#agent-wallet"
+  ],
   "service": []
 }
 ```
 
-`service` is empty here because this agent's Registration File declares no `services[]`.
+Two things in this example are worth reading closely.
+
+`#agent-wallet` carries the same address as `#owner`. ERC-8004 defaults the Agent Wallet to
+the Owner until `setAgentWallet` is called, and §4.4 keys on the address being non-zero, not
+on it being *different*. A resolver that omits `#agent-wallet` when it happens to equal the
+Owner is non-conforming: the two are distinct roles that currently hold the same value, and
+`setAgentWallet` can separate them at any time without the DID changing.
+
+`service` is empty because this document is derived from on-chain state alone. The Agent URI
+for this agent is an `ipfs://` URI which was not retrievable from public gateways while this
+example was produced. Per §5 that is a warning, not a failure — so the example is also the
+worked case for a resolver that cannot reach the Registration File:
+
+```json
+"didResolutionMetadata": {
+  "contentType": "application/did+ld+json",
+  "warnings": [
+    { "code": "agentUriUnreachable", "message": "ipfs://bafkrei… could not be dereferenced" }
+  ]
+}
+```
 
 ---
 
@@ -516,15 +545,39 @@ change is that the specification URL points at this document. The v1 specificati
 published at its current URL, because §9.2 lets a resolver support v1 and a resolver author
 needs to be able to read what they are implementing.
 
+The current entry, for reference:
+
+```json
+{
+  "name": "aip",
+  "status": "registered",
+  "verifiableDataRegistry": "Solana",
+  "contactName": "AIP Working Group",
+  "contactEmail": "emptylabs0@gmail.com",
+  "contactWebsite": "https://github.com/dr-wilson-empty/aip-beta",
+  "specification": "https://github.com/dr-wilson-empty/aip-beta/blob/main/standards/did-aip-method-spec.md"
+}
+```
+
+Two fields change substantively:
+
+| Field | From | To |
+|---|---|---|
+| `verifiableDataRegistry` | `Solana` | ERC-8004 Identity Registries on EVM chains |
+| `specification` | the v1 document in `aip-beta` | this document |
+
+`contactWebsite` also points at a repository that is being archived, so it needs to move
+with the rest.
+
 Checklist for the new PR:
 
-- [ ] `methods/aip.json`: specification URL → this document
-- [ ] Keep the v1 URL reachable and linked from §9
-- [ ] Note in the PR description that this is a substrate change (Solana → ERC-8004), not
-      a syntax clarification, so reviewers do not read it as editorial
+- [ ] `methods/aip.json`: `verifiableDataRegistry`, `specification`, `contactWebsite`
+- [ ] Keep the v1 document reachable at a stable URL and link it from §9 — a resolver
+      author implementing v1 support has to be able to read what they are implementing,
+      and archiving `aip-beta` must not break that link
+- [ ] State in the PR description that this is a substrate change (Solana → ERC-8004), not
+      an editorial clarification, so reviewers do not skim it
 - [ ] Cross-reference ERC-8004 as the underlying registry
-
----
 
 ## 14. References
 

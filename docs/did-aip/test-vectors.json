@@ -101,9 +101,19 @@
         "expect": {
           "resolves": true,
           "controller": "did:pkh:eip155:5042002:0x7954350d124Ff904F0D4D89CCEB4499C852C4628",
-          "verificationMethodIds": ["#owner", "#agent-wallet"],
-          "authentication": ["#owner"],
-          "assertionMethod": ["#owner", "#agent-wallet"]
+          "verificationMethodIds": [
+            "#owner",
+            "#agent-wallet"
+          ],
+          "authentication": [
+            "#owner"
+          ],
+          "assertionMethod": [
+            "#owner",
+            "#agent-wallet"
+          ],
+          "serviceCountDependsOnGateway": true,
+          "$comment": "The Agent URI is ipfs:// and public gateways are not always reachable. A runner MUST NOT fail this vector on an unreachable URI: per §5 that is a warning, and the on-chain assertions above must still hold."
         }
       },
       {
