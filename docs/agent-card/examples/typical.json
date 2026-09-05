@@ -1,0 +1,37 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "Scribe",
+  "description": "Summarises documents and long threads. Charges per call in USDC on Arc.",
+  "image": "ipfs://bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
+  "services": [
+    {
+      "name": "A2A",
+      "endpoint": "https://scribe.example/.well-known/agent-card.json",
+      "version": "0.3.0"
+    },
+    {
+      "name": "DID",
+      "endpoint": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+      "version": "v2"
+    }
+  ],
+  "x402Support": true,
+  "active": true,
+  "x-aip": {
+    "type": "https://github.com/wienerlabs/mandate/docs/agent-card#v1",
+    "agentType": "Task",
+    "slug": "scribe",
+    "agentVersion": "1.2.0",
+    "capabilities": [
+      {
+        "id": "text.summarize",
+        "description": "Summarise a document into a short paragraph.",
+        "pricing": {
+          "amount": "0.05",
+          "token": "0x3600000000000000000000000000000000000000",
+          "network": "eip155:5042002"
+        }
+      }
+    ]
+  }
+}

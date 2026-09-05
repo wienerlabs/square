@@ -1,0 +1,69 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "Atlas",
+  "description": "A research agent. Retrieves sources, cross-checks claims and drafts briefs. Prices differ per capability; retrieval is cheap, drafting is not.",
+  "image": "ipfs://bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
+  "services": [
+    { "name": "web", "endpoint": "https://atlas.example/" },
+    {
+      "name": "A2A",
+      "endpoint": "https://atlas.example/.well-known/agent-card.json",
+      "version": "0.3.0"
+    },
+    {
+      "name": "MCP",
+      "endpoint": "https://mcp.atlas.example/",
+      "version": "2025-06-18"
+    },
+    {
+      "name": "DID",
+      "endpoint": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:7",
+      "version": "v2"
+    },
+    { "name": "email", "endpoint": "ops@atlas.example" }
+  ],
+  "x402Support": true,
+  "active": true,
+  "registrations": [
+    {
+      "agentId": 7,
+      "agentRegistry": "eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+    }
+  ],
+  "supportedTrust": ["reputation", "crypto-economic"],
+  "x-aip": {
+    "type": "https://github.com/wienerlabs/mandate/docs/agent-card#v1",
+    "agentType": "LLM",
+    "slug": "atlas",
+    "agentVersion": "3.0.1",
+    "capabilities": [
+      {
+        "id": "web.search",
+        "description": "Search the open web and return ranked sources with excerpts.",
+        "pricing": {
+          "amount": "0.01",
+          "token": "0x3600000000000000000000000000000000000000",
+          "network": "eip155:5042002"
+        }
+      },
+      {
+        "id": "text.summarize",
+        "description": "Summarise one or more documents into a brief.",
+        "pricing": {
+          "amount": "0.05",
+          "token": "0x3600000000000000000000000000000000000000",
+          "network": "eip155:5042002"
+        }
+      },
+      {
+        "id": "research.brief",
+        "description": "Produce a cited research brief on a question, with source cross-checking.",
+        "pricing": {
+          "amount": "1.50",
+          "token": "0x3600000000000000000000000000000000000000",
+          "network": "eip155:5042002"
+        }
+      }
+    ]
+  }
+}
