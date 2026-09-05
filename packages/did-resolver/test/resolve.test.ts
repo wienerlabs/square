@@ -194,13 +194,27 @@ describe("resolve — v1", () => {
   });
 });
 
+describe("resolve — block pinning", () => {
+  it("reads every call at the block it reports as versionId", async () => {
+    const chain = fakeChain({ ownerOf: () => OWNER, tokenURI: () => "", blockNumber: 12345n });
+    const r = resolverWith(chain);
+    const res = await r.resolve(DID(2));
+    expect(res.didDocumentMetadata.versionId).toBe("12345");
+    // Every readContract must carry that block, or versionId is a guess.
+    for (const call of chain.readContract.mock.calls) {
+      expect((call[0] as any).blockNumber).toBe(12345n);
+    }
+  });
+});
+
 describe("resolve — registry allowlist", () => {
   it("refuses a registry outside the allowlist", async () => {
     const r = resolverWith(fakeChain({ ownerOf: () => OWNER }), {
       allowedRegistries: ["0x0000000000000000000000000000000000000001"],
     });
     const res = await r.resolve(DID(2));
-    expect(res.didResolutionMetadata.error).toBe("notFound");
+    // Not notFound: the agent may exist, we declined to look.
+    expect(res.didResolutionMetadata.error).toBe("registryNotAllowed");
     expect(res.didResolutionMetadata.errorMessage).toMatch(/allowlist/);
   });
 });

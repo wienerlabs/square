@@ -52,7 +52,7 @@ from. The spec allows either choice (§9.2) and requires only that v1 is recogni
 | | |
 |---|---|
 | `rpc` | chainId → endpoint. Required. |
-| `allowedRegistries` | Registries to honour. Anyone can deploy the ERC-8004 interface, so resolving successfully is not the same as being trustworthy (spec §10.1). |
+| `allowedRegistries` | Registries to honour. Anyone can deploy the ERC-8004 interface, so resolving successfully is not the same as being trustworthy (spec §10.1). A DID outside the list returns `registryNotAllowed` — not `notFound`, because the agent may well exist and we simply declined to look. |
 | `v1Resolver` | Handler for the legacy Solana form. |
 | `fetchAgentUri` | Override the dereferencer. |
 | `ipfsGateway` | Default `https://ipfs.io/ipfs/`. |
@@ -64,6 +64,11 @@ correct-looking DID, with no error anywhere (spec §10.4).
 
 `http://` agentURIs are refused. The registration file decides what a consumer believes
 about an agent; fetching it over a channel anyone can rewrite makes that belief worthless.
+
+Every chain read is pinned to one block, and that block is what
+`didDocumentMetadata.versionId` reports. Reading the number afterwards would make it a
+guess: a block can land between the reads and the report, and on a sub-second chain it
+routinely would.
 
 ## Tests
 

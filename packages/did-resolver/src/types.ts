@@ -7,6 +7,11 @@ export type ResolutionErrorCode =
   | "unsupportedVersion"
   /** No RPC endpoint is configured for the DID's chain id. */
   | "unsupportedChain"
+  /**
+   * The registry is not in this resolver's allowlist. Distinct from notFound:
+   * the agent may well exist, we declined to look (spec §10.1).
+   */
+  | "registryNotAllowed"
   /** The chain could not be read at all. */
   | "networkError";
 

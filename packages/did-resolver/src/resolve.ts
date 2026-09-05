@@ -84,7 +84,7 @@ export class AipDidResolver {
     const allow = this.options.allowedRegistries;
     if (allow && !allow.some((a) => a.toLowerCase() === parsed.registry)) {
       return failure(
-        "notFound",
+        "registryNotAllowed",
         `registry ${parsed.registry} is not in this resolver's allowlist`
       );
     }
@@ -108,7 +108,19 @@ export class AipDidResolver {
       return failure("networkError", `chain id check failed: ${String(err)}`);
     }
 
-    const contract = { address: parsed.registry, abi: IDENTITY_REGISTRY_ABI } as const;
+    // Pin every read to one block. didDocumentMetadata.versionId claims to be
+    // the block the state was read at, and reading the number afterwards would
+    // make that a guess — a block can land between the reads and the report.
+    let blockNumber: bigint | undefined;
+    try {
+      blockNumber = await client.getBlockNumber();
+    } catch { /* versionId is best-effort; the reads still work */ }
+
+    const contract = {
+      address: parsed.registry,
+      abi: IDENTITY_REGISTRY_ABI,
+      ...(blockNumber !== undefined ? { blockNumber } : {}),
+    } as const;
 
     let owner: string;
     try {
@@ -155,11 +167,6 @@ export class AipDidResolver {
         });
       }
     }
-
-    let blockNumber: bigint | undefined;
-    try {
-      blockNumber = await client.getBlockNumber();
-    } catch { /* versionId is best-effort */ }
 
     const inactive = registration !== null && registration.active === false;
 
