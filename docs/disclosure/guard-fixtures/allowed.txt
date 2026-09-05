@@ -19,6 +19,8 @@ Until the ceremony completes, no claim of production-level assurance applies to 
 Phase 2 has one contribution and no beacon, so treat it as a demo.
 A public multi-party ceremony covering both phases is planned.
 Phase 1 was generated locally and matches no published ceremony.
+Phase 1 is the Perpetual Powers of Tau, contribution 80, adopted and hash-verified.
+The key is built on the Perpetual Powers of Tau with 80 contributions.
 The key's alpha and beta match no published ceremony, so the tau behind it was generated locally.
 The ceremony has not been held. Nothing in this repository depends on it having been held.
 Do not describe this as production anything until issue #16 closes.

@@ -1,10 +1,17 @@
 #!/usr/bin/env node
 // Compile the circuits and produce a development proving key.
 //
-// The key this makes is NOT a ceremony output. It exists so tests and the
-// prover service can run; both phases of its setup are single-machine. The real
-// ceremony is mandate#16, and until it lands nothing built here carries an
-// assurance claim — see docs/disclosure/zk-setup-status.md.
+// Phase 1 is real. It is the adopted Perpetual Powers of Tau contribution 80,
+// fetched and hash-checked by scripts/fetch-ptau.mjs: 80 public contributions,
+// none of them ours. Phase 2 is not real — it is a single contribution from
+// this machine with no beacon — so the key as a whole is still a development
+// key and nothing built on it carries an assurance claim.
+//
+// mandate#16 replaces phase 2 with a multi-party chain and a beacon. Until it
+// lands, see docs/disclosure/zk-setup-status.md.
+//
+// Read what a key actually is rather than trusting this comment:
+//   node scripts/inspect-zkey-setup.mjs build/payment.zkey
 //
 //   node scripts/build.mjs            compile everything, then a dev zkey
 //   node scripts/build.mjs --no-zkey  compile only (what the tests need)
@@ -15,14 +22,12 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ADOPTED, ensurePtau } from './fetch-ptau.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const BUILD = path.join(ROOT, 'build');
 
-// Powers of tau size. The main circuit is ~2.6k non-linear constraints, so 2^13
-// is the smallest that fits; 13 keeps the dev setup fast.
-const POT_POWER = 13;
 
 const CIRCUITS = [
   { name: 'payment', file: 'payment.circom' },
@@ -67,22 +72,15 @@ if (process.argv.includes('--no-zkey')) {
   process.exit(0);
 }
 
-const potFinal = path.join(BUILD, `pot${POT_POWER}_final.ptau`);
-if (!fs.existsSync(potFinal)) {
-  process.stdout.write('\n--- development powers of tau (NOT a ceremony) ---\n');
-  const pot0 = path.join(BUILD, `pot${POT_POWER}_0.ptau`);
-  const pot1 = path.join(BUILD, `pot${POT_POWER}_1.ptau`);
-  // Entropy from the OS rather than a literal, so two builds never share a tau
-  // and nobody can mistake this for a reproducible artifact.
-  const entropy = Buffer.from(
-    globalThis.crypto.getRandomValues(new Uint8Array(32)),
-  ).toString('base64');
-  run('snarkjs', ['powersoftau', 'new', 'bn128', String(POT_POWER), pot0, '-v']);
-  run('snarkjs', ['powersoftau', 'contribute', pot0, pot1, '--name=dev-only', `-e=${entropy}`]);
-  run('snarkjs', ['powersoftau', 'prepare', 'phase2', pot1, potFinal, '-v']);
-}
+// Phase 1: the adopted public ceremony, not something generated here. The fetch
+// refuses any file that does not hash to the adopted one, so a proving key can
+// never quietly end up standing on an unidentified tau.
+process.stdout.write(`\n--- phase 1: ${ADOPTED.ceremony} contribution ${ADOPTED.contribution} ---\n`);
+const ptau = await ensurePtau();
+process.stdout.write(`${ADOPTED.file}  sha256 ${ptau.sha256}  verified\n`);
+const potFinal = ptau.file;
 
-process.stdout.write('\n--- development proving key (NOT a ceremony) ---\n');
+process.stdout.write('\n--- phase 2: development contribution (NOT a ceremony) ---\n');
 const zkey0 = path.join(BUILD, 'payment_0.zkey');
 const zkey = path.join(BUILD, 'payment.zkey');
 const entropy = Buffer.from(
@@ -92,5 +90,8 @@ run('snarkjs', ['groth16', 'setup', path.join(BUILD, 'payment.r1cs'), potFinal, 
 run('snarkjs', ['zkey', 'contribute', zkey0, zkey, '--name=dev-only', `-e=${entropy}`]);
 run('snarkjs', ['zkey', 'export', 'verificationkey', zkey, path.join(BUILD, 'payment_vk.json')]);
 
-process.stdout.write('\nbuild/payment.zkey is a DEVELOPMENT key. Check what it is with:\n');
-process.stdout.write('  node scripts/inspect-zkey-setup.mjs build/payment.zkey\n');
+process.stdout.write(
+  '\nbuild/payment.zkey has a real phase 1 and a development phase 2.\n'
+  + 'It is a DEVELOPMENT key until mandate#16 runs the phase-2 ceremony. Check it:\n'
+  + '  node scripts/inspect-zkey-setup.mjs build/payment.zkey\n',
+);

@@ -182,11 +182,20 @@ checked does not belong on any of these surfaces, including this one.
 
 ## When this lifts
 
-[#16][i16] — the public ceremony — is the only thing that lifts it, and it now
-has to cover **both** phases: adopting an external, hash-verified powers of tau
-for phase 1 and running a multi-party contribution chain with a beacon for
-phase 2. Refreshing phase 2 alone would leave the key standing on a tau one
-machine produced.
+[#16][i16] — the public ceremony — is the only thing that lifts it.
+
+Phase 1 is already settled, and by adoption rather than by running anything:
+[#15](https://github.com/wienerlabs/mandate/issues/15) adopted the Perpetual
+Powers of Tau contribution 80, hash-verified, and keys built in this repository
+now stand on it — [docs/ceremony/phase1-ptau.md](../ceremony/phase1-ptau.md) is
+the record and `circuits/scripts/inspect-zkey-setup.mjs` recognises it in a
+finished key. That leaves #16 with phase 2: a multi-party contribution chain
+with a beacon announced in advance. Refreshing phase 2 alone would have been
+pointless while phase 1 was still one machine's tau, which is why the adoption
+came first.
+
+None of this changes what the *inherited* aperture key is. That one is still a
+demo in both phases, and everything above still describes it.
 
 Until then, the sequence is fixed: [#14][i14] freezes the circuit, [#15][i15]
 organises the ceremony, [#16][i16] runs it, [#17][i17] deploys the verifier
