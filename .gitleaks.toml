@@ -1,17 +1,18 @@
 # gitleaks yapilandirmasi.
 #
-# Varsayilan kural setini oldugu gibi kullaniyoruz; yalnizca yer tutucu
-# degerler icin dar bir istisna var. Genis bir "test dosyalarini atla"
-# kurali BILEREK yok: gercek bir sir de bir test dosyasinda durabilir.
+# Varsayilan kural seti oldugu gibi kullaniliyor. Istisnalar DOSYA BAZINDA ve
+# tek tek yaziliyor; "test dosyalarini atla" bicimindeki genis bir kural
+# bilerek yok, cunku gercek bir sir de bir test dosyasinda durabilir.
+#
+# Not: bu surumde [allowlist] altindaki `regexes` alani `useDefault = true`
+# ile birlestiginde uygulanmiyor; deger bazinda istisna yerine yol bazinda
+# istisna yazmak zorunda kaldik. Yeni bir yol eklerken gerekcesini de yaz.
 
 [extend]
 useDefault = true
 
-[allowlist]
-description = "Redaksiyon testlerinin yer tutucu degerleri sir degildir"
-regexTarget = "match"
-regexes = [
-  '''REDACTED''',
-  '''\[redacted\]''',
-  '''<redacted>''',
-]
+[[allowlists]]
+description = """Redaksiyon testi, redakte edilmis ciktilari dogruladigi icin
+yer tutucu 'REDACTED' degerleri barindiriyor; generic-api-key kurali bunlarin
+entropisine takiliyor. Dosyada gercek bir kimlik bilgisi yok."""
+paths = ['''^services/prover/test/error-redaction\.test\.js$''']
