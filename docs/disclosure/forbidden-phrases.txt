@@ -50,8 +50,25 @@ production trusted[ -]?setup
 # Claiming the setup is finished or safe when it is not
 trusted setup[^.]{0,40}(is|was)[^.]{0,20}(complete|completed|done|final|finalised|finalized|audited|secure|sound)
 
-# Claiming the ceremony happened
-(phase.?2|multi.?party|public)[ -]ceremony[^.]{0,30}(complete|completed|done|finished|ran|held)
+# Claiming the ceremony happened.
+#
+# Deliberately tight rather than `ceremony[^.]{0,30}(held|done|...)`: the looser
+# form also matches "the public ceremony has not been held", which is the
+# sentence we most want people to be able to write. A guard that fires on the
+# disclaimer pushes authors towards vaguer wording, so the affirmative shape is
+# spelled out instead. ERE has no lookahead, hence the explicit verb group.
+(phase.?2|multi.?party|public)[ -]ceremony( (has|was|is|were))?( been)? (complete|completed|done|finished|ran|held)
+
+# Claiming phase 1 is the Hermez / Perpetual Powers of Tau ceremony.
+#
+# This one is here because we got it wrong ourselves. The first version of this
+# disclosure repeated a source comment saying phase 1 was
+# powersOfTau28_hez_final_14.ptau with 54 contributors. The artifact says
+# otherwise: the key's alpha and beta match no published ceremony. An unchecked
+# provenance claim is the same failure as an unchecked assurance claim, so it is
+# enforced the same way. See zk-setup-status.md.
+(hermez|perpetual powers of tau|powersOfTau28_hez)[^.]{0,60}(54|fifty.four|contributors|beacon|sound|reused)
+(phase.?1|powers of tau|ptau)[^.]{0,40}(is|are|uses|reuses|based on)[^.]{0,30}(hermez|polygon|perpetual powers of tau)
 
 # --- Turkish -----------------------------------------------------------------
 

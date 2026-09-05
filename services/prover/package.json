@@ -1,0 +1,29 @@
+{
+  "name": "@mandate/prover",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HTTP service wrapping snarkjs to generate Groth16 proofs for the payment-compliance circuit.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "bs58": "^6.0.0",
+    "circomlibjs": "^0.1.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "snarkjs": "^0.7.5"
+  },
+  "devDependencies": {
+    "supertest": "^7.2.2",
+    "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

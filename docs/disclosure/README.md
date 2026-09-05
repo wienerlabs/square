@@ -2,10 +2,11 @@
 
 What this project says about itself when the honest answer is unflattering.
 
-Right now there is one such thing: the phase-2 trusted setup inherited from
-[aperture](https://github.com/wienerlabs/aperture) is a demo — one contribution,
-no beacon. Tracked as [#3](https://github.com/wienerlabs/mandate/issues/3),
-lifted by [#16](https://github.com/wienerlabs/mandate/issues/16).
+Right now there is one such thing: the trusted setup inherited from
+[aperture](https://github.com/wienerlabs/aperture) is a demo in **both** phases
+— a locally generated powers of tau, and a phase 2 with one contribution and no
+beacon. Tracked as [#3](https://github.com/wienerlabs/mandate/issues/3), lifted
+by [#16](https://github.com/wienerlabs/mandate/issues/16).
 
 | File | What it is |
 |---|---|
@@ -15,15 +16,19 @@ lifted by [#16](https://github.com/wienerlabs/mandate/issues/16).
 | [guard-fixtures/](./guard-fixtures/) | Lines the guard must catch, and lines it must never catch. |
 | [patches/](./patches/) | Unified diffs against `wienerlabs/aperture`, verified to apply cleanly. |
 
-## Why this directory is exempt from the scan
+## How exceptions work
 
-`.github/scripts/check-forbidden-phrases.sh` skips `docs/disclosure/`. It has
-to: the audit record in `surfaces.md` quotes the claim it found, and the patches
-under `patches/` carry it on their `-` lines — that is the claim being deleted,
-not made. Scanning here would flag the removal. The directory is small enough to
-read in full during review.
+Prose in this directory is scanned like everything else. A line that quotes a
+forbidden claim on purpose carries the `ci-allow-phrase` marker, which is main's
+mechanism: marking the line rather than exempting the file keeps the exception
+visible in the diff that introduces it.
 
-Everything else in the repository is scanned.
+Three paths cannot use the marker and are skipped outright — `patches/`, because
+a marker inside a diff line would corrupt the patch and the wording there is on
+`-` lines being deleted; `guard-fixtures/`, where every line is a forbidden
+claim by construction and the self-test is what governs it; and
+`forbidden-phrases.txt` itself, whose comments quote the wording each pattern is
+for. The script lists them with the reason beside each.
 
 ## Working on this
 

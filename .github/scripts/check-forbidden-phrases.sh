@@ -24,10 +24,35 @@ PATTERNS_FILE="$ROOT/docs/disclosure/forbidden-phrases.txt"
 FIXTURE_VIOLATIONS="$ROOT/docs/disclosure/guard-fixtures/violations.txt"
 FIXTURE_ALLOWED="$ROOT/docs/disclosure/guard-fixtures/allowed.txt"
 
-# docs/disclosure/ is where the forbidden wording is catalogued and negated, so
-# scanning it would flag the catalogue itself. .github/ holds this script and
-# the workflow that names the patterns.
-EXCLUDED_PREFIXES=('docs/disclosure/' '.github/')
+# A line carrying this marker is a deliberate, reviewed exception. Marking the
+# line rather than exempting the file keeps the exception visible in the diff
+# that introduces it, so the rule cannot be silenced by accident.
+ALLOW_MARKER='ci-allow-phrase'
+
+# Paths the marker cannot reach, and why each one is here.
+#
+#   .github/                            this script and the workflow have to
+#                                       name the patterns to apply them.
+#   docs/disclosure/patches/            unified diffs. The forbidden wording is
+#                                       on their `-` lines — the claim being
+#                                       deleted — and a marker inside a diff
+#                                       line would corrupt the patch.
+#   docs/disclosure/guard-fixtures/     every line in violations.txt is a
+#                                       forbidden claim by construction; the
+#                                       self-test is what governs this file.
+#   docs/disclosure/forbidden-phrases.txt
+#                                       the pattern list, whose comments quote
+#                                       the wording each pattern is for.
+#
+# Prose is not on this list. The audit record in surfaces.md quotes what it
+# found and carries the marker line by line, which is the point: an exception
+# shows up in the diff that introduces it.
+EXCLUDED_PREFIXES=(
+  '.github/'
+  'docs/disclosure/patches/'
+  'docs/disclosure/guard-fixtures/'
+  'docs/disclosure/forbidden-phrases.txt'
+)
 
 # GitHub Actions annotations when running in CI, plain text otherwise.
 err() {
@@ -138,9 +163,13 @@ scan() {
   fi
 
   for pattern in "${PATTERNS[@]}"; do
-    # -I skips binaries, -n gives line numbers for the annotation.
-    if matches="$(grep -IniE -- "$pattern" "${FILES[@]}" 2>/dev/null)"; then
+    # -I skips binaries, -n gives line numbers for the annotation. Lines
+    # carrying the allow marker are deliberate disclaimers and are dropped here,
+    # not excluded earlier, so they still have to survive pattern review.
+    matches="$(grep -IniE -- "$pattern" "${FILES[@]}" 2>/dev/null | grep -v -- "$ALLOW_MARKER" || true)"
+    if [[ -n "$matches" ]]; then
       while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
         err "forbidden claim (/$pattern/): $file"
         failures=$((failures + 1))
       done <<< "$matches"

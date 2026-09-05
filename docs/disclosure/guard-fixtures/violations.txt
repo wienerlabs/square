@@ -20,6 +20,14 @@
 # aperture/dashboard/src/app/docs/page.tsx:722 (served live at a-perture.com/docs), before the fix
 Trusted setup uses the Polygon Hermez public ceremony (54 contributors). The architecture is production-grade; the deployment is on Devnet for testing.
 
+# --- The provenance claim this disclosure got wrong itself -------------------
+
+# From the first version of this PR, and from aperture/programs/verifier/src/groth16_vk.rs:18
+Phase 1 reuses the Polygon Hermez powers of tau: 54 contributors plus a public beacon.
+Trusted setup basis: powersOfTau28_hez_final_14.ptau — the Polygon Hermez perpetual Powers of Tau ceremony with 54 contributors + beacon
+Phase 1 is the Hermez ceremony and is sound, reused as-is.
+The powers of tau is based on Polygon Hermez.
+
 # --- Plausible next phrasings ------------------------------------------------
 
 Mandate ships production-ready zero-knowledge proofs.

@@ -17,8 +17,9 @@ The phase-2 trusted setup shipped in this repository is a demo setup.
 This is a demo setup. It is not a public ceremony, and no security claim rests on it.
 Until the ceremony completes, no claim of production-level assurance applies to anything here.
 Phase 2 has one contribution and no beacon, so treat it as a demo.
-A public multi-party phase-2 ceremony is planned.
-Phase 1 reuses the Polygon Hermez powers of tau: 54 contributors plus a public beacon.
+A public multi-party ceremony covering both phases is planned.
+Phase 1 was generated locally and matches no published ceremony.
+The key's alpha and beta match no published ceremony, so the tau behind it was generated locally.
 The ceremony has not been held. Nothing in this repository depends on it having been held.
 Do not describe this as production anything until issue #16 closes.
 
