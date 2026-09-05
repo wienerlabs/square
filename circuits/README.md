@@ -7,11 +7,16 @@ payment.circom              the circuit
 lib/timestamp.circom        UTC decomposition, soundly constrained
 test/                       vitest suites and the circuits they drive
 scripts/build.mjs           compile, and produce a development proving key
+scripts/fetch-ptau.mjs      fetch and hash-check the adopted phase-1 ceremony
 scripts/inspect-zkey-setup.mjs   read a zkey's trusted-setup provenance
 ```
 
-> The proving key `scripts/build.mjs` produces is a **development key**, not a
-> ceremony output. Both phases of its setup are single-machine. See
+> The proving key `scripts/build.mjs` produces has a **real phase 1** — the
+> adopted Perpetual Powers of Tau contribution 80, verified by hash and recorded
+> in [docs/ceremony/phase1-ptau.md](../docs/ceremony/phase1-ptau.md) — and a
+> **development phase 2**: one contribution from your own machine, no beacon. It
+> stays a development key until [#16][i16] runs the phase-2 ceremony, and
+> nothing built on it carries an assurance claim. See
 > [docs/disclosure/zk-setup-status.md](../docs/disclosure/zk-setup-status.md).
 
 ## Public signals
@@ -172,17 +177,28 @@ soundness fixes and still came out smaller than what it replaced.
 
 ```bash
 npm install
-npm run build            # compile, then a development proving key
-npm run build -- --no-zkey   # compile only, which is all the tests need
+npm run build                # compile, fetch the phase-1 ptau, then a dev key
+npm run build -- --no-zkey   # compile only, which is all most tests need
 npm test
 ```
 
 `circom` and `snarkjs` must be on `PATH`; `scripts/build.mjs` says so plainly if
-they are not. Everything lands in `build/`, which is gitignored — the artifacts
-are reproducible in seconds and a `.zkey` never belongs in git.
+they are not. The first full build downloads the adopted powers of tau (9.5 MB)
+and refuses to continue if it does not hash to the adopted file, so a proving
+key cannot end up standing on an unidentified tau.
+
+Everything lands in `build/`, which is gitignored — the artifacts are
+reproducible and a `.zkey` never belongs in git.
 
 The proof round-trip suite skips when no development key is present, and says
-so, rather than passing on nothing.
+so, rather than passing on nothing. Check what a key you built actually is:
+
+```console
+$ node scripts/inspect-zkey-setup.mjs build/payment.zkey
+phase-1 ceremony         Perpetual Powers of Tau, contribution 80 (ppot_0080_*)
+phase-2 contributions    1
+beacon applied           no
+```
 
 ## What happens next
 

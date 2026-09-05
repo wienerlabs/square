@@ -67,8 +67,15 @@ trusted setup[^.]{0,40}(is|was)[^.]{0,20}(complete|completed|done|final|finalise
 # otherwise: the key's alpha and beta match no published ceremony. An unchecked
 # provenance claim is the same failure as an unchecked assurance claim, so it is
 # enforced the same way. See zk-setup-status.md.
-(hermez|perpetual powers of tau|powersOfTau28_hez)[^.]{0,60}(54|fifty.four|contributors|beacon|sound|reused)
-(phase.?1|powers of tau|ptau)[^.]{0,40}(is|are|uses|reuses|based on)[^.]{0,30}(hermez|polygon|perpetual powers of tau)
+# Narrowed once phase 1 was actually settled. #15 adopted the Perpetual Powers
+# of Tau contribution 80, hash-verified, and keys built here now carry its
+# fingerprint — so "phase 1 is the Perpetual Powers of Tau" became a true
+# statement we need to be able to write, and blocking it would be the guard
+# stopping honest disclosure. What stays blocked is the specific claim that was
+# false: that this key descends from the Hermez snapshot. It never did, and that
+# file is not even fetchable any more.
+(hermez|powersOfTau28_hez)[^.]{0,60}(54|fifty.four|contributors|beacon|sound|reused)
+(phase.?1|powers of tau|ptau)[^.]{0,40}(is|are|uses|reuses|based on)[^.]{0,30}(hermez|powersOfTau28_hez)
 
 # --- Turkish -----------------------------------------------------------------
 

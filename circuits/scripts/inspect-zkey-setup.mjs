@@ -69,33 +69,56 @@ function readFieldElement(buf, offset, n8q) {
   return fromMontgomery(BigInt(`0x${le.reverse().toString('hex')}`));
 }
 
-// vk_alpha_1 and vk_beta_2 of the Perpetual Powers of Tau ceremony, as
-// finalised and published by Hermez/Polygon in the powersOfTau28_hez_final_*
-// files. Every truncation of that ceremony shares them: alpha and beta are
-// single group elements, so pot11 and pot23 carry the same pair.
+// Known phase-1 ceremonies, by the vk_alpha_1 / vk_beta_2 pair a key built on
+// them carries. Every truncation of a ceremony shares the pair — alpha and beta
+// are single group elements, so power 11 and power 23 of the same ceremony are
+// indistinguishable here, which is exactly what makes the pair identify the
+// ceremony rather than the circuit.
 //
-// Sourced by reading them out of verification keys published by projects that
-// document building on those files, and confirmed by how widely they occur —
-// these exact decimal strings appear in thousands of unrelated repositories,
-// which is what a shared public ceremony looks like and what a locally
-// generated tau never does.
-const PPOT_FINGERPRINT = Object.freeze({
-  name: 'Perpetual Powers of Tau (powersOfTau28_hez_final_*)',
-  alpha1: [
-    '20491192805390485299153009773594534940189261866228447918068658471970481763042',
-    '9383485363053290200918347156157836566562967994039712273449902621266178545958',
-  ],
-  beta2: [
-    [
-      '6375614351688725206403948262868962793625744043794305715222011528459656738731',
-      '4252822878758300859123897981450591353533073413197771768651442665752259397132',
+// Each pair was read out of a key actually built on that file, and each is
+// corroborated by how widely it occurs: these exact decimal strings appear in
+// hundreds to thousands of unrelated repositories. That is what a shared public
+// ceremony looks like, and what a locally generated tau never does.
+//
+// The two entries are the same Perpetual Powers of Tau ceremony at different
+// points along its contribution chain. Contribution 80 is the one this project
+// adopts — see docs/ceremony/phase1-ptau.md.
+const KNOWN_CEREMONIES = Object.freeze([
+  {
+    name: 'Perpetual Powers of Tau, contribution 80 (ppot_0080_*)',
+    alpha1: [
+      '16428432848801857252194528405604668803277877773566238944394625302971855135431',
+      '16846502678714586896801519656441059708016666274385668027902869494772365009666',
     ],
-    [
-      '10505242626370262277552901082094356697409835680220590971873171140371331206856',
-      '21847035105528745403288232691147584728191162732299865338377159692350059136679',
+    beta2: [
+      [
+        '16348171800823588416173124589066524623406261996681292662100840445103873053252',
+        '3182164110458002340215786955198810119980427837186618912744689678939861918171',
+      ],
+      [
+        '19687132236965066906216944365591810874384658708175106803089633851114028275753',
+        '4920802715848186258981584729175884379674325733638798907835771393452862684714',
+      ],
     ],
-  ],
-});
+  },
+  {
+    name: 'Perpetual Powers of Tau, Hermez snapshot (powersOfTau28_hez_final_*)',
+    alpha1: [
+      '20491192805390485299153009773594534940189261866228447918068658471970481763042',
+      '9383485363053290200918347156157836566562967994039712273449902621266178545958',
+    ],
+    beta2: [
+      [
+        '6375614351688725206403948262868962793625744043794305715222011528459656738731',
+        '4252822878758300859123897981450591353533073413197771768651442665752259397132',
+      ],
+      [
+        '10505242626370262277552901082094356697409835680220590971873171140371331206856',
+        '21847035105528745403288232691147584728191162732299865338377159692350059136679',
+      ],
+    ],
+  },
+]);
 
 function readSections(buf) {
   if (buf.subarray(0, 4).toString('ascii') !== 'zkey') {
@@ -149,24 +172,28 @@ function readGroth16Header(buf, section) {
   return { n8q, n8r, nVars, nPublic, domainSize, alpha1, beta2 };
 }
 
-// Does this key's phase-1 fingerprint match the published ceremony?
+// Does this key's phase-1 fingerprint match a ceremony we know?
 function identifyPhase1(header) {
-  const alphaMatches =
-    header.alpha1[0] === PPOT_FINGERPRINT.alpha1[0] &&
-    header.alpha1[1] === PPOT_FINGERPRINT.alpha1[1];
-  const betaMatches =
-    header.beta2[0][0] === PPOT_FINGERPRINT.beta2[0][0] &&
-    header.beta2[0][1] === PPOT_FINGERPRINT.beta2[0][1] &&
-    header.beta2[1][0] === PPOT_FINGERPRINT.beta2[1][0] &&
-    header.beta2[1][1] === PPOT_FINGERPRINT.beta2[1][1];
+  const alphaOf = (c) =>
+    header.alpha1[0] === c.alpha1[0] && header.alpha1[1] === c.alpha1[1];
+  const betaOf = (c) =>
+    header.beta2[0][0] === c.beta2[0][0] && header.beta2[0][1] === c.beta2[0][1]
+    && header.beta2[1][0] === c.beta2[1][0] && header.beta2[1][1] === c.beta2[1][1];
 
-  if (alphaMatches && betaMatches) {
-    return { known: true, ceremony: PPOT_FINGERPRINT.name, alphaMatches, betaMatches };
+  for (const ceremony of KNOWN_CEREMONIES) {
+    const alphaMatches = alphaOf(ceremony);
+    const betaMatches = betaOf(ceremony);
+    if (alphaMatches && betaMatches) {
+      return { known: true, ceremony: ceremony.name, alphaMatches, betaMatches };
+    }
+    // A half match should never happen: alpha and beta come from the same ptau.
+    // If it does, the file is malformed or was assembled by hand, and saying so
+    // is more useful than picking one of the two answers.
+    if (alphaMatches !== betaMatches) {
+      return { known: false, ceremony: null, alphaMatches, betaMatches };
+    }
   }
-  // A half match should never happen: alpha and beta come from the same ptau.
-  // If it does, the file is malformed or was assembled by hand, and saying so
-  // is more useful than picking one of the two answers.
-  return { known: false, ceremony: null, alphaMatches, betaMatches };
+  return { known: false, ceremony: null, alphaMatches: false, betaMatches: false };
 }
 
 function readContributions(buf, section, n8q) {
