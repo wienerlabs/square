@@ -72,7 +72,7 @@
       "required": ["type", "agentType", "capabilities"],
       "properties": {
         "type": {
-          "const": "https://github.com/wienerlabs/mandate/docs/agent-card#v1",
+          "const": "https://github.com/wienerlabs/mandate/blob/main/docs/agent-card/README.md#v1",
           "description": "Self-describing, mirroring ERC-8004's own approach. A future v2 changes this string; readers dispatch on it."
         },
         "agentType": {
