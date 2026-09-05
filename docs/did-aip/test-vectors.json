@@ -1,0 +1,134 @@
+{
+  "$comment": [
+    "Machine-readable form of Appendix A of method-spec-v2.md.",
+    "The resolver (#9) consumes this so the spec and the implementation cannot drift.",
+    "onChain values are a snapshot of Arc Testnet, not fixtures: ownerOf, getAgentWallet",
+    "and tokenURI are mutable. A test that asserts them must read the chain, not this file."
+  ],
+  "specVersion": "2.0",
+  "parse": {
+    "valid": [
+      {
+        "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+        "version": 2,
+        "namespace": "eip155",
+        "chainId": 5042002,
+        "registry": "0x8004a818bfb912233c491871b3d84c89a494bd9e",
+        "agentId": "2",
+        "agentRegistry": "eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+      },
+      {
+        "did": "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22",
+        "version": 2,
+        "namespace": "eip155",
+        "chainId": 1,
+        "registry": "0x8004a818bfb912233c491871b3d84c89a494bd9e",
+        "agentId": "22",
+        "agentRegistry": "eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+      },
+      {
+        "did": "did:aip:7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU:scribe",
+        "version": 1,
+        "$comment": "Two segments. Not an error: dispatch to the v1 path per §9.1.",
+        "ownerPubkey": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+        "agentId": "scribe"
+      }
+    ],
+    "rejected": [
+      {
+        "did": "did:aip:eip155:5042002:0x8004A818BFB912233C491871B3D84C89A494BD9E:2",
+        "error": "invalidDid",
+        "reason": "registry must be lowercase in the DID string (§3.2); normalising it would break DID string equality"
+      },
+      {
+        "did": "did:aip:eip155:05042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+        "error": "invalidDid",
+        "reason": "leading zero in chain-id"
+      },
+      {
+        "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:02",
+        "error": "invalidDid",
+        "reason": "leading zero in agent-id"
+      },
+      {
+        "did": "did:aip:solana:mainnet:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+        "error": "invalidDid",
+        "reason": "namespace is not eip155"
+      },
+      {
+        "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e",
+        "error": "invalidDid",
+        "reason": "three segments; neither v1 (2) nor v2 (4)"
+      },
+      {
+        "did": "did:aip:eip155:5042002:8004a818bfb912233c491871b3d84c89a494bd9e:2",
+        "error": "invalidDid",
+        "reason": "registry missing the 0x prefix"
+      },
+      {
+        "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9:2",
+        "error": "invalidDid",
+        "reason": "registry is 39 hex digits, not 40"
+      }
+    ]
+  },
+  "onChain": {
+    "network": {
+      "namespace": "eip155",
+      "chainId": 5042002,
+      "name": "Arc Testnet",
+      "rpc": "https://rpc.testnet.arc.io",
+      "registry": "0x8004a818bfb912233c491871b3d84c89a494bd9e"
+    },
+    "agents": [
+      {
+        "agentId": "1",
+        "$comment": "Empty agentURI. §5.1: this MUST resolve, with an empty service array. The case implementations are most likely to get wrong.",
+        "tokenURI": "",
+        "expect": {
+          "resolves": true,
+          "serviceCount": 0,
+          "warnings": []
+        }
+      },
+      {
+        "agentId": "2",
+        "owner": "0x7954350d124ff904f0d4d89cceb4499c852c4628",
+        "ownerChecksummed": "0x7954350d124Ff904F0D4D89CCEB4499C852C4628",
+        "agentWallet": "0x7954350d124ff904f0d4d89cceb4499c852c4628",
+        "$comment": "agentWallet equals owner because setAgentWallet has not been called; ERC-8004 defaults it to the owner.",
+        "tokenURI": "ipfs://bafkreibdi6623n3xpf7ymk62ckb4bo75o3qemwkpfvp5i25j66itxvsoei",
+        "expect": {
+          "resolves": true,
+          "controller": "did:pkh:eip155:5042002:0x7954350d124Ff904F0D4D89CCEB4499C852C4628",
+          "verificationMethodIds": ["#owner", "#agent-wallet"],
+          "authentication": ["#owner"],
+          "assertionMethod": ["#owner", "#agent-wallet"]
+        }
+      },
+      {
+        "agentId": "999999",
+        "$comment": "Unminted. ownerOf reverts.",
+        "expect": {
+          "resolves": false,
+          "error": "notFound"
+        }
+      }
+    ]
+  },
+  "checksum": {
+    "$comment": "EIP-55 vectors. The first is from EIP-55 itself and exists to prove the implementation before trusting the second.",
+    "cases": [
+      {
+        "lower": "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
+        "checksummed": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+        "source": "EIP-55"
+      },
+      {
+        "lower": "0x7954350d124ff904f0d4d89cceb4499c852c4628",
+        "checksummed": "0x7954350d124Ff904F0D4D89CCEB4499C852C4628",
+        "source": "Arc Testnet agentId 2 owner"
+      }
+    ]
+  }
+}
