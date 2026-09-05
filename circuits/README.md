@@ -1,0 +1,198 @@
+# Circuits
+
+The payment-compliance circuit and the scripts around it.
+
+```
+payment.circom              the circuit
+lib/timestamp.circom        UTC decomposition, soundly constrained
+test/                       vitest suites and the circuits they drive
+scripts/build.mjs           compile, and produce a development proving key
+scripts/inspect-zkey-setup.mjs   read a zkey's trusted-setup provenance
+```
+
+> The proving key `scripts/build.mjs` produces is a **development key**, not a
+> ceremony output. Both phases of its setup are single-machine. See
+> [docs/disclosure/zk-setup-status.md](../docs/disclosure/zk-setup-status.md).
+
+## Public signals
+
+Eight, in this order. The verifier reads them positionally, so the order is part
+of the contract between this circuit, the prover service and the on-chain
+verifier. Changing it is a breaking change that needs a new ceremony.
+
+| # | Signal | Meaning |
+|---|---|---|
+| 0 | `is_compliant` | `1` when all six rules pass, `0` otherwise. |
+| 1 | `policy_data_hash` | Poseidon commitment to the whole policy. The hook compares it against the registry. |
+| 2 | `recipient` | Payee address as a field element. The hook compares it against the job's provider. |
+| 3 | `amount` | Payment amount in USDC base units, 6 decimals. Compared against the job's net payment. |
+| 4 | `token` | Token address as a field element. |
+| 5 | `daily_spent_before` | The operator's spend for the day before this payment. Compared against the counter. |
+| 6 | `current_unix_timestamp` | Seconds. The contract bounds it to `block.timestamp ± tolerance`. |
+| 7 | `stripe_receipt_hash` | Poseidon receipt commitment, `0` when no Stripe receipt is claimed. |
+
+A proof that verifies says only that the six checks were *performed* on these
+values. `is_compliant = 0` still produces a valid proof; refusing to release on
+a zero is the contract's job, and so is checking that these eight values
+describe the job actually being settled. A proof not bound to a job is a proof
+of someone else's payment.
+
+### Addresses are one field element
+
+An EVM address is 20 bytes and fits in a BN254 element with room to spare. The
+Solana circuit this was ported from split 32-byte pubkeys into `high`/`low`
+halves because they exceed the field, which is why there used to be ten public
+signals; `recipient_high`/`recipient_low` and `token_mint_high`/`token_mint_low`
+collapse to one signal each.
+
+The same change removed the Poseidon hashing of address-list entries. It existed
+only to fold two halves into one comparable value; with a single element,
+membership is plain equality. Entries in `token_whitelist` and
+`blocked_addresses` are now raw address field elements, and the policy
+commitment hashes them directly. A commitment produced by the Solana-era backend
+will not match this circuit — expected, since the whole layout changed.
+
+Category entries are unaffected: they are strings, 32 bytes does not fit in one
+element, and they stay Poseidon images.
+
+### Amounts are 6-decimal ERC-20 units
+
+Rules 1 and 2 compare with `LessEqThan(64)`, so amounts stay under 2^64. At 6
+decimals that is roughly 18.4 trillion USDC; at Arc's 18-decimal native
+accounting it would be 18.45 USDC and the circuit could not express a normal
+payment. Escrow and payment paths therefore use the ERC-20 interface — see
+[docs/decisions/erc20-vs-native-usdc.md](../docs/decisions/erc20-vs-native-usdc.md).
+
+The circuit enforces the bound with `Num2Bits(64)` on `amount` and
+`daily_spent_before` rather than assuming it. circomlib's comparator constrains
+the difference of its operands, not the operands themselves, so without the
+range check a field element near the modulus would pass.
+
+## The six rules
+
+| Rule | Check | Private inputs it reads |
+|---|---|---|
+| 1 | `amount <= max_per_tx` | the per-transaction ceiling |
+| 2 | `daily_spent_before + amount <= max_daily` | the daily ceiling |
+| 3 | `token` is on the whitelist | the whitelist |
+| 4 | `recipient` is not on the blocked list | the blocked list |
+| 5 | `payment_category` is allowed | the category list |
+| 6 | the timestamp falls inside the policy's window | `time_active`, the weekday bitmask, the start and end hours |
+
+Everything in the right-hand column stays private. An auditor learns that the
+checks ran, not what the operator's limits or lists were.
+
+## Rule 6 and why it stayed in the circuit
+
+The time window's timestamp decomposition used to be under-constrained: it
+witnessed `day_index` and `weeks`, checked the division identities and the
+remainders, and bounded neither quotient. Since 7 is invertible in the field, a
+prover writing a witness by hand could pick any weekday and solve for the
+`weeks` that made the identity hold. The rule enforced nothing.
+
+Moving the rule on-chain was considered and is not possible: the window
+parameters are private inputs and reach the chain only inside the Poseidon
+commitment. The contract never learns the window, so it cannot judge a timestamp
+against it — it can only bound the timestamp against `block.timestamp`, which is
+a freshness check, not a policy check. Making the window public would publish
+the operator's working hours.
+
+So the rule stays and is constrained properly. `lib/timestamp.circom` carries
+the full argument; the short version is that every quotient is now bounded from
+above as well as every remainder, which keeps the arithmetic below the modulus
+and makes each decomposition unique.
+
+`test/timestamp-soundness.test.js` runs the attack against both the old shape
+and the new one. The old template accepts a forged weekday; the new one rejects
+it, and rejects it for all six wrong weekdays.
+
+## The list masks, and why they are gone
+
+Each policy list used to arrive with a parallel mask array marking which slots
+held real entries. `policy_data_hash` committed to the list *values* and not to
+the masks, and nothing else constrained them — so a prover could zero
+`blocked_addresses_mask`, leave every value untouched, and hand the contract a
+proof whose policy commitment was byte-identical to the honest one while rule 4
+matched nothing.
+
+Run against the circuit as it stood, paying an address on the operator's own
+blocked list:
+
+```
+honest witness (mask intact)
+  is_compliant      0
+  policy_data_hash  16676072621032020736630513635815524526677413825308518761974603268960007226738
+
+forged witness (blocked mask zeroed, values untouched)
+  is_compliant      1
+  policy_data_hash  16676072621032020736630513635815524526677413825308518761974603268960007226738
+
+commitment identical in both runs: true
+rule 4 bypassed: true
+```
+
+The masks were never load-bearing. Padding slots hold zero, and the three values
+looked up — `token`, `recipient`, `payment_category` — can never legitimately be
+zero, so a padding slot could not match them anyway. The arrays are removed and
+the three keys carry an explicit non-zero constraint instead, which costs six
+constraints and deletes the bypass along with 28 inputs nothing committed to.
+
+The same pass constrained two other operands the comparators assumed rather than
+checked: `time_start_hour_utc` and `time_end_hour_utc` are bounded to five bits,
+and `time_active` is forced boolean, since rule 6 switches on it.
+
+## Constraint cost, measured
+
+`circom` output, not estimates:
+
+| Circuit | Non-linear | Linear | Wires |
+|---|---|---|---|
+| Aperture's original `payment.circom` | 2863 | 4514 | 7441 |
+| This `payment.circom` | **2609** | **3977** | **6608** |
+| Change | **−254** | **−537** | **−833** |
+
+Attribution, each measured by compiling the variant rather than reasoned about:
+
+| Change | Non-linear |
+|---|---|
+| Rule 6 constrained properly | **+118** |
+| `Num2Bits(64)` on the two amounts | **+128** |
+| Non-zero lookup keys, window hour bounds, boolean `time_active` | **+14** |
+| Mask arrays removed (28 multiplications) | **−28** |
+| Addresses collapsed to one field, list Poseidons dropped | **−486** |
+| net | **−254** |
+
+The soundness figure is the difference between the two templates in
+`test/circuits/`, compiled standalone: `timestamp_checked` is 166 non-linear
+against `timestamp_unchecked`'s 48. The rest are this circuit compiled with and
+without the block in question. The net is negative — the port paid for four
+soundness fixes and still came out smaller than what it replaced.
+
+## Building and testing
+
+```bash
+npm install
+npm run build            # compile, then a development proving key
+npm run build -- --no-zkey   # compile only, which is all the tests need
+npm test
+```
+
+`circom` and `snarkjs` must be on `PATH`; `scripts/build.mjs` says so plainly if
+they are not. Everything lands in `build/`, which is gitignored — the artifacts
+are reproducible in seconds and a `.zkey` never belongs in git.
+
+The proof round-trip suite skips when no development key is present, and says
+so, rather than passing on nothing.
+
+## What happens next
+
+[#16][i16] runs the ceremony that freezes this circuit. Nothing here may change
+after that without invalidating the proving key and requiring the ceremony to be
+run again, so [#14][i14] was the last chance to change it. [#18][i18] ports the
+prover service to the eight-signal layout, and [#17][i17] generates the Solidity
+verifier from the ceremony's key.
+
+[i14]: https://github.com/wienerlabs/mandate/issues/14
+[i16]: https://github.com/wienerlabs/mandate/issues/16
+[i17]: https://github.com/wienerlabs/mandate/issues/17
+[i18]: https://github.com/wienerlabs/mandate/issues/18
