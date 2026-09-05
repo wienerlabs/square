@@ -1,0 +1,50 @@
+{
+  "bad_amount_exceeds_per_tx.json": {
+    "is_compliant": "0",
+    "policy_data_hash": "13851823522942631037680442652981762209540886929616904514534845696209996351066",
+    "recipient_high": "22685491128062564230891640495451214097",
+    "recipient_low": "22685491128062564230891640495451214097",
+    "amount_lamports": "20000000",
+    "token_mint_high": "78778434590469691778792206732500675843",
+    "token_mint_low": "57655239994631203757795580049291751079",
+    "daily_spent_before": "50000000",
+    "current_unix_timestamp": "1735689600",
+    "stripe_receipt_hash": "0"
+  },
+  "bad_recipient_blocked.json": {
+    "is_compliant": "0",
+    "policy_data_hash": "13851823522942631037680442652981762209540886929616904514534845696209996351066",
+    "recipient_high": "317596875792875899232482966936316997358",
+    "recipient_low": "317596875792875899232482966936316997358",
+    "amount_lamports": "5000000",
+    "token_mint_high": "78778434590469691778792206732500675843",
+    "token_mint_low": "57655239994631203757795580049291751079",
+    "daily_spent_before": "50000000",
+    "current_unix_timestamp": "1735689600",
+    "stripe_receipt_hash": "0"
+  },
+  "bad_token_not_whitelisted.json": {
+    "is_compliant": "0",
+    "policy_data_hash": "13851823522942631037680442652981762209540886929616904514534845696209996351066",
+    "recipient_high": "22685491128062564230891640495451214097",
+    "recipient_low": "22685491128062564230891640495451214097",
+    "amount_lamports": "5000000",
+    "token_mint_high": "113427455640312821154458202477256070485",
+    "token_mint_low": "113427455640312821154458202477256070485",
+    "daily_spent_before": "50000000",
+    "current_unix_timestamp": "1735689600",
+    "stripe_receipt_hash": "0"
+  },
+  "ok_compliant.json": {
+    "is_compliant": "1",
+    "policy_data_hash": "13851823522942631037680442652981762209540886929616904514534845696209996351066",
+    "recipient_high": "22685491128062564230891640495451214097",
+    "recipient_low": "22685491128062564230891640495451214097",
+    "amount_lamports": "5000000",
+    "token_mint_high": "78778434590469691778792206732500675843",
+    "token_mint_low": "57655239994631203757795580049291751079",
+    "daily_spent_before": "50000000",
+    "current_unix_timestamp": "1735689600",
+    "stripe_receipt_hash": "0"
+  }
+}

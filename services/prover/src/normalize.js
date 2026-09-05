@@ -1,0 +1,80 @@
+// Turn untrusted request values into circuit field elements, without letting
+// the value escape into an error message.
+//
+// This exists because of a leak that is easy to miss. `BigInt("abc")` throws
+// `SyntaxError: Cannot convert abc to a BigInt` — the offending value, verbatim,
+// in the message. That message reaches the log and the HTTP response. Since the
+// values being converted include `max_daily_spend_lamports` and
+// `max_per_transaction_lamports`, a malformed ceiling used to print itself into
+// the log the same way the violation path printed the whole body.
+//
+// Normalising every numeric field here, before it reaches BigInt or snarkjs,
+// closes that path: conversion failures are reported by field name only. It
+// also means the top-level error handler can log an unrecognised error's
+// message without auditing every library we call, because no policy value can
+// still be inside one by the time it gets there.
+
+// BN254 scalar field modulus. Every circuit signal must be below it; snarkjs
+// would otherwise reduce or reject the value further down the stack, where the
+// error is less specific and not under our control.
+const BN254_R = BigInt(
+  '21888242871839275222246405745257275088548364400416034343698204186575808495617',
+);
+
+const INTEGER_PATTERN = /^(0|[1-9][0-9]*)$/;
+
+// A non-negative integer, as the decimal string the circuit input expects.
+//
+// Accepts a string, a JS number that is a safe integer, or a bigint. Rejects
+// everything else by field name. Floats are rejected rather than truncated: a
+// silently rounded ceiling is a policy change, not a formatting detail.
+export function toFieldString(value, label) {
+  if (value === undefined || value === null) {
+    throw new Error(`${label}: missing`);
+  }
+
+  let text;
+  if (typeof value === 'bigint') {
+    text = value.toString();
+  } else if (typeof value === 'number') {
+    if (!Number.isInteger(value)) {
+      throw new Error(`${label}: must be a whole number`);
+    }
+    if (!Number.isSafeInteger(value)) {
+      // Beyond 2^53 a JSON number has already lost precision before we saw it.
+      throw new Error(`${label}: exceeds the safe integer range, send it as a string`);
+    }
+    text = value.toString();
+  } else if (typeof value === 'string') {
+    text = value.trim();
+  } else {
+    throw new Error(`${label}: must be a string or a number`);
+  }
+
+  if (!INTEGER_PATTERN.test(text)) {
+    throw new Error(`${label}: must be a non-negative integer`);
+  }
+
+  if (BigInt(text) >= BN254_R) {
+    throw new Error(`${label}: does not fit in the BN254 scalar field`);
+  }
+
+  return text;
+}
+
+// A plain string field (an identifier, not a policy value). Length-capped so a
+// caller cannot push an arbitrarily large blob into a log line through a field
+// the logger is allowed to emit.
+export function toIdentifier(value, label, maxLength = 128) {
+  if (typeof value !== 'string') {
+    throw new Error(`${label}: must be a string`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`${label}: must not be empty`);
+  }
+  if (trimmed.length > maxLength) {
+    throw new Error(`${label}: exceeds ${maxLength} characters`);
+  }
+  return trimmed;
+}

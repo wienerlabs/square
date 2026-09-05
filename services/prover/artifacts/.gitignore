@@ -1,0 +1,13 @@
+# Circuit artifacts are built, not committed.
+#
+# payment.zkey is already ignored repository-wide; payment.wasm is 5 MB of
+# generated output that git would carry forever for no benefit. Both are
+# reproducible from the circuit in seconds — see ../README.md.
+*.wasm
+*.zkey
+*.r1cs
+*.sym
+*.json
+
+# Keep the directory itself so PROVER_ARTIFACTS_DIR has somewhere to default to.
+!.gitignore
