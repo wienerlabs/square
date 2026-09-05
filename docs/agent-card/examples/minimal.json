@@ -1,0 +1,5 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "Resolver Smoke Agent",
+  "description": "A permanent test identity. It answers nothing and is registered so that resolver conformance tests have a stable target."
+}

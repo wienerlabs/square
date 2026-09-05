@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wienerlabs/mandate/blob/main/docs/agent-card/schema.json",
+  "title": "ERC-8004 registration file with the AIP extension",
+  "description": "The document an ERC-8004 agentURI resolves to. The ERC-8004 fields are normative in EIP-8004; this schema restates them so a card can be validated in one pass, and adds the x-aip extension for what ERC-8004 has no place for.",
+  "type": "object",
+  "required": ["type", "name", "description"],
+  "properties": {
+    "type": {
+      "const": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+      "description": "ERC-8004 schema discriminator. A reader MUST NOT interpret a file whose type it does not recognise."
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "image": { "type": "string", "format": "uri" },
+
+    "services": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "endpoint"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Free-form in ERC-8004. A2A, MCP, DID, web, ENS, email and OASF are the conventional values."
+          },
+          "endpoint": { "type": "string", "minLength": 1 },
+          "version": { "type": "string" },
+          "skills": { "type": "array", "items": { "type": "string" } },
+          "domains": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": true
+      }
+    },
+
+    "x402Support": {
+      "type": "boolean",
+      "description": "ERC-8004 native. Set it rather than duplicating the fact in x-aip."
+    },
+    "active": { "type": "boolean", "default": true },
+
+    "registrations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["agentId", "agentRegistry"],
+        "properties": {
+          "agentId": { "type": ["integer", "string"], "description": "ERC-721 tokenId" },
+          "agentRegistry": {
+            "type": "string",
+            "pattern": "^eip155:[1-9][0-9]*:0x[0-9a-f]{40}$",
+            "description": "Lowercase, matching the did:aip v2 identifier form."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+
+    "supportedTrust": {
+      "type": "array",
+      "items": { "enum": ["reputation", "crypto-economic", "tee-attestation"] }
+    },
+
+    "x-aip": { "$ref": "#/$defs/aipExtension" }
+  },
+  "additionalProperties": true,
+
+  "$defs": {
+    "aipExtension": {
+      "type": "object",
+      "description": "What ERC-8004 has no field for. A reader that does not recognise `type` MUST ignore this whole object rather than guess at its shape.",
+      "required": ["type", "agentType", "capabilities"],
+      "properties": {
+        "type": {
+          "const": "https://github.com/wienerlabs/mandate/blob/main/docs/agent-card/README.md#v1",
+          "description": "Self-describing, mirroring ERC-8004's own approach. A future v2 changes this string; readers dispatch on it."
+        },
+        "agentType": {
+          "enum": ["LLM", "Task", "Execution"],
+          "description": "Carried over from the on-chain AgentType enum. LLM: general reasoning. Task: a fixed capability set. Execution: takes actions with side effects."
+        },
+        "slug": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,32}$",
+          "description": "The owner-scoped identifier from the Solana registry. ERC-8004 identifies agents by an incrementing tokenId, so this is a display and lookup alias only — it is NOT an identifier and MUST NOT be used as one. Two agents may carry the same slug."
+        },
+        "agentVersion": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "The agent's own version. Distinct from services[].version, which versions a protocol."
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/capability" },
+          "description": "The on-chain record capped this at 8 to fit a fixed account size. That constraint is gone; 64 is a sanity bound, not a protocol limit."
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "capability": {
+      "type": "object",
+      "required": ["id", "description"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(\\.[a-z0-9]+)*$",
+          "maxLength": 64,
+          "description": "Dotted lowercase, e.g. text.summarize. This is what a caller names in an A2A task request."
+        },
+        "description": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "pricing": { "$ref": "#/$defs/pricing" }
+      },
+      "additionalProperties": false
+    },
+
+    "pricing": {
+      "type": "object",
+      "required": ["amount", "token", "network"],
+      "properties": {
+        "amount": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?$",
+          "description": "Decimal string, in whole token units. A string rather than a number because JSON numbers are IEEE 754 doubles and money must not round."
+        },
+        "token": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{40}$",
+          "description": "ERC-20 contract address, lowercase. USDC on Arc is 0x3600000000000000000000000000000000000000."
+        },
+        "network": {
+          "type": "string",
+          "pattern": "^eip155:[1-9][0-9]*$",
+          "description": "CAIP-2. The predecessor used the literal string \"solana\", which named a chain family rather than a chain."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
