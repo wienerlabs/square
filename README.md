@@ -18,7 +18,7 @@ Solidity against Arc's deployed standards.
 
 > The ZK trusted setup inherited from the prior work is a **demo setup**, not a
 > production ceremony. A public multi-party phase-2 ceremony is planned. Until it
-> completes, no claim of "production ZK" applies to anything in this repository.
+> completes, nothing in this repository is production-grade zero-knowledge.
 
 ## Design
 
