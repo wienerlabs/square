@@ -1,0 +1,40 @@
+# Honest wording the guard MUST NOT flag.
+#
+# A pattern that fires on these lines makes accurate disclosure impossible,
+# which is worse than having no guard: it pushes people towards vague wording
+# to get their build green. .github/scripts/check-forbidden-phrases.sh fails if
+# any pattern matches a line here.
+#
+# This is not hypothetical. The guard that shipped with the repository skeleton
+# flagged README.md:21 — the repository's own demo-setup disclaimer — and had
+# been failing every run since the first commit. These fixtures exist so that
+# cannot happen again silently.
+
+# --- The disclaimers themselves ----------------------------------------------
+
+The ZK trusted setup inherited from the prior work is a demo setup, not a production ceremony.
+The phase-2 trusted setup shipped in this repository is a demo setup.
+This is a demo setup. It is not a public ceremony, and no security claim rests on it.
+Until the ceremony completes, no claim of production-level assurance applies to anything here.
+Phase 2 has one contribution and no beacon, so treat it as a demo.
+A public multi-party ceremony covering both phases is planned.
+Phase 1 was generated locally and matches no published ceremony.
+The key's alpha and beta match no published ceremony, so the tau behind it was generated locally.
+The ceremony has not been held. Nothing in this repository depends on it having been held.
+Do not describe this as production anything until issue #16 closes.
+
+# --- Ordinary engineering prose that happens to use the words ----------------
+
+The production branch deploys the reference app to Vercel.
+Use the production RPC endpoint only after the testnet run is green.
+This is the production payment instruction used by both the dashboard and the agent.
+Proving time is around 600 ms on commodity CPU hardware.
+Groth16 over BN254, verified on-chain through the 0x06, 0x07 and 0x08 precompiles.
+
+# --- Turkish -----------------------------------------------------------------
+
+Kurulum bir demo kurulumdur, halka açık bir seremoni değildir.
+Seremoni tamamlanana kadar bu kuruluma dayanan hiçbir güvenlik iddiası yoktur.
+Faz 2'de tek katkı var ve beacon yok; bu yüzden demo diyoruz.
+Halka açık çok taraflı bir phase-2 seremonisi planlanıyor.
+Üretim ortamına geçiş #47'de ele alınacak.

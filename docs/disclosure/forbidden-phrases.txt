@@ -1,0 +1,85 @@
+# Forbidden claim phrases — the single source of truth for the CI guard.
+#
+# The phase-2 trusted setup this project inherited is a demo setup: one
+# contribution, no beacon. Until the public ceremony lands (issue #16), no
+# surface we control may describe it as production anything. See
+# docs/disclosure/zk-setup-status.md for the evidence behind that.
+#
+# FORMAT
+#   One POSIX extended regular expression (ERE) per line, matched
+#   case-insensitively against every line of every tracked text file.
+#   Lines starting with '#' are comments. Blank lines are ignored.
+#
+#   .github/workflows/security.yml reads this file and fails the build on any
+#   match. Add a pattern here and it is enforced on the next push — there is
+#   no second place to edit.
+#
+# SCOPE OF THE SCAN
+#   Everything except .git/, .github/ and docs/disclosure/. This directory is
+#   excluded because it is where the forbidden wording is catalogued and
+#   negated; a claim hidden here would still be wrong, and the directory is
+#   small enough to read in full during review.
+#
+# WRITING A PATTERN
+#   Keep it claim-shaped. A pattern must not fire on a sentence that denies
+#   the claim ("this is not a production ceremony", "demo setup, not
+#   production"), because those sentences are exactly what we want people to
+#   write. Prefer narrow patterns plus a new line over one broad pattern.
+
+# --- English -----------------------------------------------------------------
+
+# "Production ZK", "production-zk", "Production ZK proofs"
+production[ -]?zk
+
+# "production-grade zero-knowledge", "production ready Groth16", etc.
+# [^.]{0,60} keeps the match inside one sentence so a denial in the next
+# sentence cannot be swallowed into the match.
+production[ -](grade|ready)[^.]{0,60}(zk|zero.?knowledge|groth16|snark|circuit|proof|trusted setup|ceremony)
+
+# The reverse word order: "the ZK stack is production-grade"
+(zk|zero.?knowledge|groth16|snark|trusted setup|ceremony)[^.]{0,60}(is|are)[^.]{0,20}production[ -](grade|ready)
+
+# The dodge that was actually found on a-perture.com: name the sound half of
+# the setup, then call the whole thing production-grade without ever saying
+# what is production-grade about it.
+(architecture|stack|system|pipeline|implementation|codebase|protocol|infrastructure)[^.]{0,25}(is|are)[^.]{0,15}production[ -](grade|ready)
+
+# "production trusted setup" / "production trusted-setup"
+production trusted[ -]?setup
+
+# Claiming the setup is finished or safe when it is not
+trusted setup[^.]{0,40}(is|was)[^.]{0,20}(complete|completed|done|final|finalised|finalized|audited|secure|sound)
+
+# Claiming the ceremony happened.
+#
+# Deliberately tight rather than `ceremony[^.]{0,30}(held|done|...)`: the looser
+# form also matches "the public ceremony has not been held", which is the
+# sentence we most want people to be able to write. A guard that fires on the
+# disclaimer pushes authors towards vaguer wording, so the affirmative shape is
+# spelled out instead. ERE has no lookahead, hence the explicit verb group.
+(phase.?2|multi.?party|public)[ -]ceremony( (has|was|is|were))?( been)? (complete|completed|done|finished|ran|held)
+
+# Claiming phase 1 is the Hermez / Perpetual Powers of Tau ceremony.
+#
+# This one is here because we got it wrong ourselves. The first version of this
+# disclosure repeated a source comment saying phase 1 was
+# powersOfTau28_hez_final_14.ptau with 54 contributors. The artifact says
+# otherwise: the key's alpha and beta match no published ceremony. An unchecked
+# provenance claim is the same failure as an unchecked assurance claim, so it is
+# enforced the same way. See zk-setup-status.md.
+(hermez|perpetual powers of tau|powersOfTau28_hez)[^.]{0,60}(54|fifty.four|contributors|beacon|sound|reused)
+(phase.?1|powers of tau|ptau)[^.]{0,40}(is|are|uses|reuses|based on)[^.]{0,30}(hermez|polygon|perpetual powers of tau)
+
+# --- Turkish -----------------------------------------------------------------
+
+# "üretim ZK", "üretim seviyesinde ZK", "üretim kalitesinde kanıt"
+üretim( (seviyesinde|kalitesinde|sınıfı|düzeyinde))?[ -](zk|kanıt|devre|kurulum|seremoni)
+
+# "üretime hazır ZK / kanıt / devre / kurulum / seremoni"
+üretime hazır[^.]{0,60}(zk|kanıt|devre|kurulum|seremoni|groth16)
+
+# Turkish loanword spelling
+prodüksiyon[ -]?zk
+
+# "seremoni tamamlandı" / "tören yapıldı" before it actually has been
+(seremoni|tören)[^.]{0,30}(tamamland|yapıld|bitti|gerçekleşti)

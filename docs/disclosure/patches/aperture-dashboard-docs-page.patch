@@ -1,0 +1,25 @@
+diff --git a/dashboard/src/app/docs/page.tsx b/dashboard/src/app/docs/page.tsx
+index fe4c102..cd40f7a 100644
+--- a/dashboard/src/app/docs/page.tsx
++++ b/dashboard/src/app/docs/page.tsx
+@@ -597,8 +597,9 @@ npx tsx src/agent.ts`}</Code>
+                 <tr className="border-b border-amber-400/5"><td className="py-2">Proof size</td><td>256 bytes (A+B+C)</td></tr>
+                 <tr className="border-b border-amber-400/5"><td className="py-2">On-chain verify cost</td><td>~100 K compute units</td></tr>
+                 <tr className="border-b border-amber-400/5"><td className="py-2">Circuit constraints</td><td>~2 300 (BN254)</td></tr>
+-                <tr className="border-b border-amber-400/5"><td className="py-2">Trusted setup</td><td>Polygon Hermez ptau (54-party)</td></tr>
+-                <tr><td className="py-2">Cryptographic validity</td><td>Fully valid, on-chain verified</td></tr>
++                <tr className="border-b border-amber-400/5"><td className="py-2">Trusted setup &mdash; phase 1</td><td className="text-amber-300">Demo setup: locally generated tau, no public ceremony</td></tr>
++                <tr className="border-b border-amber-400/5"><td className="py-2">Trusted setup &mdash; phase 2</td><td className="text-amber-300">Demo setup: 1 contribution, no beacon</td></tr>
++                <tr><td className="py-2">Cryptographic validity</td><td>Proofs verify on-chain. Soundness is capped by the demo setup above.</td></tr>
+               </tbody>
+             </table>
+           </div>
+@@ -719,7 +720,7 @@ npx tsx src/agent.ts`}</Code>
+           <H2 id="faq">FAQ</H2>
+           <div className="space-y-6 mb-12">
+             {[
+-              { q: 'Is this production ready?', a: 'Aperture is deployed on Solana Devnet with real Circom + Groth16 proofs verified on-chain (~100K CU via groth16-solana). Trusted setup uses the Polygon Hermez public ceremony (54 contributors). The architecture is production-grade; the deployment is on Devnet for testing.' },
++              { q: 'Is this production ready?', a: 'No. Aperture runs on Solana Devnet with real Circom + Groth16 proofs verified on-chain (~100K CU via groth16-solana), but the trusted setup is a demo in both phases. Phase 1 was generated locally rather than taken from a public ceremony, and phase 2 has a single contribution with no beacon, so whoever held that entropy could forge a proof for any statement. A public multi-party ceremony covering both phases is planned; until it completes, treat this as a demo and do not put value behind it.' },
+               { q: 'Which wallets are supported?', a: 'Phantom and Solflare are the supported wallets. The dashboard uses the Solana Wallet Adapter standard with sendTransaction for on-chain interactions.' },
+               { q: 'How long does proof generation take?', a: 'Around 500 ms on a modern CPU. Circom circuits are purpose-built (~2300 BN254 constraints) so there is no VM overhead, and snarkjs runs comfortably in Node.js without GPUs or Docker-in-Docker.' },
+               { q: 'What tokens are supported?', a: 'USDC and USDT on Devnet. vUSDC (SPL Token-2022 with transfer hook) for compliance-enforced transfers. Any SPL token can be added to the whitelist.' },

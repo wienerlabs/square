@@ -1,0 +1,36 @@
+diff --git a/programs/verifier/src/groth16_vk.rs b/programs/verifier/src/groth16_vk.rs
+index 12f9142..3890a05 100644
+--- a/programs/verifier/src/groth16_vk.rs
++++ b/programs/verifier/src/groth16_vk.rs
+@@ -15,11 +15,26 @@ use groth16_solana::groth16::Groth16Verifyingkey;
+ // proofs whose stripe_receipt_hash is non-zero (those go through the
+ // dedicated verify_mpp_payment_proof instruction in Adım 8c instead).
+ //
+-// Trusted setup basis: powersOfTau28_hez_final_14.ptau — the Polygon
+-// Hermez perpetual Powers of Tau ceremony with 54 contributors + beacon
+-// (phase 1). Phase 2 contribution is single-party (dev) for now; adding
+-// public contributors before mainnet produces a new VK which must be
+-// regenerated here before redeploy.
++// Trusted setup: DEMO, in both phases. Do not describe it otherwise.
++//
++// An earlier version of this comment said the phase-1 basis was
++// powersOfTau28_hez_final_14.ptau, the Polygon Hermez ceremony with 54
++// contributors and a beacon. The shipped key does not support that. In snarkjs,
++// vk_alpha_1 and vk_beta_2 are copied from the ptau and are never touched by
++// phase-2 contributions, so they fingerprint the ptau — and the pair in
++// APERTURE_PAYMENT_VK below matches no published ceremony. It matches the
++// Hermez ceremony's pair least of all, which occurs in thousands of unrelated
++// repositories; this one occurs only here. That is consistent with
++// circuits/payment-prover/README.md, whose procedure for payment.circom starts
++// with `snarkjs powersoftau new bn128 14` — creating a tau rather than
++// downloading one — and which lists the Hermez ptau as future Phase 5 work.
++//
++// Phase 2 is a single contribution (`aperture-mpp-1777587329`) with no beacon.
++//
++// So both phases rest on entropy one machine held, and whoever held it can
++// forge a proof for any statement. Check it with inspect-zkey-setup.mjs from
++// wienerlabs/mandate. A real ceremony must cover both phases and will produce a
++// new VK, which has to be regenerated here before redeploy.
+ // Generated from ../../../services/prover-service/artifacts/payment_vk.json — do not edit by hand.
+ // Regenerate with: node services/prover-service/scripts/extract-vk-rust.mjs
+ 

@@ -17,8 +17,16 @@ three Solana codebases. No Rust ports here — the contract layer is written fre
 Solidity against Arc's deployed standards.
 
 > The ZK trusted setup inherited from the prior work is a **demo setup**, not a
-> production ceremony. A public multi-party phase-2 ceremony is planned. Until it
-> completes, nothing in this repository is production-grade zero-knowledge.
+> ceremony — in **both phases**. Phase 2 carries a single contribution and no
+> beacon. Phase 1 was generated locally: the shipped verifying key carries an
+> alpha and beta that match no published ceremony, so one machine held the tau.
+> Either half on its own lets that machine forge a proof for any statement, so a
+> ceremony covering both is planned. Until it completes, nothing here carries an
+> assurance claim of any kind.
+>
+> The evidence, the wording, and where it has to appear:
+> [docs/disclosure/](docs/disclosure/). Check it yourself with
+> [`circuits/scripts/inspect-zkey-setup.mjs`](circuits/scripts/inspect-zkey-setup.mjs).
 
 ## Design
 
