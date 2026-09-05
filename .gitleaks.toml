@@ -1,0 +1,17 @@
+# gitleaks yapilandirmasi.
+#
+# Varsayilan kural setini oldugu gibi kullaniyoruz; yalnizca yer tutucu
+# degerler icin dar bir istisna var. Genis bir "test dosyalarini atla"
+# kurali BILEREK yok: gercek bir sir de bir test dosyasinda durabilir.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Redaksiyon testlerinin yer tutucu degerleri sir degildir"
+regexTarget = "match"
+regexes = [
+  '''REDACTED''',
+  '''\[redacted\]''',
+  '''<redacted>''',
+]
