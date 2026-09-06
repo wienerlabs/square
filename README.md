@@ -75,6 +75,32 @@ docs/        Specifications and design notes
 | Explorer | `https://testnet.arcscan.app` |
 | Gas token | USDC (18 decimals native, 6 decimals ERC-20) |
 
+Escrow and payment paths use the 6-decimal ERC-20 interface, not native value —
+see [docs/decisions/erc20-vs-native-usdc.md](docs/decisions/erc20-vs-native-usdc.md).
+
+### Deployments
+
+| Contract | Address |
+|---|---|
+| `Groth16Verifier` | not deployed yet — needs a funded deployer |
+
+A proof from the prover service already verifies against Arc's own EVM, without
+a deployment, through an `eth_call` state override:
+
+```console
+$ node contracts/script/verify-on-arc.mjs
+  ok    compliant proof verifies
+  ok    non-compliant proof also verifies — is_compliant is a signal, not a gate
+  ok    flipped is_compliant
+  ok    altered amount
+Arc gas for one verification: 265653
+```
+
+The address will be temporary when it lands: the verifier is generated from a
+proving key and is valid only for that key, and the key today is a development
+key. [#16](https://github.com/wienerlabs/square/issues/16) produces a different
+one. See [contracts/README.md](contracts/README.md).
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
