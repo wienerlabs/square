@@ -1,0 +1,31 @@
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "Square Smoke Agent",
+  "description": "Permanent end-to-end test identity for Square. Its card is embedded in the agent URI as a data: URI, so resolving it depends on no gateway and cannot rot.",
+  "services": [
+    {
+      "name": "A2A",
+      "endpoint": "https://smoke.invalid/.well-known/agent-card.json",
+      "version": "0.3.0"
+    }
+  ],
+  "x402Support": false,
+  "active": true,
+  "x-aip": {
+    "type": "https://github.com/wienerlabs/square/blob/main/docs/agent-card/README.md#v1",
+    "agentType": "Task",
+    "slug": "smoke",
+    "agentVersion": "1.0.0",
+    "capabilities": [
+      {
+        "id": "smoke.echo",
+        "description": "Returns its input unchanged. It exists so the card carries a capability; nothing serves it.",
+        "pricing": {
+          "amount": "0",
+          "token": "0x3600000000000000000000000000000000000000",
+          "network": "eip155:5042002"
+        }
+      }
+    ]
+  }
+}

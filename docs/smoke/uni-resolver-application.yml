@@ -1,0 +1,24 @@
+# Driver table for a local Universal Resolver that serves did:aip and nothing else.
+#
+# The image's own application.yml carries the full upstream driver list, and the
+# uniresolver_web_driver_url_* environment variables only rewrite the URL of a
+# driver that is already in that list. There is no environment variable that
+# adds one. So this file is mounted through SPRING_CONFIG_ADDITIONAL_LOCATION,
+# where it takes precedence: Spring replaces a list outright rather than merging
+# it, which is what makes the substitution total and predictable.
+#
+# Serving one method is the point rather than a limitation. The check is whether
+# the driver answers correctly from inside uni-resolver-web; the other drivers
+# are not part of that question, and pulling forty images to ask it would be
+# absurd.
+uniresolver:
+  drivers:
+    # Both DID versions match. A v1 identifier is well-formed and the driver
+    # answers it with unsupportedVersion; excluding it here would make the
+    # resolver report the whole method as unknown instead, which is a different
+    # and wrong answer.
+    - pattern: "^(did:aip:.+)$"
+      url: "http://driver-did-aip:8080/"
+      testIdentifiers:
+        - did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:892271
+        - did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:892272
