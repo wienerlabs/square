@@ -72,10 +72,10 @@ ppot_0080_13.ptau
 ```
 
 **The contribution chain checks out.** This verifies every contribution in the
-file rather than trusting its name. It is slow — around ten minutes of one core
-for this truncation, because it re-does the pairing checks for all eighty
-contributions — so run it once and record the result rather than putting it in
-a loop:
+file rather than trusting its name. It is slow — it re-does the pairing checks
+for all eighty contributions, and on a laptop it runs for the better part of an
+hour of one core — so run it once and record the result rather than putting it
+in a loop:
 
 ```bash
 snarkjs powersoftau verify ppot_0080_13.ptau

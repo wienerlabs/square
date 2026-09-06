@@ -46,20 +46,33 @@ node scripts/ceremony.mjs contribute "Their Name or Organisation"
 node scripts/ceremony.mjs verify
 ```
 
-`contribute` mixes in randomness from the operating system, records the
-contribution's transcript hash and the new key's SHA-256, and prints both.
-`verify` re-derives the chain so far against the circuit and the phase-1 file,
-so a broken link is caught at the step that broke it rather than at the end.
+`contribute` hands over to snarkjs, which prompts for a random text. Type
+something only you can see. It is mixed with 64 bytes snarkjs draws from the
+operating system, so it does not need to be long — and it must not be written
+down, pasted, or shared.
+
+The script does not generate that value or pass it as an argument, and this is
+deliberate. An earlier version did both: it echoed the command it ran, so the
+entropy landed in the contributor's terminal, and it sat in `argv` where `ps`
+exposes it to every other process on the machine. Since these same instructions
+ask contributors to publish the hashes their terminal printed, that was a route
+from "destroy this value" to "publish it" in one copy-paste. The strongest shape
+is the one where the script never holds the secret at all.
+
+`contribute` then records the contribution's transcript hash and the new key's
+SHA-256, and prints both — those are public. `verify` re-derives the chain so
+far against the circuit and the phase-1 file, so a broken link is caught at the
+step that broke it rather than at the end.
 
 Publish the printed hashes as each contribution lands. The next contributor
 checks the key they received against the previously published hash — that is
 what stops a key being swapped between links, and it only works if the hashes
 are public while the ceremony is still running.
 
-Then the contributor destroys their entropy. On most machines that means
-closing the shell and writing nothing down. The soundness of the whole chain is
-one contributor doing exactly that, so it is worth saying out loud rather than
-assuming it is obvious.
+Then the contributor destroys their entropy. If they typed it and never wrote
+it down, that is already done; closing the shell finishes it. The soundness of
+the whole chain is one contributor doing exactly that, so it is worth saying out
+loud rather than assuming it is obvious.
 
 ## Closing
 
@@ -89,10 +102,13 @@ node scripts/ceremony.mjs verify-chain
 
 It checks the phase-1 file by hash, the compiled circuit against the hash the
 ceremony started from, the final key against circuit and ptau, the contribution
-count against the transcript, and the beacon in the key against the value drand
-publishes for that round — fetched live, not read from the transcript. It exits
-non-zero if anything fails, and it reports every failure rather than stopping at
-the first.
+count against the transcript, and the beacon two ways: the value drand publishes
+for that round, fetched live rather than read from the transcript, and the
+round's BLS signature against quicknet's group public key. The second is what
+separates "matches what drand told me" from "is what drand produced" — an
+auditor whose DNS or TLS path is compromised gets the right answer anyway. It
+exits non-zero if anything fails, and it reports every failure rather than
+stopping at the first.
 
 [verifying.md](./verifying.md) walks the same ground with individual `snarkjs`
 commands, for anyone who would rather not run our script to check our ceremony.
@@ -117,8 +133,9 @@ chain
   ok    2 contribution(s), matching the transcript
 
 beacon
-  ok    beacon is drand quicknet round 31967441, matching the public chain
-  ok    round 31967441 corresponds to 2026-09-06T14:41:27.000Z
+  ok    beacon is drand quicknet round 31968374, matching the public chain
+  ok    the round's BLS signature verifies against quicknet's group key
+  ok    round 31968374 corresponds to 2026-09-06T15:28:06.000Z
 
 keys
   ok    the verifying key is the one the transcript records

@@ -40,21 +40,57 @@ const TRANSCRIPT = path.join(CEREMONY, 'transcript.json');
 const R1CS = path.join(BUILD, 'payment.r1cs');
 
 // drand quicknet, the same parameters docs/ceremony/beacon.md announces.
+//
+// quicknet is `bls-unchained-g1-rfc9380`: signatures on G1, group key on G2,
+// and the signed message is sha256 of the round number alone — unchained, so a
+// round does not depend on its predecessor.
 const DRAND = Object.freeze({
   chainHash: '52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971',
   genesis: 1692803367,
   period: 3,
   api: 'https://api.drand.sh/v2/beacons/quicknet',
+  dst: 'BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_',
 });
+
+// Verify a round's BLS signature against the chain's group public key.
+//
+// Comparing the signature to what api.drand.sh returned proves only that the
+// key matches what that host said. This proves the value is one drand's
+// threshold actually produced, so an auditor whose DNS or TLS path is
+// compromised still gets the right answer.
+async function verifyDrandSignature(round, signature, groupPublicKey) {
+  const { bls12_381: bls } = await import('@noble/curves/bls12-381');
+  const { sha256 } = await import('@noble/hashes/sha2');
+  const roundBytes = new Uint8Array(8);
+  new DataView(roundBytes.buffer).setBigUint64(0, BigInt(round));
+  const message = bls.shortSignatures.hash(sha256(roundBytes), DRAND.dst);
+  return bls.shortSignatures.verify(signature, message, groupPublicKey);
+}
 
 export const roundAt = (unixSeconds) =>
   Math.floor((unixSeconds - DRAND.genesis) / DRAND.period) + 1;
 export const timeOfRound = (round) =>
   DRAND.genesis + (round - 1) * DRAND.period;
 
-function sh(cmd, args) {
-  process.stdout.write(`$ ${cmd} ${args.join(' ')}\n`);
-  execFileSync(cmd, args, { cwd: ROOT, stdio: 'inherit' });
+// Echoing the command is worth keeping: a ceremony tool that hides what it runs
+// is hard to audit, and every argument here is meant to be public.
+//
+// "Meant to be" is not a guarantee, so it is enforced. An argument carrying
+// entropy is redacted before printing, and nothing in this file passes one any
+// more — snarkjs prompts the contributor directly. The redaction stays as a
+// floor: the first version of this script echoed a contributor's toxic waste to
+// their terminal, and the property that stopped being true was "no caller
+// passes a secret", not anything about the printing.
+const SECRET_ARG = /^(-e|--entropy)=/;
+
+function redact(arg) {
+  const match = arg.match(SECRET_ARG);
+  return match ? `${match[1]}=<redacted>` : arg;
+}
+
+function sh(cmd, args, options = {}) {
+  process.stdout.write(`$ ${cmd} ${args.map(redact).join(' ')}\n`);
+  execFileSync(cmd, args, { cwd: ROOT, stdio: 'inherit', ...options });
 }
 
 const sha256 = (file) =>
@@ -144,10 +180,26 @@ async function contribute(name) {
   const to = keyPath(index + 1);
   if (!fs.existsSync(from)) throw new Error(`${path.relative(ROOT, from)} is missing`);
 
-  // Entropy from the OS. A contributor running this on their own machine is the
-  // point; if they would rather pipe in their own, snarkjs takes -e.
-  const entropy = Buffer.from(crypto.getRandomValues(new Uint8Array(64))).toString('base64');
-  sh('snarkjs', ['zkey', 'contribute', from, to, `--name=${name}`, `-e=${entropy}`]);
+  // No -e. snarkjs prompts for entropy on stdin and the contributor types
+  // something only they ever see.
+  //
+  // Passing it as an argument instead was a disclosure of the one value the
+  // contributor is asked to destroy: this script echoes the command it runs, so
+  // the entropy landed in their terminal — and in whatever they pasted their
+  // published hash out of — and it sat in argv where `ps` exposes it to every
+  // other process on the machine for as long as snarkjs ran.
+  //
+  // It bought nothing either way. snarkjs hashes 64 bytes of
+  // crypto.randomFillSync into every contribution before it looks at -e, so a
+  // second CSPRNG draw added no randomness and cost full disclosure. The
+  // strongest version of this is the one where the script never holds the
+  // secret at all.
+  process.stdout.write(
+    '\nsnarkjs will ask for a random text. Type something only you can see —\n'
+    + 'it is mixed with 64 bytes the tool draws from the OS, so it does not have\n'
+    + 'to be long, and it must not be written down or shared.\n\n',
+  );
+  sh('snarkjs', ['zkey', 'contribute', from, to, `--name=${name}`]);
 
   const report = await inspect(to);
   const last = report.contributions[report.contributions.length - 1];
@@ -334,6 +386,24 @@ async function verifyChain() {
         ok(`beacon is drand quicknet round ${announced.round}, matching the public chain`);
       } else if (live) {
         bad(`beacon in the key does not match drand round ${announced.round}`);
+      }
+
+      // And that the value is one drand actually produced, rather than one the
+      // API we asked happened to return.
+      if (live) {
+        try {
+          const info = await fetchChainInfo();
+          const chainHash = info.chain_hash ?? info.hash;
+          if (chainHash !== DRAND.chainHash) {
+            bad(`drand served chain ${chainHash}, not the announced ${DRAND.chainHash}`);
+          } else if (await verifyDrandSignature(announced.round, live.signature, info.public_key)) {
+            ok(`the round's BLS signature verifies against quicknet's group key`);
+          } else {
+            bad("the round's BLS signature does not verify against quicknet's group key");
+          }
+        } catch (error) {
+          bad(`could not check the round's signature: ${error.message}`);
+        }
       }
       if (roundAt(Date.parse(announced.lands_at) / 1000) === announced.round) {
         ok(`round ${announced.round} corresponds to ${announced.lands_at}`);
