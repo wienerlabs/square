@@ -78,3 +78,8 @@ docs/        Specifications and design notes
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+Parts of the circuit, the prover and the client came from `wienerlabs/aperture`
+and `dr-wilson-empty/aip-beta`, both MIT. [NOTICE](NOTICE) says which parts and
+carries their copyright, as MIT requires. Nothing here derives from
+`wienerlabs/covenant`, which is LGPL-2.1.
