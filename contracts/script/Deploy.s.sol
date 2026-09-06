@@ -98,7 +98,8 @@ contract Deploy is Script {
         vm.serializeAddress(json, "IdentityRegistry", p.identity);
         vm.serializeAddress(json, "ReputationRegistry", p.reputation);
         string memory out = vm.serializeAddress(json, "ValidationRegistry", p.validation);
-        string memory path = string.concat("deployments/", vm.toString(block.chainid), ".json");
+        string memory path =
+            vm.envOr("DEPLOYMENT_FILE", string.concat("deployments/", vm.toString(block.chainid), ".json"));
         vm.writeJson(out, path);
         console2.log("SquareJob        ", d.squareJob);
         console2.log("KeeperEvaluator  ", d.keeperEvaluator);

@@ -1,0 +1,43 @@
+{
+  "name": "@squaresdk/core",
+  "version": "0.1.0",
+  "description": "Integration library for Square settlement on Arc: typed clients, embedded ABIs, spec hashing and event decoding.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./abi": {
+      "types": "./dist/abi/index.d.ts",
+      "default": "./dist/abi/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "generate:abi": "node scripts/generate-abis.mjs",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:anvil": "ANVIL=1 vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@squaresdk/did-resolver": "file:../did-resolver",
+    "canonicalize": "^2.0.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

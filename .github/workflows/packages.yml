@@ -1,0 +1,93 @@
+name: packages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/data/**"
+      - "packages/hardening/**"
+      - "packages/observability/**"
+      - "packages/x402/**"
+      - "packages/aa/**"
+      - "services/indexer/**"
+      - "services/keeper/**"
+      - "contracts/**"
+      - ".github/workflows/packages.yml"
+  pull_request:
+    paths:
+      - "packages/data/**"
+      - "packages/hardening/**"
+      - "packages/observability/**"
+      - "packages/x402/**"
+      - "packages/aa/**"
+      - "services/indexer/**"
+      - "services/keeper/**"
+      - "contracts/**"
+      - ".github/workflows/packages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hermetic:
+    name: ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - packages/data
+          - packages/hardening
+          - packages/observability
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install, typecheck, test, build
+        working-directory: ${{ matrix.package }}
+        run: |
+          npm install --install-links
+          npm run typecheck
+          npm test
+          npm run build
+
+  chain:
+    name: ${{ matrix.package }} (anvil)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - packages/x402
+          - packages/aa
+          - services/indexer
+          - services/keeper
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build contracts
+        working-directory: contracts
+        run: forge build
+      - name: Build path dependencies
+        run: |
+          for dep in packages/did-resolver packages/core packages/data packages/observability packages/hardening; do
+            if [ -f "$dep/package.json" ]; then
+              (cd "$dep" && npm install --install-links && npm run build)
+            fi
+          done
+      - name: Install, typecheck, test, build
+        working-directory: ${{ matrix.package }}
+        run: |
+          npm install --install-links
+          npm run typecheck
+          npm test
+          npm run build
