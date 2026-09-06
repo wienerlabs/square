@@ -18,6 +18,24 @@ node script/verify-on-arc.mjs
 
 ## The verifier
 
+> **`src/Groth16Verifier.sol` is GPL-3.0, and it is the only file in this
+> repository that is not Apache-2.0 or MIT.**
+>
+> It is `snarkjs` output, and snarkjs is GPL-3.0 — the licence is in the
+> verifier template itself, so the generated contract is a copy of a GPL-3.0
+> work with the verifying key substituted in, and there is no output exception.
+> Distributing this repository distributes that file under GPL-3.0: source
+> availability and copyleft on derivative works apply to it whatever the licence
+> on the files beside it says.
+>
+> Using snarkjs's verifier is ordinary practice and the file is not a problem in
+> itself. It is called out here, and in [NOTICE](../NOTICE), because Apache-2.0
+> was chosen for the patent grant and for enterprise diligence, and strong
+> copyleft in the same tree is a thing that side asks about. Better answered
+> than discovered. Alternatives exist — gnark exports an Apache-2.0 verifier,
+> and permissive reimplementations of the pairing check exist — and swapping is
+> a decision, not a cleanup.
+
 `src/Groth16Verifier.sol` is `snarkjs zkey export solidityverifier` output,
 committed as generated. It is not hand-edited and should not be: it encodes the
 verifying key as constants, and the only correct way to change it is to
