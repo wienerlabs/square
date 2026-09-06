@@ -12,7 +12,6 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "bs58": "^6.0.0",
     "circomlibjs": "^0.1.7",
     "cors": "^2.8.5",
     "express": "^4.21.2",

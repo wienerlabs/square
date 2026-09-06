@@ -8,29 +8,23 @@
 // *names* of the rules that failed. A name is safe to log; a ceiling is not.
 //
 // It operates on the circuit input object, not the HTTP request, deliberately.
-// The lists arrive already Poseidon-hashed and mask-padded, exactly as the
-// circuit sees them, so membership here cannot disagree with membership there
-// by reading a different field or applying a different encoding.
+// The lists arrive already encoded and padded exactly as the circuit sees them,
+// so membership here cannot disagree with membership there by reading a
+// different field or applying a different encoding.
 //
-// Where this can still differ from the circuit, and why it does not matter in
-// practice:
+// Where this can still differ from the circuit:
 //
-//   * Rules 1 and 2 use LessEqThan(64) and LessEqThan(65) in circom, which are
-//     only meaningful for inputs below 2^64 and 2^65. This module compares
-//     exact BigInts. For in-range amounts the two agree; out-of-range amounts
-//     are the range question #14 settles by pinning escrow to the 6-decimal
-//     USDC ERC-20 interface.
-//   * Rule 6's in-circuit timestamp decomposition is under-constrained (#14):
-//     a dishonest prover can witness a day index of their choosing. This module
-//     computes the decomposition honestly, so it agrees with the circuit for
-//     honest provers and is *stricter* than it for dishonest ones. #14 removes
-//     the rule from the circuit and moves the check to block.timestamp on
-//     chain; when that lands, TIME_WINDOW comes out of this file too.
+//   * Rules 1 and 2 use LessEqThan(64) and LessEqThan(65) in circom. The
+//     circuit now range-checks both operands to 64 bits, so an out-of-range
+//     amount fails witness generation rather than reaching either comparison.
+//     For everything the circuit accepts, exact BigInt comparison agrees.
+//   * Rule 6's decomposition is constrained in the circuit as of #14, so this
+//     module and the circuit compute the same weekday for the same timestamp.
+//     Before that fix a dishonest prover could choose the weekday and only this
+//     module was honest about it.
 //
 // Any disagreement between this module and the circuit is reported by the
 // caller as a divergence rather than hidden — see prover.js.
-
-import { poseidon2 } from './hash.js';
 
 export const RULES = Object.freeze({
   PER_TRANSACTION_LIMIT: 'per_transaction_limit',
@@ -52,12 +46,18 @@ const SECONDS_PER_HOUR = 3600n;
 // which puts Thursday at 3, hence the +3 shift. Same constant as the circuit.
 const EPOCH_WEEKDAY_OFFSET = 3n;
 
-// Membership over the mask-padded lists, matching the circuit's
-// IsEqual + mask + OR-fold. Padding slots carry mask 0 and are ignored, so a
-// zero-valued entry can never be matched by accident.
-function isInMaskedList(needle, values, mask) {
+// Membership over the zero-padded lists, matching the circuit's IsEqual +
+// OR-fold. There are no mask arrays: the circuit constrains the three lookup
+// keys non-zero, so a padding slot cannot match one. A caller that reaches here
+// with a zero key would have failed witness generation, but this refuses to
+// answer for it rather than reporting a membership result the circuit will not
+// stand behind.
+function isInList(needle, values) {
+  if (needle === 0n) {
+    throw new Error('lookup key is zero; the circuit rejects this witness');
+  }
   for (let i = 0; i < values.length; i += 1) {
-    if (BigInt(mask[i]) === 1n && BigInt(values[i]) === needle) return true;
+    if (BigInt(values[i]) === needle) return true;
   }
   return false;
 }
@@ -92,38 +92,34 @@ function timeWindowSatisfied(input) {
 export async function evaluateRules(input) {
   const violated = [];
 
-  const amount = BigInt(input.amount_lamports_in);
+  const amount = BigInt(input.amount_in);
   const dailySpentBefore = BigInt(input.daily_spent_before_in);
 
-  // Rule 1 — amount_lamports <= max_per_tx_lamports
-  if (amount > BigInt(input.max_per_tx_lamports)) {
+  // Rule 1 — amount <= max_per_tx
+  if (amount > BigInt(input.max_per_tx)) {
     violated.push(RULES.PER_TRANSACTION_LIMIT);
   }
 
-  // Rule 2 — daily_spent_before + amount_lamports <= max_daily_lamports
-  if (dailySpentBefore + amount > BigInt(input.max_daily_lamports)) {
+  // Rule 2 — daily_spent_before + amount <= max_daily
+  if (dailySpentBefore + amount > BigInt(input.max_daily)) {
     violated.push(RULES.DAILY_LIMIT);
   }
 
-  // Rule 3 — the payment mint is on the whitelist.
-  const paymentToken = BigInt(
-    await poseidon2(input.token_mint_high_in, input.token_mint_low_in),
-  );
-  if (!isInMaskedList(paymentToken, input.token_whitelist, input.token_whitelist_mask)) {
+  // Rule 3 — the payment token is on the whitelist. The address is the field
+  // element itself now; the Poseidon fold of high/low halves went with the
+  // Solana pubkeys that needed it.
+  if (!isInList(BigInt(input.token_in), input.token_whitelist)) {
     violated.push(RULES.TOKEN_WHITELIST);
   }
 
   // Rule 4 — the recipient is not on the blocked list.
-  const paymentRecipient = BigInt(
-    await poseidon2(input.recipient_high_in, input.recipient_low_in),
-  );
-  if (isInMaskedList(paymentRecipient, input.blocked_addresses, input.blocked_addresses_mask)) {
+  if (isInList(BigInt(input.recipient_in), input.blocked_addresses)) {
     violated.push(RULES.BLOCKED_RECIPIENT);
   }
 
-  // Rule 5 — the endpoint category is allowed.
-  const category = BigInt(input.payment_category);
-  if (!isInMaskedList(category, input.allowed_categories, input.allowed_categories_mask)) {
+  // Rule 5 — the endpoint category is allowed. Categories are strings, so this
+  // one is still a Poseidon image.
+  if (!isInList(BigInt(input.payment_category), input.allowed_categories)) {
     violated.push(RULES.ENDPOINT_CATEGORY);
   }
 

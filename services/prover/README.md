@@ -41,28 +41,25 @@ anything. `payment.zkey` is gitignored repository-wide, and the 5 MB
 `payment.wasm` is not worth carrying in history when it is reproducible from
 source in seconds.
 
-The circuit itself is not in this repository yet — it arrives with [#14][i14],
-which also re-parameterises it from ten public signals to eight. Until then,
-build from the aperture copy:
+The circuit lives in [`circuits/`](../../circuits/) and builds its own key:
 
 ```bash
-git clone https://github.com/wienerlabs/aperture.git ../aperture
-cd ../aperture/circuits/payment-prover
+cd ../../circuits
 npm install
-circom payment.circom --r1cs --wasm --sym -l node_modules -o build
+npm run build            # compiles, then a development proving key
 
-# A development proving key. This is NOT a ceremony: it exists so tests can
-# run. See docs/disclosure/zk-setup-status.md.
-snarkjs powersoftau new bn128 13 pot13_0.ptau -v
-snarkjs powersoftau contribute pot13_0.ptau pot13_1.ptau --name="dev-only" -e="$(head -c 32 /dev/urandom | base64)"
-snarkjs powersoftau prepare phase2 pot13_1.ptau pot13_final.ptau -v
-snarkjs groth16 setup build/payment.r1cs pot13_final.ptau payment_0.zkey
-snarkjs zkey contribute payment_0.zkey payment.zkey --name="dev-only" -e="$(head -c 32 /dev/urandom | base64)"
-
-mkdir -p artifacts && cp payment.zkey build/payment_js/payment.wasm artifacts/
+mkdir -p ../services/prover/artifacts
+cp build/payment.zkey build/payment_js/payment.wasm ../services/prover/artifacts/
 ```
 
+That key has a real phase 1 — the adopted Perpetual Powers of Tau contribution
+80 — and a development phase 2 with one contribution and no beacon. It stays a
+development key until [#16][i16] runs the ceremony, and nothing built on it
+carries an assurance claim. See
+[docs/disclosure/zk-setup-status.md](../../docs/disclosure/zk-setup-status.md).
+
 [i14]: https://github.com/wienerlabs/square/issues/14
+[i16]: https://github.com/wienerlabs/square/issues/16
 
 ## Tests
 
@@ -130,23 +127,37 @@ first, and every error names the field and never the value.
 
 ### OpenAPI spec
 
-The inherited spec had drifted from the code: it named
-`daily_spent_so_far_lamports` where the service reads
-`daily_spent_before_lamports`, omitted `policy_id`, `operator_id`,
-`current_unix_timestamp`, `time_restrictions` and `stripe_receipt_hash`, and
-still advertised `journal_digest`, `amount_range_min`, `amount_range_max` and
-`image_id` — response fields left over from the RISC Zero prover that the
-Circom implementation never produced. It is rewritten against the code.
+The inherited spec had drifted from the code and was rewritten against it in
+#4. #18 changed the wire format again for EVM, and the spec moved with it.
 
-### Carried over unchanged
+## Re-parameterised for EVM (#18)
 
-`src/convert.js` still encodes proofs for `groth16-solana`. It is dead weight
-on an EVM chain and [#17][i17] deletes it; it is kept here so the port is a
-port, and pruning happens where the issue says it happens.
+[#14][i14] took the circuit to eight public signals and EVM addresses. This
+service follows, and the wire format changed with it:
 
-The public-signal layout is still ten. [#14][i14] takes it to eight and
-[#18][i18] updates this service; the drift guard in `src/prover.js` fails hard
-if the circuit and the service ever disagree about the count.
+| Was | Is | Why |
+|---|---|---|
+| `payment_amount_lamports`, `max_daily_spend_lamports`, … | `payment_amount`, `max_daily_spend`, … | Amounts are USDC base units at 6 decimals, not lamports and not wei. |
+| `payment_token_mint` | `payment_token` | It is an ERC-20 address, not an SPL mint. |
+| base58 32-byte addresses | 20-byte `0x` addresses | An EVM address fits in one field element. |
+| ten `public_signals` | eight | `recipient_high`/`low` and `token_mint_high`/`low` collapsed to one each. |
+| `groth16`, `proof_hash`, `receipt_bytes` | `solidity` | The old fields encoded a proof for `groth16-solana`. `solidity` carries the arguments the on-chain verifier takes. |
 
-[i17]: https://github.com/wienerlabs/square/issues/17
+Addresses are no longer Poseidon-hashed before list membership either. That
+hash existed only to fold two halves into one comparable value; with a single
+element, membership is plain equality — and the mask arrays that came with it
+are gone, because they were not covered by `policy_data_hash` and zeroing one
+switched a rule off while leaving the commitment identical.
+
+The drift guard stays strict in both directions. A circuit and a service that
+disagree about the public layout produce proofs that verify against the wrong
+statement, which is worse than a hard failure: the contract would read an
+amount out of a slot holding a timestamp.
+
+`test/circuit-agreement.test.js` holds this service's witness against the
+compiled circuit — the public signals, the policy commitment, and the
+compliance verdict rule by rule. `test/solidity-encoding.test.js` checks the
+proof encoding against `snarkjs zkey export soliditycalldata`, the same tool
+that generates the verifier contract.
+
 [i18]: https://github.com/wienerlabs/square/issues/18

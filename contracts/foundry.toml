@@ -27,8 +27,10 @@ tab_width = 4
 bracket_spacing = false
 int_types = "long"
 
-[rpc_endpoints]
-arc_testnet = "${ARC_TESTNET_RPC_URL}"
-
 [lint]
 exclude_lints = ["mixed-case-function", "mixed-case-variable", "incorrect-shift", "screaming-snake-case-immutable", "asm-keccak256"]
+
+[rpc_endpoints]
+arc_testnet = "${ARC_RPC_URL}"
+
+[etherscan]

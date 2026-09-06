@@ -1,0 +1,53 @@
+name: a2a
+
+# Typecheck and test @squaresdk/a2a.
+#
+# Hermetic: the package has no dependencies and no chain client, and its
+# end-to-end suite talks to an HTTP server it starts on loopback. Nothing here
+# reaches the network.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/a2a/**"
+      - "docs/a2a/**"
+      - ".github/workflows/a2a.yml"
+  pull_request:
+    paths:
+      - "packages/a2a/**"
+      - "docs/a2a/**"
+      - ".github/workflows/a2a.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/a2a
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # The package's whole reason for existing is an absence, and an absence is
+      # easy to lose. This is the check that would catch it coming back.
+      - name: The agent cannot pay itself
+        run: npx vitest run test/no-self-settlement.test.ts

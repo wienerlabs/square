@@ -112,7 +112,7 @@ describe.skipIf(!forkUrl)("lifecycle on an Arc Testnet fork with the real ERC-80
       }),
     });
 
-    execSync("forge script script/Deploy.s.sol --rpc-url " + rpc + " --broadcast", {
+    execSync("forge script script/DeploySettlement.s.sol --rpc-url " + rpc + " --broadcast", {
       cwd: contractsDir,
       stdio: "pipe",
       env: {
