@@ -106,3 +106,14 @@ jobs:
           npm run typecheck
           npm test
           npm run build
+
+      - name: Five settlement paths end to end (anvil)
+        working-directory: packages/core
+        env:
+          ANVIL: "1"
+          CHAIN_ID: "31337"
+          RPC_URL: http://127.0.0.1:8545
+          LIFECYCLE_REPORT: ${{ runner.temp }}/lifecycle-31337.md
+        run: |
+          npm run lifecycle
+          cat "$LIFECYCLE_REPORT"

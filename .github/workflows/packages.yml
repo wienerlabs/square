@@ -11,6 +11,7 @@ on:
       - "packages/aa/**"
       - "services/indexer/**"
       - "services/keeper/**"
+      - "services/prover/**"
       - "contracts/**"
       - ".github/workflows/packages.yml"
   pull_request:
@@ -22,6 +23,7 @@ on:
       - "packages/aa/**"
       - "services/indexer/**"
       - "services/keeper/**"
+      - "services/prover/**"
       - "contracts/**"
       - ".github/workflows/packages.yml"
   workflow_dispatch:
@@ -91,3 +93,24 @@ jobs:
           npm run typecheck
           npm test
           npm run build
+
+  prover:
+    name: services/prover (hermetic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build @squaresdk/observability
+        working-directory: packages/observability
+        run: |
+          npm install
+          npm run build
+      - name: Install and test
+        working-directory: services/prover
+        env:
+          NODE_ENV: test
+        run: |
+          npm install --install-links
+          npm test

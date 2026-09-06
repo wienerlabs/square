@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@squaresdk/observability": "file:../../packages/observability",
     "circomlibjs": "^0.1.7",
     "cors": "^2.8.5",
     "express": "^4.21.2",
