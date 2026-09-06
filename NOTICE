@@ -34,6 +34,11 @@ dr-wilson-empty/aip-beta — Copyright (c) 2026 Agent Internet Protocol — MIT
   packages/did-aip-driver/
       The Universal Resolver driver, carried over and rewritten to read
       ERC-8004.
+  packages/a2a/
+      The task protocol. Rewritten rather than copied, but derived from
+      src/lib/protocol/: the JSON-RPC method names, the retry policy, the
+      per-endpoint concurrency cap and the well-known cache all came from
+      there.
   docs/did-aip/method-spec-v2.md
       Supersedes the v1 did:aip method specification.
 
