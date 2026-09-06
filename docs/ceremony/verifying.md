@@ -76,6 +76,17 @@ is where it shows.
 You are checking four separate claims. They fail independently, so check them
 separately.
 
+If you would rather not do it by hand, `ceremony.mjs verify-chain` runs all four
+and exits non-zero on any failure:
+
+```bash
+node scripts/ceremony.mjs verify-chain
+```
+
+The steps below are the same checks unpacked. Running them yourself rather than
+trusting our script to grade our own ceremony is the better instinct, which is
+why both exist.
+
 ### 1. Phase 1 is the ceremony it claims to be
 
 ```bash

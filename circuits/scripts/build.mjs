@@ -35,8 +35,17 @@ const CIRCUITS = [
   { name: 'timestamp_unchecked', file: 'test/circuits/timestamp_unchecked.circom' },
 ];
 
+// Entropy never goes in argv — argv is visible to every process on the machine
+// through `ps`, and this echoes what it runs. The redaction is a floor in case
+// a future caller forgets; the callers below pass secrets over stdin instead.
+const SECRET_ARG = /^(-e|--entropy)=/;
+
 function run(cmd, args, opts = {}) {
-  process.stdout.write(`$ ${cmd} ${args.join(' ')}\n`);
+  const shown = args.map((a) => {
+    const m = a.match(SECRET_ARG);
+    return m ? `${m[1]}=<redacted>` : a;
+  });
+  process.stdout.write(`$ ${cmd} ${shown.join(' ')}\n`);
   return execFileSync(cmd, args, { cwd: ROOT, stdio: 'inherit', ...opts });
 }
 
@@ -83,11 +92,18 @@ const potFinal = ptau.file;
 process.stdout.write('\n--- phase 2: development contribution (NOT a ceremony) ---\n');
 const zkey0 = path.join(BUILD, 'payment_0.zkey');
 const zkey = path.join(BUILD, 'payment.zkey');
+// Fed over stdin rather than as an argument. This key is disposable and its
+// entropy is not worth protecting, but the pattern is: the ceremony's
+// contributors run the same snarkjs command, and a leaky example is the kind
+// that gets copied.
 const entropy = Buffer.from(
   globalThis.crypto.getRandomValues(new Uint8Array(32)),
 ).toString('base64');
 run('snarkjs', ['groth16', 'setup', path.join(BUILD, 'payment.r1cs'), potFinal, zkey0]);
-run('snarkjs', ['zkey', 'contribute', zkey0, zkey, '--name=dev-only', `-e=${entropy}`]);
+run('snarkjs', ['zkey', 'contribute', zkey0, zkey, '--name=dev-only'], {
+  input: `${entropy}\n`,
+  stdio: ['pipe', 'inherit', 'inherit'],
+});
 run('snarkjs', ['zkey', 'export', 'verificationkey', zkey, path.join(BUILD, 'payment_vk.json')]);
 
 process.stdout.write(

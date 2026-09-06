@@ -71,12 +71,20 @@ ppot_0080_13.ptau
   matches the adopted Perpetual Powers of Tau contribution 80
 ```
 
-**The contribution chain is cryptographically sound.** This checks every
-contribution in the file rather than its name, and takes a while:
+**The contribution chain checks out.** This verifies every contribution in the
+file rather than trusting its name. It is slow — it re-does the pairing checks
+for all eighty contributions, and on a laptop it runs for the better part of an
+hour of one core — so run it once and record the result rather than putting it
+in a loop:
 
 ```bash
 snarkjs powersoftau verify ppot_0080_13.ptau
 ```
+
+Adopting this file rests on the hash check above, which is what pins the bytes
+to the ceremony's published artifact. The chain check is the deeper one and is
+what an auditor should run before relying on the setup; the ceremony's own
+repository publishes per-contribution attestations for the same purpose.
 
 **A key built on it is recognisably built on it.** `vk_alpha_1` and `vk_beta_2`
 are copied out of the ptau during setup and never touched by phase-2
