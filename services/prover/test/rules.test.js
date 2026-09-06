@@ -1,176 +1,178 @@
-// The off-circuit rule evaluator has to agree with the circuit, or the rule
-// names it feeds into the violation log are worse than useless.
+// The off-circuit rule evaluator.
 //
-// The fixtures under test/fixtures/ are the circuit's own test inputs, carried
-// over from aperture. circuit-ground-truth.json is not hand-written: it is the
-// witness output of the compiled payment.circom for those same fixtures, so
-// these assertions compare this module against the circuit itself rather than
-// against someone's expectation of it. Regenerate it with
-// test/tools/regenerate-ground-truth.mjs when the circuit changes.
+// The circuit exposes `is_compliant` and nothing else, so this module exists to
+// answer "which rule failed" — the part the violation log is allowed to say out
+// loud. It is only worth anything if it agrees with the circuit, and a
+// confident wrong rule name is worse than none.
+//
+// Two layers cover that. Here, the predicates are exercised directly against
+// witnesses built by the real request path, with no circuit needed, so they run
+// everywhere. circuit-agreement.test.js then holds the same inputs against the
+// compiled circuit, which is where a disagreement would actually surface.
 
 import { describe, it, expect } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { evaluateRules, RULES } from '../src/rules.js';
+import { buildCircuitInput } from '../src/prover.js';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURES = path.join(HERE, 'fixtures');
+const ADDR = {
+  usdc: '0x3600000000000000000000000000000000000000',
+  other: '0x00000000000000000000000000000000000000ff',
+  provider: '0x1111111111111111111111111111111111111111',
+  blocked: '0x2222222222222222222222222222222222222222',
+  operator: '0x3333333333333333333333333333333333333333',
+};
 
-function loadFixture(name) {
-  const input = JSON.parse(fs.readFileSync(path.join(FIXTURES, name), 'utf8'));
-  // The committed fixtures predate the Stripe receipt signal. Zero is the
-  // documented "no Stripe involved" value and is what the ground-truth run used.
-  if (input.stripe_receipt_hash_in === undefined) input.stripe_receipt_hash_in = '0';
-  return input;
+// 2026-09-02T13:45:30Z — a Wednesday at 13:45 UTC. Mon=0, so weekday 2.
+const TIMESTAMP = '1788356730';
+const WEDNESDAY = ['wednesday'];
+const THURSDAY = ['thursday'];
+
+function request(overrides = {}) {
+  return {
+    policy_id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
+    operator_id: ADDR.operator,
+    max_daily_spend: '100000000',
+    max_per_transaction: '10000000',
+    allowed_endpoint_categories: ['api-call'],
+    blocked_addresses: [ADDR.blocked],
+    token_whitelist: [ADDR.usdc],
+    payment_amount: '5000000',
+    payment_token: ADDR.usdc,
+    payment_recipient: ADDR.provider,
+    payment_endpoint_category: 'api-call',
+    daily_spent_before: '50000000',
+    current_unix_timestamp: TIMESTAMP,
+    ...overrides,
+  };
 }
 
-const groundTruth = JSON.parse(
-  fs.readFileSync(path.join(FIXTURES, 'circuit-ground-truth.json'), 'utf8'),
-);
+const evaluate = async (overrides) => evaluateRules(await buildCircuitInput(request(overrides)));
 
-describe('evaluateRules agrees with the compiled circuit', () => {
-  for (const [fixture, outputs] of Object.entries(groundTruth)) {
-    it(`${fixture} → is_compliant=${outputs.is_compliant}`, async () => {
-      const { compliant } = await evaluateRules(loadFixture(fixture));
-      expect(compliant).toBe(outputs.is_compliant === '1');
-    });
-  }
+const window = (days, start, end) => ({
+  time_restrictions: [{
+    allowed_days: days, allowed_hours_start: start,
+    allowed_hours_end: end, timezone: 'UTC',
+  }],
 });
 
-describe('the ground truth matches what aperture recorded', () => {
-  // ok_compliant.expected.json is the upstream fixture's own record of the
-  // circuit's public outputs. Checking the regenerated ground truth against it
-  // catches a mis-set OUTPUT_ORDER or a witness read at the wrong offset, which
-  // would otherwise make every assertion in this file agree with itself and
-  // with nothing else.
-  it('agrees on every signal the upstream fixture records', () => {
-    const expected = JSON.parse(
-      fs.readFileSync(path.join(FIXTURES, 'ok_compliant.expected.json'), 'utf8'),
-    );
-    const actual = groundTruth['ok_compliant.json'];
-    for (const [signal, value] of Object.entries(expected)) {
-      expect(actual[signal], signal).toBe(value);
-    }
-  });
-});
-
-describe('evaluateRules names the rule that failed', () => {
-  it('flags nothing for the compliant fixture', async () => {
-    const { compliant, violated } = await evaluateRules(loadFixture('ok_compliant.json'));
+describe('a compliant payment', () => {
+  it('violates nothing', async () => {
+    const { compliant, violated } = await evaluate({});
     expect(compliant).toBe(true);
     expect(violated).toEqual([]);
   });
+});
 
-  it('flags the per-transaction limit', async () => {
-    const { violated } = await evaluateRules(loadFixture('bad_amount_exceeds_per_tx.json'));
-    expect(violated).toContain(RULES.PER_TRANSACTION_LIMIT);
+describe('rule 1, the per-transaction ceiling', () => {
+  it('flags an amount over the ceiling', async () => {
+    const { violated } = await evaluate({ payment_amount: '10000001', daily_spent_before: '0' });
+    expect(violated).toEqual([RULES.PER_TRANSACTION_LIMIT]);
   });
 
-  it('flags a blocked recipient', async () => {
-    const { violated } = await evaluateRules(loadFixture('bad_recipient_blocked.json'));
-    expect(violated).toEqual([RULES.BLOCKED_RECIPIENT]);
-  });
-
-  it('flags a mint that is not whitelisted', async () => {
-    const { violated } = await evaluateRules(loadFixture('bad_token_not_whitelisted.json'));
-    expect(violated).toEqual([RULES.TOKEN_WHITELIST]);
+  it('allows an amount exactly on the ceiling', async () => {
+    const { compliant } = await evaluate({ payment_amount: '10000000', daily_spent_before: '0' });
+    expect(compliant).toBe(true);
   });
 });
 
-describe('evaluateRules covers the rules the fixtures do not', () => {
-  // The circuit fixtures exercise three of the six rules. These build on the
-  // compliant fixture so every other field stays a value the circuit accepted.
-  it('flags the daily limit when the projected total exceeds the ceiling', async () => {
-    const input = loadFixture('ok_compliant.json');
-    input.daily_spent_before_in = String(
-      BigInt(input.max_daily_lamports) - BigInt(input.amount_lamports_in) + 1n,
-    );
-    const { compliant, violated } = await evaluateRules(input);
-    expect(compliant).toBe(false);
+describe('rule 2, the daily ceiling', () => {
+  it('flags a payment that would cross it', async () => {
+    const { violated } = await evaluate({ daily_spent_before: '95000001' });
     expect(violated).toEqual([RULES.DAILY_LIMIT]);
   });
 
-  it('allows a payment that lands exactly on the daily ceiling', async () => {
-    const input = loadFixture('ok_compliant.json');
-    input.daily_spent_before_in = String(
-      BigInt(input.max_daily_lamports) - BigInt(input.amount_lamports_in),
-    );
-    const { compliant } = await evaluateRules(input);
+  it('allows a payment that lands exactly on it', async () => {
+    const { compliant } = await evaluate({ daily_spent_before: '95000000' });
     expect(compliant).toBe(true);
-  });
-
-  it('allows a payment that lands exactly on the per-transaction ceiling', async () => {
-    const input = loadFixture('ok_compliant.json');
-    input.amount_lamports_in = input.max_per_tx_lamports;
-    input.daily_spent_before_in = '0';
-    const { compliant } = await evaluateRules(input);
-    expect(compliant).toBe(true);
-  });
-
-  it('flags a category that is not on the allowed list', async () => {
-    const input = loadFixture('ok_compliant.json');
-    input.payment_category = '12345';
-    const { violated } = await evaluateRules(input);
-    expect(violated).toEqual([RULES.ENDPOINT_CATEGORY]);
-  });
-
-  it('ignores padding slots when checking membership', async () => {
-    // Slot 0 is active, the rest are zero-valued padding with mask 0. A
-    // zero-valued category must not match a padding slot.
-    const input = loadFixture('ok_compliant.json');
-    input.payment_category = '0';
-    const { violated } = await evaluateRules(input);
-    expect(violated).toEqual([RULES.ENDPOINT_CATEGORY]);
-  });
-
-  it('reports every rule that failed, not just the first', async () => {
-    const input = loadFixture('bad_amount_exceeds_per_tx.json');
-    input.payment_category = '12345';
-    const { violated } = await evaluateRules(input);
-    expect(violated).toContain(RULES.PER_TRANSACTION_LIMIT);
-    expect(violated).toContain(RULES.ENDPOINT_CATEGORY);
   });
 });
 
-describe('time window rule', () => {
-  // 2025-01-01T00:00:00Z, the timestamp the fixtures use, was a Wednesday.
-  // Mon=0 in the bitmask, so Wednesday is bit 2.
-  const WEDNESDAY_BIT = 1 << 2;
-  const THURSDAY_BIT = 1 << 3;
+describe('rule 3, the token whitelist', () => {
+  it('flags a token that is not on the list', async () => {
+    const { violated } = await evaluate({ payment_token: ADDR.other });
+    expect(violated).toEqual([RULES.TOKEN_WHITELIST]);
+  });
 
+  it('accepts any entry on the list, not only the first', async () => {
+    const { compliant } = await evaluate({
+      token_whitelist: [ADDR.other, ADDR.usdc], payment_token: ADDR.usdc,
+    });
+    expect(compliant).toBe(true);
+  });
+
+  it('does not match a padding slot', async () => {
+    // Padding is zero and there are no masks any more; the guard is that a
+    // lookup key can never be zero. Reaching here with one is a bug, and the
+    // evaluator refuses rather than reporting a membership the circuit would
+    // not stand behind.
+    const input = await buildCircuitInput(request());
+    await expect(evaluateRules({ ...input, token_in: '0' })).rejects.toThrow(/zero/);
+  });
+});
+
+describe('rule 4, the blocked list', () => {
+  it('flags a blocked recipient', async () => {
+    const { violated } = await evaluate({ payment_recipient: ADDR.blocked });
+    expect(violated).toEqual([RULES.BLOCKED_RECIPIENT]);
+  });
+
+  it('passes when the blocked list is empty', async () => {
+    const { compliant } = await evaluate({ blocked_addresses: [] });
+    expect(compliant).toBe(true);
+  });
+});
+
+describe('rule 5, the endpoint category', () => {
+  it('flags a category that is not allowed', async () => {
+    const { violated } = await evaluate({ payment_endpoint_category: 'exfiltration' });
+    expect(violated).toEqual([RULES.ENDPOINT_CATEGORY]);
+  });
+});
+
+describe('rule 6, the time window', () => {
   it('is a free pass when no window is configured', async () => {
-    const { compliant } = await evaluateRules(loadFixture('ok_compliant.json'));
+    const { compliant } = await evaluate({});
     expect(compliant).toBe(true);
   });
 
   it('passes inside the window', async () => {
-    const input = loadFixture('ok_compliant.json');
-    input.time_active = '1';
-    input.time_days_bitmask = String(WEDNESDAY_BIT);
-    input.time_start_hour_utc = '0';
-    input.time_end_hour_utc = '23';
-    const { compliant } = await evaluateRules(input);
+    const { compliant } = await evaluate(window(WEDNESDAY, 9, 17));
     expect(compliant).toBe(true);
   });
 
-  it('fails on a day the policy does not allow', async () => {
-    const input = loadFixture('ok_compliant.json');
-    input.time_active = '1';
-    input.time_days_bitmask = String(THURSDAY_BIT);
-    input.time_start_hour_utc = '0';
-    input.time_end_hour_utc = '23';
-    const { violated } = await evaluateRules(input);
+  it('flags a day the policy does not allow', async () => {
+    const { violated } = await evaluate(window(THURSDAY, 0, 23));
     expect(violated).toEqual([RULES.TIME_WINDOW]);
   });
 
-  it('fails outside the hour range', async () => {
-    const input = loadFixture('ok_compliant.json');
-    input.time_active = '1';
-    input.time_days_bitmask = String(WEDNESDAY_BIT);
-    input.time_start_hour_utc = '9';
-    input.time_end_hour_utc = '17';
-    const { violated } = await evaluateRules(input);
+  it('flags an hour before the window opens', async () => {
+    const { violated } = await evaluate(window(WEDNESDAY, 14, 17));
     expect(violated).toEqual([RULES.TIME_WINDOW]);
+  });
+
+  it('flags an hour after the window closes', async () => {
+    const { violated } = await evaluate(window(WEDNESDAY, 9, 12));
+    expect(violated).toEqual([RULES.TIME_WINDOW]);
+  });
+
+  it('accepts the boundary hours', async () => {
+    for (const [start, end] of [[13, 13], [13, 23], [0, 13]]) {
+      const { compliant } = await evaluate(window(WEDNESDAY, start, end));
+      expect(compliant, `window ${start}..${end}`).toBe(true);
+    }
+  });
+});
+
+describe('several rules at once', () => {
+  it('reports every one that failed, not just the first', async () => {
+    const { violated } = await evaluate({
+      payment_amount: '999999999',
+      payment_token: ADDR.other,
+      payment_recipient: ADDR.blocked,
+    });
+    expect(violated).toContain(RULES.PER_TRANSACTION_LIMIT);
+    expect(violated).toContain(RULES.DAILY_LIMIT);
+    expect(violated).toContain(RULES.TOKEN_WHITELIST);
+    expect(violated).toContain(RULES.BLOCKED_RECIPIENT);
   });
 });

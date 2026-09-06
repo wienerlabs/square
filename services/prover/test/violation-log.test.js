@@ -13,7 +13,6 @@
 // private value a request can hold, nothing from it appears in any log entry.
 
 import { describe, it, expect } from 'vitest';
-import bs58 from 'bs58';
 import {
   logEntriesForProof,
   violationLogEntry,
@@ -24,44 +23,39 @@ import { buildCircuitInput } from '../src/prover.js';
 
 // Distinctive values, so a substring search over the serialised log is a
 // meaningful check rather than a coincidence hunt.
-function address(seed) {
-  const raw = Buffer.alloc(32, 0);
-  Buffer.from(seed).copy(raw);
-  raw[31] = 7; // keep it a full 32 bytes after base58 round-trip
-  return bs58.encode(raw);
-}
+const address = (nibble) => `0x${String(nibble).repeat(40)}`;
 
 const SECRET = {
   maxDaily: '987654321987',
   maxPerTx: '123454321123',
   dailySpentBefore: '55555555555',
   amount: '999999999999',
-  blockedA: address('BLOCKED-ADDRESS-ONE'),
-  blockedB: address('BLOCKED-ADDRESS-TWO'),
-  whitelistA: address('WHITELISTED-MINT-ONE'),
+  blockedA: address(2),
+  blockedB: address(5),
+  whitelistA: address(4),
   categoryA: 'super-secret-category',
   categoryB: 'another-secret-cat',
-  recipient: address('THE-RECIPIENT'),
-  mint: address('THE-PAYMENT-MINT'),
-  operator: address('THE-OPERATOR'),
+  recipient: address(1),
+  token: address(7),
+  operator: address(3),
   policyId: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
-  timestamp: '1735689600',
+  timestamp: '1788356730',
 };
 
 function requestWithSecrets() {
   return {
     policy_id: SECRET.policyId,
     operator_id: SECRET.operator,
-    max_daily_spend_lamports: SECRET.maxDaily,
-    max_per_transaction_lamports: SECRET.maxPerTx,
+    max_daily_spend: SECRET.maxDaily,
+    max_per_transaction: SECRET.maxPerTx,
     allowed_endpoint_categories: [SECRET.categoryA, SECRET.categoryB],
     blocked_addresses: [SECRET.blockedA, SECRET.blockedB],
     token_whitelist: [SECRET.whitelistA],
-    payment_amount_lamports: SECRET.amount,
-    payment_token_mint: SECRET.mint,
+    payment_amount: SECRET.amount,
+    payment_token: SECRET.token,
     payment_recipient: SECRET.recipient,
     payment_endpoint_category: SECRET.categoryA,
-    daily_spent_before_lamports: SECRET.dailySpentBefore,
+    daily_spent_before: SECRET.dailySpentBefore,
     current_unix_timestamp: SECRET.timestamp,
   };
 }
@@ -79,7 +73,7 @@ const FORBIDDEN_VALUES = [
   SECRET.categoryA,
   SECRET.categoryB,
   SECRET.recipient,
-  SECRET.mint,
+  SECRET.token,
 ];
 
 function expectNoLeak(entries) {

@@ -1,84 +1,57 @@
-// BN254 base field prime p (matches the scalar field used by alt_bn128 on
-// Solana). Required for negating the Y coordinate of proof_a per the
-// groth16-solana verifier convention.
+// Shape a snarkjs proof into the arguments an on-chain Groth16 verifier takes.
+//
+// This replaces the groth16-solana encoding the Solana service used. That one
+// negated pi_a's Y coordinate and reordered pi_b's Fp2 limbs, because the Rust
+// verifier expected arkworks byte layout. The Solidity verifier snarkjs
+// generates does neither: it negates internally, and it reads pi_b in the order
+// snarkjs already emits.
+//
+// Getting this wrong does not produce a wrong answer — it produces a proof that
+// simply fails to verify, which is a confusing way to lose an afternoon. The
+// layout below is the one `snarkjs zkey export soliditycalldata` produces, and
+// prover.test.js checks this function against that command's output rather than
+// against a description of it.
+
 const BN254_P = BigInt(
   '21888242871839275222246405745257275088696311157297823662689037894645226208583',
 );
 
-// Serialize a decimal string into a 32-byte big-endian Buffer.
-function toFieldBytes(decimalString) {
-  const n = BigInt(decimalString);
+function toHex32(value) {
+  const n = BigInt(value);
   if (n < 0n || n >= BN254_P) {
-    throw new Error(`Field element out of range: ${decimalString}`);
+    throw new Error('field element out of range');
   }
-  let hex = n.toString(16);
-  if (hex.length % 2 === 1) hex = '0' + hex;
-  const buf = Buffer.alloc(32);
-  Buffer.from(hex, 'hex').copy(buf, 32 - hex.length / 2);
-  return buf;
+  return `0x${n.toString(16).padStart(64, '0')}`;
 }
 
-// snarkjs emits proof_a as [x, y, 1] with decimal strings. groth16-solana
-// expects 64 bytes = x || negate(y), each 32 bytes big-endian. Negation flips
-// the pairing direction so the final equation holds without sign inversion on
-// the verifier side.
-function encodeProofA(pi_a) {
-  const x = BigInt(pi_a[0]);
-  const y = BigInt(pi_a[1]);
-  const negY = (BN254_P - y) % BN254_P;
-
-  const xBytes = toFieldBytes(x.toString());
-  const yBytes = toFieldBytes(negY.toString());
-
-  return Buffer.concat([xBytes, yBytes]);
+// snarkjs emits pi_a as [x, y, 1]. The Solidity verifier takes [x, y] and does
+// its own negation, so the Y coordinate is passed through untouched.
+function encodeA(pi_a) {
+  return [toHex32(pi_a[0]), toHex32(pi_a[1])];
 }
 
-// snarkjs emits proof_b as [[x0, x1], [y0, y1], [1, 0]] for a G2 element over
-// Fp2. groth16-solana expects 128 bytes = x1 || x0 || y1 || y0 (the Fp2
-// components are reversed compared to snarkjs's output order so the byte
-// layout matches the Rust arkworks representation).
-function encodeProofB(pi_b) {
-  const x0 = BigInt(pi_b[0][0]);
-  const x1 = BigInt(pi_b[0][1]);
-  const y0 = BigInt(pi_b[1][0]);
-  const y1 = BigInt(pi_b[1][1]);
-
-  return Buffer.concat([
-    toFieldBytes(x1.toString()),
-    toFieldBytes(x0.toString()),
-    toFieldBytes(y1.toString()),
-    toFieldBytes(y0.toString()),
-  ]);
+// pi_b is a G2 point over Fp2: [[x0, x1], [y0, y1], [1, 0]]. Solidity's pairing
+// precompile takes each Fp2 coefficient pair in reverse order, which is the
+// order snarkjs already writes into its own calldata export — so the swap here
+// is the one the verifier expects, not an extra one.
+function encodeB(pi_b) {
+  return [
+    [toHex32(pi_b[0][1]), toHex32(pi_b[0][0])],
+    [toHex32(pi_b[1][1]), toHex32(pi_b[1][0])],
+  ];
 }
 
-// snarkjs emits proof_c as [x, y, 1]. groth16-solana expects 64 bytes = x || y.
-function encodeProofC(pi_c) {
-  return Buffer.concat([
-    toFieldBytes(pi_c[0]),
-    toFieldBytes(pi_c[1]),
-  ]);
+function encodeC(pi_c) {
+  return [toHex32(pi_c[0]), toHex32(pi_c[1])];
 }
 
-// Convert each public input (decimal string) to a 32-byte big-endian buffer,
-// matching the format groth16-solana expects for its public inputs slice.
-function encodePublicInputs(publicInputs) {
-  return publicInputs.map((input) => toFieldBytes(input));
-}
-
-// Shape the snarkjs (proof, public) pair into the exact Buffers that the
-// Solana verifier instruction takes as arguments. Everything is returned as
-// base64-encoded strings so the HTTP response stays JSON-clean; the Solana
-// client decodes before calling the program.
-export function encodeForGroth16Solana(proof, publicInputs) {
-  const proofA = encodeProofA(proof.pi_a);
-  const proofB = encodeProofB(proof.pi_b);
-  const proofC = encodeProofC(proof.pi_c);
-  const publics = encodePublicInputs(publicInputs);
-
+// The four arguments `verifyProof(uint[2] a, uint[2][2] b, uint[2] c, uint[N] input)`
+// takes, as 32-byte hex strings. Callers pass them straight to a contract call.
+export function encodeForSolidity(proof, publicSignals) {
   return {
-    proof_a: proofA.toString('base64'),
-    proof_b: proofB.toString('base64'),
-    proof_c: proofC.toString('base64'),
-    public_inputs: publics.map((buf) => buf.toString('base64')),
+    a: encodeA(proof.pi_a),
+    b: encodeB(proof.pi_b),
+    c: encodeC(proof.pi_c),
+    input: publicSignals.map(toHex32),
   };
 }

@@ -63,12 +63,10 @@ app.post('/prove', async (req, res) => {
       policy_data_hash: result.policy_data_hash,
       policy_data_hash_hex: result.policy_data_hash_hex,
       public_signals: result.public_signals,
-      groth16: result.groth16,
+      solidity: result.solidity,
       raw_proof: result.raw_proof,
       raw_public: result.raw_public,
-      proof_hash: result.proof_hash,
       verification_timestamp: result.verification_timestamp,
-      receipt_bytes: result.receipt_bytes,
       proving_time_ms: elapsedMs,
     });
   } catch (error) {

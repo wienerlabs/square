@@ -17,7 +17,6 @@ import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import bs58 from 'bs58';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ARTIFACTS = process.env.PROVER_ARTIFACTS_DIR
@@ -28,21 +27,16 @@ const hasArtifacts =
   fs.existsSync(path.join(ARTIFACTS, 'payment.wasm')) &&
   fs.existsSync(path.join(ARTIFACTS, 'payment.zkey'));
 
-function address(seed) {
-  const raw = Buffer.alloc(32, 0);
-  Buffer.from(seed).copy(raw);
-  raw[31] = 7;
-  return bs58.encode(raw);
-}
+const address = (nibble) => `0x${String(nibble).repeat(40)}`;
 
 const SECRET = {
   maxDaily: '987654321987',
   maxPerTx: '123454321123',
   dailySpentBefore: '55555555555',
-  blockedA: address('BLOCKED-ADDRESS-ONE'),
-  whitelistA: address('WHITELISTED-MINT-ONE'),
+  blockedA: address(2),
+  whitelistA: address(4),
   categoryA: 'super-secret-category',
-  operator: address('THE-OPERATOR'),
+  operator: address(3),
 };
 
 // Over the per-transaction ceiling and over the daily ceiling, paying a mint
@@ -50,17 +44,17 @@ const SECRET = {
 const NON_COMPLIANT_REQUEST = {
   policy_id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
   operator_id: SECRET.operator,
-  max_daily_spend_lamports: SECRET.maxDaily,
-  max_per_transaction_lamports: SECRET.maxPerTx,
+  max_daily_spend: SECRET.maxDaily,
+  max_per_transaction: SECRET.maxPerTx,
   allowed_endpoint_categories: [SECRET.categoryA],
   blocked_addresses: [SECRET.blockedA],
   token_whitelist: [SECRET.whitelistA],
-  payment_amount_lamports: '999999999999',
-  payment_token_mint: address('SOME-OTHER-MINT'),
-  payment_recipient: address('THE-RECIPIENT'),
+  payment_amount: '999999999999',
+  payment_token: address(9),
+  payment_recipient: address(1),
   payment_endpoint_category: SECRET.categoryA,
-  daily_spent_before_lamports: SECRET.dailySpentBefore,
-  current_unix_timestamp: '1735689600',
+  daily_spent_before: SECRET.dailySpentBefore,
+  current_unix_timestamp: '1788356730',
 };
 
 const FORBIDDEN_IN_LOGS = [
@@ -108,8 +102,9 @@ describe.skipIf(!hasArtifacts)('POST /prove, real proof', () => {
     );
     // A proof is still produced: the circuit proves the check ran, not that the
     // outcome was positive.
-    expect(response.body.groth16.proof_a).toBeTruthy();
-    expect(response.body.raw_public).toHaveLength(10);
+    expect(response.body.solidity.a).toHaveLength(2);
+    expect(response.body.solidity.input).toHaveLength(8);
+    expect(response.body.raw_public).toHaveLength(8);
 
     const logs = captured.join('\n');
     expect(logs).toContain('"event":"compliance_violation"');
@@ -127,9 +122,9 @@ describe.skipIf(!hasArtifacts)('POST /prove, real proof', () => {
   it('proves a compliant payment and logs no violation at all', async () => {
     const compliant = {
       ...NON_COMPLIANT_REQUEST,
-      payment_token_mint: SECRET.whitelistA,
-      payment_amount_lamports: '1000',
-      daily_spent_before_lamports: '0',
+      payment_token: SECRET.whitelistA,
+      payment_amount: '1000',
+      daily_spent_before: '0',
     };
 
     capture();
