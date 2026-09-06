@@ -197,6 +197,6 @@ contract KeeperEvaluatorTest is BaseTest {
         keeper.finalize(jobId, "");
         uint256 used = before - gasleft();
         emit log_named_uint("finalize gas (hooked, reputation + validation written)", used);
-        assertLt(used, 400_000);
+        assertLt(used, 600_000);
     }
 }

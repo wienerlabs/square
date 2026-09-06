@@ -11,7 +11,7 @@ import {MockUSDC3009} from "../test/mocks/MockUSDC3009.sol";
 import {MockIdentityRegistry, MockReputationRegistry, MockValidationRegistry} from "../test/mocks/MockRegistries.sol";
 
 contract DeployLocal is Script {
-    uint256 internal constant ANVIL_KEY_0 = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
+    string internal constant ANVIL_MNEMONIC = "test test test test test test test test test test test junk";
     address internal constant ANVIL_1 = 0x70997970C51812dc3A010C7d01b50e0d17dc79C8;
     address internal constant ANVIL_2 = 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC;
     address internal constant ANVIL_3 = 0x90F79bf6EB2c4f870365E785982E1f101E93b906;
@@ -35,7 +35,7 @@ contract DeployLocal is Script {
     }
 
     function run() external {
-        uint256 key = vm.envOr("DEPLOYER_PRIVATE_KEY", ANVIL_KEY_0);
+        uint256 key = vm.envOr("DEPLOYER_PRIVATE_KEY", vm.deriveKey(ANVIL_MNEMONIC, 0));
         address deployer = vm.addr(key);
         vm.startBroadcast(key);
         Mocks memory mocks = _deployMocks();

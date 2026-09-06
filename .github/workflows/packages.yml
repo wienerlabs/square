@@ -79,7 +79,7 @@ jobs:
         run: forge build
       - name: Build path dependencies
         run: |
-          for dep in packages/did-resolver packages/core packages/data packages/observability packages/hardening; do
+          for dep in packages/did-resolver packages/core packages/data packages/observability packages/hardening services/indexer; do
             if [ -f "$dep/package.json" ]; then
               (cd "$dep" && npm install --install-links && npm run build)
             fi

@@ -15,7 +15,7 @@ import {
   type Hex,
   type TransactionReceipt,
 } from "viem";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { generatePrivateKey, mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
 import {
   createSquareClient,
   deploymentFromJson,
@@ -39,14 +39,8 @@ const funderKey = process.env["DEPLOYER_PRIVATE_KEY"] as Hex | undefined;
 const nativeGasPriceWei = BigInt(process.env["GAS_PRICE_WEI"] ?? "20000000000");
 const explorer = process.env["EXPLORER_URL"] ?? (chainId === 5042002 ? "https://testnet.arcscan.app" : "");
 
-const anvilKeys: Hex[] = [
-  "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
-  "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
-  "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6",
-  "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a",
-  "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba",
-  "0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356",
-];
+const ANVIL_MNEMONIC = "test test test test test test test test test test test junk";
+const anvilKey = (index: number): Hex => `0x${Buffer.from(mnemonicToAccount(ANVIL_MNEMONIC, { addressIndex: index }).getHdKey().privateKey ?? new Uint8Array()).toString("hex")}`;
 
 interface Actors {
   client: Hex;
@@ -93,7 +87,7 @@ function loadActors(): Actors {
     };
   }
   if (isAnvil) {
-    return { client: anvilKeys[0]!, provider: anvilKeys[1]!, buyer: anvilKeys[2]!, arbiterA: anvilKeys[3]!, arbiterB: anvilKeys[4]!, cranker: anvilKeys[5]! };
+    return { client: anvilKey(1), provider: anvilKey(2), buyer: anvilKey(3), arbiterA: anvilKey(4), arbiterB: anvilKey(5), cranker: anvilKey(7) };
   }
   const fresh: Actors = {
     client: generatePrivateKey(),
@@ -148,7 +142,7 @@ async function waitUntil(timestamp: bigint, label: string): Promise<void> {
 async function fundActors(deployment: SquareDeployment, actors: Actors): Promise<void> {
   const addresses = Object.values(actors).map((key) => privateKeyToAccount(key).address);
   if (isAnvil) {
-    const funder = createWalletClient({ chain, transport: http(rpcUrl), account: privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80") });
+    const funder = createWalletClient({ chain, transport: http(rpcUrl), account: privateKeyToAccount(anvilKey(0)) });
     const mintAbi = [{ type: "function", name: "mint", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [] }] as const;
     for (const address of addresses) {
       await testClient.setBalance({ address, value: parseEther("10") });

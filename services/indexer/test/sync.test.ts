@@ -2,9 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createPublicClient, createTestClient, createWalletClient, http, parseUnits, type Hex } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { createPublicClient, createTestClient, createWalletClient, http, parseUnits } from "viem";
 import { foundry } from "viem/chains";
+import { anvilAccount } from "./anvil.js";
 import { createSquareClient, deploymentFor, deploymentFromJson, hashDeliverable, squareJobAbi, type SquareDeployment } from "@squaresdk/core";
 import { checkpoints, jobs, migrate, MIGRATIONS_DIR, pgliteDatabase, type Database } from "@squaresdk/data";
 import { createHealth, createLogger, createMetrics } from "@squaresdk/observability";
@@ -12,11 +12,6 @@ import { createApi } from "../src/api.js";
 import { Indexer } from "../src/sync.js";
 
 const rpcUrl = process.env["ANVIL_RPC_URL"] ?? "http://127.0.0.1:8545";
-const keys = [
-  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-  "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
-  "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
-] as const;
 
 async function anvilReachable(): Promise<boolean> {
   try {
@@ -49,7 +44,7 @@ describe.skipIf(!reachable)("indexer sync against anvil with a PGlite journal", 
     createSquareClient({
       publicClient,
       deployment,
-      walletClient: createWalletClient({ chain: foundry, transport: http(rpcUrl), account: privateKeyToAccount(keys[index] as Hex) }),
+      walletClient: createWalletClient({ chain: foundry, transport: http(rpcUrl), account: anvilAccount(index) }),
     });
   const client = actor(1);
   const provider = actor(2);

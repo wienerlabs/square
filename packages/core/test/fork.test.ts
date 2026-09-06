@@ -16,7 +16,7 @@ import {
   type Address,
   type Hex,
 } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { anvilAccount } from "./anvil.js";
 import {
   createSquareClient,
   deploymentFromJson,
@@ -41,9 +41,8 @@ const reputationRegistry = "0x8004B663056A597Dffe9eCcC1965A193B7388713" as const
 const validationRegistry = "0x8004Cb1BF31DAf7788923b405b754f57acEB4272" as const;
 const smokeAgentId = 892271n;
 const smokeAgentOwner = "0xa52c81e6aD0d73f001c911d906a907e5E36733A2" as const;
-const deployerKey = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
-const clientKey = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as const;
-const crankerKey = "0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356" as const;
+const deployerHd = anvilAccount(0);
+const deployerKey = deployerHd.getHdKey().privateKey;
 
 const mintAbi = [
   { type: "function", name: "mint", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [] },
@@ -71,9 +70,9 @@ describe.skipIf(!forkUrl)("lifecycle on an Arc Testnet fork with the real ERC-80
   const rpc = forkUrl ?? "";
   const publicClient = createPublicClient({ chain: arcTestnet, transport: http(rpc) });
   const testClient = createTestClient({ chain: arcTestnet, mode: "anvil", transport: http(rpc) });
-  const deployer = privateKeyToAccount(deployerKey);
-  const clientAccount = privateKeyToAccount(clientKey);
-  const crankerAccount = privateKeyToAccount(crankerKey);
+  const deployer = deployerHd;
+  const clientAccount = anvilAccount(1);
+  const crankerAccount = anvilAccount(7);
   let deployment: SquareDeployment;
   let client: SquareClient;
   let provider: SquareClient;
@@ -117,7 +116,7 @@ describe.skipIf(!forkUrl)("lifecycle on an Arc Testnet fork with the real ERC-80
       stdio: "pipe",
       env: {
         ...process.env,
-        DEPLOYER_PRIVATE_KEY: deployerKey,
+        DEPLOYER_PRIVATE_KEY: `0x${Buffer.from(deployerKey ?? new Uint8Array()).toString("hex")}`,
         USDC_ADDRESS: escrowToken,
         IDENTITY_REGISTRY: identityRegistry,
         REPUTATION_REGISTRY: reputationRegistry,
