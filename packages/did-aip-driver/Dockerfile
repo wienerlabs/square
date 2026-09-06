@@ -39,6 +39,17 @@ RUN npm run build && npm prune --omit=dev --ignore-scripts --install-links
 
 # ---- runtime ----
 FROM node:20-alpine AS runtime
+
+# Without image.source the package page on GitHub shows no link back to the
+# code and no README. That page is the first thing a Universal Resolver
+# reviewer opens, so an image with no route to its source is a weaker
+# submission than it needs to be. The link 404s for anyone outside the org
+# while the repository is private, and starts working by itself the moment it
+# is not; pointing it somewhere else in the meantime would just be wrong twice.
+LABEL org.opencontainers.image.source="https://github.com/wienerlabs/square" \
+      org.opencontainers.image.description="DIF Universal Resolver driver for did:aip v2" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
 WORKDIR /app
 ENV NODE_ENV=production \
     DRIVER_PORT=8080 \
