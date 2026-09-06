@@ -13,7 +13,7 @@
 #     import time.
 #
 #   * `npm install --install-links` COPIES file: dependencies instead of
-#     symlinking them. Without it node_modules/@mandate/did-resolver is a
+#     symlinking them. Without it node_modules/@squaresdk/did-resolver is a
 #     symlink out of /app, the runtime stage copies only /app, and the container
 #     dies with ERR_MODULE_NOT_FOUND on first request. The image builds and the
 #     health check never comes up.

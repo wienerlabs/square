@@ -1,4 +1,4 @@
-# Mandate
+# Square
 
 **Compliance-gated settlement for autonomous agent work, on [Arc](https://arc.io).**
 
@@ -35,7 +35,7 @@ Three layers. Arc supplies the bottom one already.
 | Layer | What we build | Arc primitive it sits on |
 |---|---|---|
 | Identity | `did:aip` v2 resolver, agent card schema | ERC-8004 `IdentityRegistry` |
-| Settlement | `MandateJob` — optimistic challenge window, bonded disputes, M-of-N arbitration, receivable discounting | ERC-8183 `IACP` |
+| Settlement | `SquareJob` — optimistic challenge window, bonded disputes, M-of-N arbitration, receivable discounting | ERC-8183 `IACP` |
 | Compliance | `ComplianceHook` — Groth16 proof gates the release | ERC-8183 `IACPHook` |
 
 The composition point is the hook: the proof gates **release**, not deposit. Reputation
@@ -56,7 +56,7 @@ is not ported.
 ## Layout
 
 ```
-contracts/   Foundry — MandateJob, ComplianceHook, Groth16Verifier, PolicyRegistry,
+contracts/   Foundry — SquareJob, ComplianceHook, Groth16Verifier, PolicyRegistry,
              ClaimMarket, AipDidRegistry
 circuits/    Circom payment-compliance circuit + ceremony scripts
 packages/    did-resolver, sdk, cli, mcp

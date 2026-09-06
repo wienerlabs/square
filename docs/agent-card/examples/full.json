@@ -32,7 +32,7 @@
   ],
   "supportedTrust": ["reputation", "crypto-economic"],
   "x-aip": {
-    "type": "https://github.com/wienerlabs/mandate/blob/main/docs/agent-card/README.md#v1",
+    "type": "https://github.com/wienerlabs/square/blob/main/docs/agent-card/README.md#v1",
     "agentType": "LLM",
     "slug": "atlas",
     "agentVersion": "3.0.1",

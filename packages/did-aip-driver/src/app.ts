@@ -1,5 +1,5 @@
 import express, { type Express } from "express";
-import { AipDidResolver } from "@mandate/did-resolver";
+import { AipDidResolver } from "@squaresdk/did-resolver";
 import type { DriverConfig } from "./config.js";
 import { DID_LD_JSON, errorEnvelope, statusFor, toEnvelope } from "./envelope.js";
 

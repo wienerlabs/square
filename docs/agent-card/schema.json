@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/wienerlabs/mandate/blob/main/docs/agent-card/schema.json",
+  "$id": "https://github.com/wienerlabs/square/blob/main/docs/agent-card/schema.json",
   "title": "ERC-8004 registration file with the AIP extension",
   "description": "The document an ERC-8004 agentURI resolves to. The ERC-8004 fields are normative in EIP-8004; this schema restates them so a card can be validated in one pass, and adds the x-aip extension for what ERC-8004 has no place for.",
   "type": "object",
@@ -72,7 +72,7 @@
       "required": ["type", "agentType", "capabilities"],
       "properties": {
         "type": {
-          "const": "https://github.com/wienerlabs/mandate/blob/main/docs/agent-card/README.md#v1",
+          "const": "https://github.com/wienerlabs/square/blob/main/docs/agent-card/README.md#v1",
           "description": "Self-describing, mirroring ERC-8004's own approach. A future v2 changes this string; readers dispatch on it."
         },
         "agentType": {

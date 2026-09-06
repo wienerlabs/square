@@ -8,7 +8,7 @@ import { defineChain, type Chain } from "viem";
  * `name()` / `symbol()` on the registry return "AgentIdentity" / "AGENT".
  * ERC-8004 deploys its registries at the same `0x8004…` addresses everywhere,
  * but "everywhere" is a claim about deployments we have not checked, so other
- * chains have to be configured explicitly (`--registry`, or `mandate config`).
+ * chains have to be configured explicitly (`--registry`, or `square config`).
  */
 export const ARC_TESTNET_ID = 5042002;
 

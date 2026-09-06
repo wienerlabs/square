@@ -18,7 +18,7 @@
   "x402Support": true,
   "active": true,
   "x-aip": {
-    "type": "https://github.com/wienerlabs/mandate/blob/main/docs/agent-card/README.md#v1",
+    "type": "https://github.com/wienerlabs/square/blob/main/docs/agent-card/README.md#v1",
     "agentType": "Task",
     "slug": "scribe",
     "agentVersion": "1.2.0",

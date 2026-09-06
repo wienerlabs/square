@@ -29,7 +29,7 @@ index 12f9142..3890a05 100644
 +//
 +// So both phases rest on entropy one machine held, and whoever held it can
 +// forge a proof for any statement. Check it with inspect-zkey-setup.mjs from
-+// wienerlabs/mandate. A real ceremony must cover both phases and will produce a
++// wienerlabs/square. A real ceremony must cover both phases and will produce a
 +// new VK, which has to be regenerated here before redeploy.
  // Generated from ../../../services/prover-service/artifacts/payment_vk.json — do not edit by hand.
  // Regenerate with: node services/prover-service/scripts/extract-vk-rust.mjs

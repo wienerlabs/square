@@ -11,15 +11,15 @@ this has to be ready when #16 opens rather than started then.
 | Verification — what contributors and third parties run | [verifying.md](./verifying.md) | **Written** |
 | Invitations and schedule | this file | **Needs names and dates** |
 
-[i14]: https://github.com/wienerlabs/mandate/issues/14
-[i16]: https://github.com/wienerlabs/mandate/issues/16
+[i14]: https://github.com/wienerlabs/square/issues/14
+[i16]: https://github.com/wienerlabs/square/issues/16
 
 ## Why phase 1 is settled and phase 2 is not
 
 The setup inherited from aperture is development quality in **both** halves:
 phase 2 has a single contribution and no beacon, and phase 1 was generated
 locally rather than taken from a public ceremony —
-[#51](https://github.com/wienerlabs/mandate/pull/51) established the second
+[#51](https://github.com/wienerlabs/square/pull/51) established the second
 part by reading the key rather than the comments around it.
 
 Phase 1 is now settled by adoption rather than by running anything: the
@@ -103,9 +103,9 @@ without asking anyone.
 
 Fill in the four bracketed values and this is publishable as-is.
 
-> **Mandate is running a public phase-2 trusted setup ceremony.**
+> **Square is running a public phase-2 trusted setup ceremony.**
 >
-> Mandate gates agent payments on a Groth16 proof that the payment fits a
+> Square gates agent payments on a Groth16 proof that the payment fits a
 > spending mandate the operator committed on-chain. That proof rests on a
 > trusted setup. Such a setup is sound only if at least one contributor
 > destroyed their randomness afterwards. We are asking people to be that
@@ -124,7 +124,7 @@ Fill in the four bracketed values and this is publishable as-is.
 > Contributing takes about ten minutes and needs only `snarkjs` and a machine
 > you trust — no wallet, no key material, no transaction. Instructions and the
 > verification steps are at
-> `docs/ceremony/verifying.md` in github.com/wienerlabs/mandate.
+> `docs/ceremony/verifying.md` in github.com/wienerlabs/square.
 >
 > Until this completes, the setup in that repository is a development setup and
 > we describe it that way everywhere.
@@ -132,9 +132,9 @@ Fill in the four bracketed values and this is publishable as-is.
 ## Once it is done
 
 [#16][i16] closes with the final key, the verifying key and the transcripts
-published. [#17](https://github.com/wienerlabs/mandate/issues/17) generates the
+published. [#17](https://github.com/wienerlabs/square/issues/17) generates the
 Solidity verifier from that key and deploys it.
-[#3](https://github.com/wienerlabs/mandate/issues/3) — the demo-setup language
+[#3](https://github.com/wienerlabs/square/issues/3) — the demo-setup language
 that this repository carries everywhere — comes off only then, and
 [docs/disclosure/zk-setup-status.md](../disclosure/zk-setup-status.md) is
 rewritten to match.

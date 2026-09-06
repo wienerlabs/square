@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { AipDidResolver, type DidResolutionResult } from "@mandate/did-resolver";
+import { AipDidResolver, type DidResolutionResult } from "@squaresdk/did-resolver";
 import { loadConfig, rpcMap } from "../core/config.js";
 import { ValidationError } from "../core/errors.js";
 import { log } from "../core/logger.js";
@@ -27,8 +27,8 @@ export function resolveCommand(): Command {
       "after",
       `
 Examples:
-  $ mandate resolve did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2
-  $ mandate resolve <did> --json | jq .didDocument.service
+  $ square resolve did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2
+  $ square resolve <did> --json | jq .didDocument.service
 
 The document is printed to stdout; everything else goes to stderr, so --json
 pipes cleanly. A resolution failure exits non-zero and still prints the result

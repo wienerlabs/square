@@ -112,7 +112,7 @@ carries an assurance claim. [#16][i16] fixes that; [beacon.md](./beacon.md) and
 
 This replaces the earlier belief that phase 1 was already the Hermez file. It
 was not — the shipped key's alpha and beta matched no published ceremony, which
-is what [#51](https://github.com/wienerlabs/mandate/pull/51) established and why
+is what [#51](https://github.com/wienerlabs/square/pull/51) established and why
 the check now lives in a script.
 
-[i16]: https://github.com/wienerlabs/mandate/issues/16
+[i16]: https://github.com/wienerlabs/square/issues/16

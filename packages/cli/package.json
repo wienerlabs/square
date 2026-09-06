@@ -1,11 +1,11 @@
 {
-  "name": "@mandate/cli",
+  "name": "@squaresdk/cli",
   "version": "0.1.0",
-  "description": "Command-line client for Mandate — did:aip v2 agent identity on Arc.",
+  "description": "Command-line client for Square — did:aip v2 agent identity on Arc.",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "mandate": "dist/index.js"
+    "square": "dist/index.js"
   },
   "files": [
     "dist",
@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0",
-    "@mandate/did-resolver": "file:../did-resolver",
+    "@squaresdk/did-resolver": "file:../did-resolver",
     "commander": "^12.1.0",
     "viem": "^2.21.0",
     "zod": "^3.25.76"

@@ -1,4 +1,4 @@
-# @mandate/prover
+# @squaresdk/prover
 
 HTTP service wrapping snarkjs to generate Groth16 proofs for the
 payment-compliance circuit.
@@ -7,7 +7,7 @@ Carried over from `aperture/services/prover-service` under [#4][i4], with the
 compliance-violation log leak fixed on the way in — see
 [What changed from aperture](#what-changed-from-aperture).
 
-[i4]: https://github.com/wienerlabs/mandate/issues/4
+[i4]: https://github.com/wienerlabs/square/issues/4
 
 ## Endpoints
 
@@ -62,7 +62,7 @@ snarkjs zkey contribute payment_0.zkey payment.zkey --name="dev-only" -e="$(head
 mkdir -p artifacts && cp payment.zkey build/payment_js/payment.wasm artifacts/
 ```
 
-[i14]: https://github.com/wienerlabs/mandate/issues/14
+[i14]: https://github.com/wienerlabs/square/issues/14
 
 ## Tests
 
@@ -148,5 +148,5 @@ The public-signal layout is still ten. [#14][i14] takes it to eight and
 [#18][i18] updates this service; the drift guard in `src/prover.js` fails hard
 if the circuit and the service ever disagree about the count.
 
-[i17]: https://github.com/wienerlabs/mandate/issues/17
-[i18]: https://github.com/wienerlabs/mandate/issues/18
+[i17]: https://github.com/wienerlabs/square/issues/17
+[i18]: https://github.com/wienerlabs/square/issues/18

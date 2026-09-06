@@ -64,7 +64,7 @@ export function whoamiCommand(): Command {
 
       log.blank();
       if (!address) {
-        log.warn("No wallet. Run 'mandate login' to create or import one.");
+        log.warn("No wallet. Run 'square login' to create or import one.");
       } else {
         log.field("address", c.cyan(address));
         log.field("keystore", paths.keystoreFile());
@@ -81,7 +81,7 @@ export function whoamiCommand(): Command {
           log.blank();
           log.warn(
             `This wallet holds no ${network.nativeCurrency.symbol}. ` +
-              "Registration needs gas — fund the address before running 'mandate register'.",
+              "Registration needs gas — fund the address before running 'square register'.",
           );
         }
       } else if (balanceError) {

@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createPublicClient, http } from "viem";
-import { AipDidResolver } from "@mandate/did-resolver";
+import { AipDidResolver } from "@squaresdk/did-resolver";
 import { ARC_TESTNET_ID, KNOWN_CHAINS } from "../src/core/chains.js";
 
 /**
@@ -16,7 +16,7 @@ import { ARC_TESTNET_ID, KNOWN_CHAINS } from "../src/core/chains.js";
  * Split in two, because the two halves cost different things:
  *
  *   LIVE=1                          — reads and simulations. Free, no key.
- *   LIVE=1 MANDATE_PRIVATE_KEY=0x…  — a real registration. Spends real testnet
+ *   LIVE=1 SQUARE_PRIVATE_KEY=0x…  — a real registration. Spends real testnet
  *                                     gas from a funded Arc address.
  *
  * The second is the issue's acceptance criterion, and it drives the built
@@ -28,14 +28,14 @@ const arc = KNOWN_CHAINS[ARC_TESTNET_ID]!;
 const exec = promisify(execFile);
 
 const live = Boolean(process.env.LIVE);
-const funded = live && Boolean(process.env.MANDATE_PRIVATE_KEY);
+const funded = live && Boolean(process.env.SQUARE_PRIVATE_KEY);
 
 async function runCli(args: string[], home: string): Promise<{ stdout: string; stderr: string }> {
   if (!existsSync(CLI)) {
     throw new Error(`${CLI} is missing. Run 'npm run build' in packages/cli first.`);
   }
   return exec(process.execPath, [CLI, ...args], {
-    env: { ...process.env, MANDATE_HOME: home, NO_COLOR: "1" },
+    env: { ...process.env, SQUARE_HOME: home, NO_COLOR: "1" },
     maxBuffer: 8 * 1024 * 1024,
   });
 }
@@ -58,7 +58,7 @@ describe.skipIf(!live)("Arc testnet — reads", () => {
   it("dry-runs a registration against the real registry without a funded key", async () => {
     // Proves the calldata this CLI builds is accepted by the deployed contract:
     // eth_call returns the id it would mint. No key is used to sign anything.
-    const home = await mkdtemp(join(tmpdir(), "mandate-live-"));
+    const home = await mkdtemp(join(tmpdir(), "square-live-"));
     try {
       const { stdout } = await runCli(
         [
@@ -89,7 +89,7 @@ describe.skipIf(!live)("Arc testnet — reads", () => {
 
 describe.skipIf(!funded)("Arc testnet — acceptance: register, then resolve", () => {
   it("registers a real agent and resolves the DID it derived", async () => {
-    const home = await mkdtemp(join(tmpdir(), "mandate-live-"));
+    const home = await mkdtemp(join(tmpdir(), "square-live-"));
     try {
       const registered = await runCli(
         ["register", "--yes", "--json", "--agent-uri", "https://example.com/agent.json", "--no-card-check"],

@@ -30,7 +30,7 @@ The powers of tau is based on Polygon Hermez.
 
 # --- Plausible next phrasings ------------------------------------------------
 
-Mandate ships production-ready zero-knowledge proofs.
+Square ships production-ready zero-knowledge proofs.
 Our production-grade Groth16 circuit gates every release.
 The ZK stack is production-ready.
 A production-grade trusted setup backs the verifier.

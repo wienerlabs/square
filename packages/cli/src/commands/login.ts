@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import * as p from "@clack/prompts";
-import { MandateError, ValidationError } from "../core/errors.js";
+import { SquareError, ValidationError } from "../core/errors.js";
 import { log } from "../core/logger.js";
 import { c } from "../core/theme.js";
 import {
@@ -30,8 +30,8 @@ export function loginCommand(): Command {
       "after",
       `
 Examples:
-  $ mandate login
-  $ mandate login --import-file ./key.hex --force
+  $ square login
+  $ square login --import-file ./key.hex --force
 
 The key is encrypted with scrypt (N=2^17) and AES-256-GCM, and written to
 ${paths.keystoreFile()} with mode 0600. Losing the passphrase loses the key:
@@ -54,10 +54,10 @@ async function runLogin(opts: LoginOpts): Promise<void> {
     );
   }
   if (!process.stderr.isTTY) {
-    throw new MandateError(
+    throw new SquareError(
       "Cannot prompt for a passphrase outside an interactive terminal",
       undefined,
-      "Run 'mandate login' from a TTY. For unattended signing, set MANDATE_PRIVATE_KEY instead.",
+      "Run 'square login' from a TTY. For unattended signing, set SQUARE_PRIVATE_KEY instead.",
     );
   }
 
@@ -86,12 +86,12 @@ async function runLogin(opts: LoginOpts): Promise<void> {
   });
   if (p.isCancel(passphrase)) {
     p.cancel("Cancelled. Nothing was written.");
-    throw new MandateError("Login cancelled");
+    throw new SquareError("Login cancelled");
   }
   const confirm = await p.password({ message: "Repeat it", mask: "*" });
   if (p.isCancel(confirm)) {
     p.cancel("Cancelled. Nothing was written.");
-    throw new MandateError("Login cancelled");
+    throw new SquareError("Login cancelled");
   }
   if (String(passphrase) !== String(confirm)) {
     throw new ValidationError("The two passphrases do not match");
@@ -110,6 +110,6 @@ async function runLogin(opts: LoginOpts): Promise<void> {
     log.warn("This key exists only in that file. Back it up, and remember the passphrase.");
     log.blank();
   }
-  log.raw(`  Next: ${c.cyan("mandate whoami")} to see the balance, then ${c.cyan("mandate register")}.`);
+  log.raw(`  Next: ${c.cyan("square whoami")} to see the balance, then ${c.cyan("square register")}.`);
   log.blank();
 }

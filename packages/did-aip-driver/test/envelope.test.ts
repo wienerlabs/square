@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { statusFor, toEnvelope, errorEnvelope, DID_RESOLUTION_CONTEXT } from "../src/envelope.js";
-import type { DidResolutionResult } from "@mandate/did-resolver";
+import type { DidResolutionResult } from "@squaresdk/did-resolver";
 
 const ok = (): DidResolutionResult => ({
   didDocument: { id: "did:aip:eip155:5042002:0xabc:1" } as never,

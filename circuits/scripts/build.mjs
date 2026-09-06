@@ -7,7 +7,7 @@
 // this machine with no beacon — so the key as a whole is still a development
 // key and nothing built on it carries an assurance claim.
 //
-// mandate#16 replaces phase 2 with a multi-party chain and a beacon. Until it
+// square#16 replaces phase 2 with a multi-party chain and a beacon. Until it
 // lands, see docs/disclosure/zk-setup-status.md.
 //
 // Read what a key actually is rather than trusting this comment:
@@ -92,6 +92,6 @@ run('snarkjs', ['zkey', 'export', 'verificationkey', zkey, path.join(BUILD, 'pay
 
 process.stdout.write(
   '\nbuild/payment.zkey has a real phase 1 and a development phase 2.\n'
-  + 'It is a DEVELOPMENT key until mandate#16 runs the phase-2 ceremony. Check it:\n'
+  + 'It is a DEVELOPMENT key until square#16 runs the phase-2 ceremony. Check it:\n'
   + '  node scripts/inspect-zkey-setup.mjs build/payment.zkey\n',
 );

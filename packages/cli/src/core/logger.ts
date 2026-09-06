@@ -3,7 +3,7 @@ import { c, glyph } from "./theme.js";
 /**
  * Human output goes to stderr, machine output to stdout.
  *
- * `mandate resolve --json | jq` has to work, and it only works if progress
+ * `square resolve --json | jq` has to work, and it only works if progress
  * chatter never lands in the same stream as the document.
  */
 export const log = {

@@ -3,10 +3,10 @@
 **Status:** decided in [#14][i14]. Binds the storage and event design in [#6][i6],
 the settlement core in [#20][i20] and the compliance hook in [#27][i27].
 
-[i6]: https://github.com/wienerlabs/mandate/issues/6
-[i14]: https://github.com/wienerlabs/mandate/issues/14
-[i20]: https://github.com/wienerlabs/mandate/issues/20
-[i27]: https://github.com/wienerlabs/mandate/issues/27
+[i6]: https://github.com/wienerlabs/square/issues/6
+[i14]: https://github.com/wienerlabs/square/issues/14
+[i20]: https://github.com/wienerlabs/square/issues/20
+[i27]: https://github.com/wienerlabs/square/issues/27
 
 ## The decision
 
@@ -32,7 +32,7 @@ An 18-decimal denomination would make the circuit unable to represent a $20
 payment. Widening the comparator instead is not free — it is a circuit change,
 and after [#16][i16] the circuit is frozen behind a ceremony.
 
-[i16]: https://github.com/wienerlabs/mandate/issues/16
+[i16]: https://github.com/wienerlabs/square/issues/16
 
 The circuit now enforces this bound rather than assuming it: `amount` and
 `daily_spent_before` each carry a `Num2Bits(64)`. Assuming a bound instead of

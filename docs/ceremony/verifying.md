@@ -11,8 +11,8 @@ whole chain from the outside, having contributed nothing.
 
 ```bash
 npm install -g snarkjs      # 0.7.5 or later
-git clone https://github.com/wienerlabs/mandate.git
-cd mandate/circuits && npm install
+git clone https://github.com/wienerlabs/square.git
+cd square/circuits && npm install
 ```
 
 `circom` is only needed if you want to rebuild the circuit and confirm the
@@ -155,7 +155,7 @@ suite, including the forged-weekday attack that the time rule has to reject.
 
 Say so in public before saying so to us. A ceremony whose problems are reported
 privately and fixed quietly is not a public ceremony. Open an issue on
-[wienerlabs/mandate](https://github.com/wienerlabs/mandate/issues) with the
+[wienerlabs/square](https://github.com/wienerlabs/square/issues) with the
 command you ran and its output.
 
 Until every check above passes against published files, the setup is a

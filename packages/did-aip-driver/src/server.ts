@@ -4,7 +4,7 @@
  *   GET /1.0/identifiers/{did}  → 200 application/did+ld+json, or a mapped error
  *   GET /health                 → 200 { status, chains }
  *
- * All resolution lives in @mandate/did-resolver; this is a thin HTTP shell.
+ * All resolution lives in @squaresdk/did-resolver; this is a thin HTTP shell.
  */
 import { createApp } from "./app.js";
 import { readConfig } from "./config.js";

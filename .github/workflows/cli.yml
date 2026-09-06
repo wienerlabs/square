@@ -1,6 +1,6 @@
 name: cli
 
-# Typecheck, unit-test and smoke-test @mandate/cli.
+# Typecheck, unit-test and smoke-test @squaresdk/cli.
 #
 # Hermetic on purpose: no step contacts an RPC. The live checks against Arc
 # Testnet are opt-in (LIVE=1) and the acceptance test needs a funded key, so
@@ -35,14 +35,14 @@ jobs:
 
       # The CLI depends on the resolver by path, so the resolver has to be built
       # before the CLI can typecheck against its declarations.
-      - name: Build @mandate/did-resolver
+      - name: Build @squaresdk/did-resolver
         working-directory: packages/did-resolver
         run: |
           npm install
           npm run build
           npm test
 
-      - name: Install @mandate/cli
+      - name: Install @squaresdk/cli
         working-directory: packages/cli
         # --install-links copies the path dependency instead of symlinking it;
         # a symlink here resolves outside the package and breaks the build.
@@ -67,7 +67,7 @@ jobs:
         run: |
           set -uo pipefail
           # A fresh HOME, so nothing here can read or write a real keystore.
-          export MANDATE_HOME="$(mktemp -d)"
+          export SQUARE_HOME="$(mktemp -d)"
 
           fail=0
           check() {  # name expected-exit-code args...

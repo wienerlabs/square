@@ -5,20 +5,20 @@ import { join } from "node:path";
 import { ARC_TESTNET_ID } from "../src/core/chains.js";
 import { ConfigSchema, loadConfig, resolveNetwork, rpcMap, saveConfig } from "../src/core/config.js";
 
-const ENV_KEYS = ["MANDATE_HOME", "MANDATE_CHAIN_ID", "MANDATE_RPC_URL", "MANDATE_REGISTRY"] as const;
+const ENV_KEYS = ["SQUARE_HOME", "SQUARE_CHAIN_ID", "SQUARE_RPC_URL", "SQUARE_REGISTRY"] as const;
 
 describe("configuration", () => {
   let sandbox: string;
   let saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>>;
 
   beforeEach(async () => {
-    sandbox = await mkdtemp(join(tmpdir(), "mandate-cfg-test-"));
+    sandbox = await mkdtemp(join(tmpdir(), "square-cfg-test-"));
     saved = {};
     for (const k of ENV_KEYS) {
       saved[k] = process.env[k];
       delete process.env[k];
     }
-    process.env.MANDATE_HOME = sandbox;
+    process.env.SQUARE_HOME = sandbox;
   });
 
   afterEach(async () => {
@@ -66,7 +66,7 @@ describe("configuration", () => {
   });
 
   it("lets a flag beat the environment", async () => {
-    process.env.MANDATE_RPC_URL = "https://from-env.example";
+    process.env.SQUARE_RPC_URL = "https://from-env.example";
     const config = await loadConfig();
     expect(resolveNetwork(config).rpcUrl).toBe("https://from-env.example");
     expect(resolveNetwork(config, { rpc: "https://from-flag.example" }).rpcUrl).toBe(
@@ -74,18 +74,18 @@ describe("configuration", () => {
     );
   });
 
-  it("applies MANDATE_RPC_URL to the chain MANDATE_CHAIN_ID selects", async () => {
-    process.env.MANDATE_CHAIN_ID = "424242";
-    process.env.MANDATE_RPC_URL = "https://other-chain.example";
-    process.env.MANDATE_REGISTRY = "0x8004a818bfb912233c491871b3d84c89a494bd9e";
+  it("applies SQUARE_RPC_URL to the chain SQUARE_CHAIN_ID selects", async () => {
+    process.env.SQUARE_CHAIN_ID = "424242";
+    process.env.SQUARE_RPC_URL = "https://other-chain.example";
+    process.env.SQUARE_REGISTRY = "0x8004a818bfb912233c491871b3d84c89a494bd9e";
     const network = resolveNetwork(await loadConfig());
     expect(network.chainId).toBe(424242);
     expect(network.rpcUrl).toBe("https://other-chain.example");
   });
 
-  it("rejects a MANDATE_CHAIN_ID that is not a chain id", async () => {
-    process.env.MANDATE_CHAIN_ID = "not-a-number";
-    await expect(loadConfig()).rejects.toThrow(/MANDATE_CHAIN_ID/);
+  it("rejects a SQUARE_CHAIN_ID that is not a chain id", async () => {
+    process.env.SQUARE_CHAIN_ID = "not-a-number";
+    await expect(loadConfig()).rejects.toThrow(/SQUARE_CHAIN_ID/);
   });
 
   it("round-trips through the config file at mode 0600", async () => {

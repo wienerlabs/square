@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { DidResolutionResult } from "@mandate/did-resolver";
+import type { DidResolutionResult } from "@squaresdk/did-resolver";
 import { ExitCode } from "../src/core/errors.js";
 import { resolutionError, serializeResolution } from "../src/core/resolution.js";
 

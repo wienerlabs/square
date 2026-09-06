@@ -1,6 +1,6 @@
 import * as p from "@clack/prompts";
 import { decryptKeystore, importPrivateKey, loadKeystore, type Wallet } from "./wallet.js";
-import { MandateError } from "./errors.js";
+import { SquareError } from "./errors.js";
 import { c } from "./theme.js";
 import { log } from "./logger.js";
 
@@ -17,15 +17,15 @@ export interface UnlockOptions {
 /**
  * Produce a signer.
  *
- * MANDATE_PRIVATE_KEY exists because acceptance tests and CI have to register
+ * SQUARE_PRIVATE_KEY exists because acceptance tests and CI have to register
  * an agent without a terminal to type into. It is loud on purpose: a key in an
  * environment variable is a key in the process table and in shell history.
  */
 export async function unlockWallet(opts: UnlockOptions = {}): Promise<Wallet> {
-  const fromEnv = process.env.MANDATE_PRIVATE_KEY?.trim();
+  const fromEnv = process.env.SQUARE_PRIVATE_KEY?.trim();
   if (fromEnv) {
     const wallet = importPrivateKey(fromEnv);
-    log.warn(`Signing with MANDATE_PRIVATE_KEY (${wallet.address}), not the keystore.`);
+    log.warn(`Signing with SQUARE_PRIVATE_KEY (${wallet.address}), not the keystore.`);
     return wallet;
   }
 
@@ -34,10 +34,10 @@ export async function unlockWallet(opts: UnlockOptions = {}): Promise<Wallet> {
   const keystore = await loadKeystore();
 
   if (!process.stderr.isTTY) {
-    throw new MandateError(
+    throw new SquareError(
       "Cannot prompt for a passphrase outside an interactive terminal",
       undefined,
-      "Run this from a TTY, or set MANDATE_PRIVATE_KEY for unattended use.",
+      "Run this from a TTY, or set SQUARE_PRIVATE_KEY for unattended use.",
     );
   }
 
@@ -50,7 +50,7 @@ export async function unlockWallet(opts: UnlockOptions = {}): Promise<Wallet> {
   });
   if (p.isCancel(passphrase)) {
     p.cancel("Cancelled.");
-    throw new MandateError("Unlock cancelled");
+    throw new SquareError("Unlock cancelled");
   }
 
   const wallet = await decryptKeystore(keystore, String(passphrase));

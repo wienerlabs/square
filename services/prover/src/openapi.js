@@ -13,7 +13,7 @@
 export const openapiSpec = {
   openapi: '3.0.3',
   info: {
-    title: 'Mandate Prover',
+    title: 'Square Prover',
     version: '0.1.0',
     description:
       'Generates Groth16 zero-knowledge proofs for the payment-compliance circuit ' +
@@ -71,7 +71,7 @@ export const openapiSpec = {
         type: 'object',
         properties: {
           status: { type: 'string', example: 'healthy' },
-          service: { type: 'string', example: 'mandate-prover' },
+          service: { type: 'string', example: 'square-prover' },
           version: { type: 'string', example: '0.1.0' },
           backend: { type: 'string', example: 'circom+snarkjs' },
         },

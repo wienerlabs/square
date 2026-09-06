@@ -29,7 +29,7 @@ app.get('/api-docs.json', (_req, res) => {
 app.get('/health', (_req, res) => {
   res.json({
     status: 'healthy',
-    service: 'mandate-prover',
+    service: 'square-prover',
     version: '0.1.0',
     backend: 'circom+snarkjs',
   });
@@ -85,6 +85,6 @@ export { app };
 // Only listen when run as a process, not when imported by a test.
 if (process.env.NODE_ENV !== 'test') {
   app.listen(port, '0.0.0.0', () => {
-    console.log(`[mandate prover] listening on ${port}`);
+    console.log(`[square prover] listening on ${port}`);
   });
 }

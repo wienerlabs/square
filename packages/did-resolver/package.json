@@ -1,5 +1,5 @@
 {
-  "name": "@mandate/did-resolver",
+  "name": "@squaresdk/did-resolver",
   "version": "0.1.0",
   "description": "W3C DID resolver for did:aip v2 — reads ERC-8004 Identity Registries.",
   "license": "Apache-2.0",

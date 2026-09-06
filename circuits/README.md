@@ -208,7 +208,7 @@ run again, so [#14][i14] was the last chance to change it. [#18][i18] ports the
 prover service to the eight-signal layout, and [#17][i17] generates the Solidity
 verifier from the ceremony's key.
 
-[i14]: https://github.com/wienerlabs/mandate/issues/14
-[i16]: https://github.com/wienerlabs/mandate/issues/16
-[i17]: https://github.com/wienerlabs/mandate/issues/17
-[i18]: https://github.com/wienerlabs/mandate/issues/18
+[i14]: https://github.com/wienerlabs/square/issues/14
+[i16]: https://github.com/wienerlabs/square/issues/16
+[i17]: https://github.com/wienerlabs/square/issues/17
+[i18]: https://github.com/wienerlabs/square/issues/18
