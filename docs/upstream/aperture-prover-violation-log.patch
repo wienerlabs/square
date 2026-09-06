@@ -14,7 +14,7 @@ index 7cb2025..5a09bf9 100644
 +    //
 +    // Only the operator id is recorded now. Which rule failed cannot be
 +    // answered from the circuit alone (it exposes is_compliant and nothing
-+    // else); the rebuilt service in wienerlabs/mandate#4 adds an off-circuit
++    // else); the rebuilt service in wienerlabs/square#4 adds an off-circuit
 +    // rule evaluator for that, which is more than belongs in a patch to a
 +    // deployment being retired.
      if (!result.is_compliant) {

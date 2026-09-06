@@ -166,14 +166,14 @@ describe("keystore disk I/O", () => {
   let originalHome: string | undefined;
 
   beforeEach(async () => {
-    sandbox = await mkdtemp(join(tmpdir(), "mandate-cli-test-"));
-    originalHome = process.env.MANDATE_HOME;
-    process.env.MANDATE_HOME = sandbox;
+    sandbox = await mkdtemp(join(tmpdir(), "square-cli-test-"));
+    originalHome = process.env.SQUARE_HOME;
+    process.env.SQUARE_HOME = sandbox;
   });
 
   afterEach(async () => {
-    if (originalHome !== undefined) process.env.MANDATE_HOME = originalHome;
-    else delete process.env.MANDATE_HOME;
+    if (originalHome !== undefined) process.env.SQUARE_HOME = originalHome;
+    else delete process.env.SQUARE_HOME;
     await rm(sandbox, { recursive: true, force: true });
   });
 

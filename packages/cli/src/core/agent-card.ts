@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { AgentUriError, defaultFetchAgentUri } from "@mandate/did-resolver";
+import { AgentUriError, defaultFetchAgentUri } from "@squaresdk/did-resolver";
 import { z } from "zod";
 import { NetworkError, ValidationError } from "./errors.js";
 

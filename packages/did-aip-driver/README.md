@@ -2,7 +2,7 @@
 
 The DIF [Universal Resolver](https://github.com/decentralized-identity/universal-resolver)
 driver for `did:aip` v2. A thin HTTP shell around
-[`@mandate/did-resolver`](../did-resolver); all resolution logic lives there.
+[`@squaresdk/did-resolver`](../did-resolver); all resolution logic lives there.
 
 ```
 GET /1.0/identifiers/{did}   → 200 application/did+ld+json, or a mapped error

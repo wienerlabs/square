@@ -199,7 +199,7 @@ export async function loadKeystore(): Promise<Keystore> {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       throw new NotFoundError(
         "Not logged in",
-        "Run 'mandate login' to create or import a wallet.",
+        "Run 'square login' to create or import a wallet.",
       );
     }
     throw new ConfigError(`Could not read ${paths.keystoreFile()}`);
@@ -211,7 +211,7 @@ export async function loadKeystore(): Promise<Keystore> {
   } catch {
     throw new ConfigError(
       `Keystore at ${paths.keystoreFile()} is not valid JSON`,
-      "Restore it from your backup, or delete it and run 'mandate login' again.",
+      "Restore it from your backup, or delete it and run 'square login' again.",
     );
   }
 
@@ -222,8 +222,8 @@ export async function loadKeystore(): Promise<Keystore> {
   ) {
     throw new WalletError(
       "This keystore holds a Solana (Ed25519) key from the aip CLI",
-      "Mandate signs secp256k1 transactions on Arc. Create a new wallet with " +
-        "'mandate login', or import an EVM key with 'mandate login --import-key'.",
+      "Square signs secp256k1 transactions on Arc. Create a new wallet with " +
+        "'square login', or import an EVM key with 'square login --import-key'.",
     );
   }
 
@@ -231,7 +231,7 @@ export async function loadKeystore(): Promise<Keystore> {
   if (!result.success) {
     throw new ConfigError(
       `Keystore at ${paths.keystoreFile()} is malformed`,
-      "Restore it from your backup, or delete it and run 'mandate login' again.",
+      "Restore it from your backup, or delete it and run 'square login' again.",
     );
   }
   return result.data;

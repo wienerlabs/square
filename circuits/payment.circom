@@ -8,7 +8,7 @@ include "../lib/timestamp.circom";
 // PaymentCompliance proves that an agent payment satisfies all six rules of its
 // operator's policy, and binds the proof to a specific transfer.
 //
-// Ported from aperture's Solana circuit under mandate#14. Everything below had
+// Ported from aperture's Solana circuit under square#14. Everything below had
 // to land in the same regenerated zkey, because the ceremony that follows
 // freezes the circuit and a later change would invalidate the proving key:
 //

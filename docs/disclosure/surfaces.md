@@ -11,7 +11,7 @@ Lines below that quote a claim verbatim carry the `ci-allow-phrase` marker, so
 the CI guard lets the quotation through while still refusing the claim
 anywhere else. An exception you can grep for is the point.
 
-[i3]: https://github.com/wienerlabs/mandate/issues/3
+[i3]: https://github.com/wienerlabs/square/issues/3
 
 | # | Surface | Audit result | Deliverable | Landed |
 |---|---|---|---|---|
@@ -139,7 +139,7 @@ clean clone and verified with `git apply --check`:
 ```bash
 git clone https://github.com/wienerlabs/aperture.git
 cd aperture
-for p in ../mandate/docs/disclosure/patches/aperture-*.patch; do
+for p in ../square/docs/disclosure/patches/aperture-*.patch; do
   git apply --check "$p" && git apply "$p"
 done
 ```
@@ -151,7 +151,7 @@ Note that these patches point at `circuits/scripts/inspect-zkey-setup.mjs` in
 deliberately lives here rather than being copied into a repository that is about
 to freeze.
 
-[i5]: https://github.com/wienerlabs/mandate/issues/5
+[i5]: https://github.com/wienerlabs/square/issues/5
 
 ## 3. Presentation materials
 
@@ -162,7 +162,7 @@ block. It is short enough to fit a footer and specific enough to be checkable:
 > rather than taken from a public ceremony, and phase 2 has one contribution
 > with no beacon. A public multi-party ceremony covering both is scheduled;
 > until it completes, no assurance claim applies.
-> Verify: `github.com/wienerlabs/mandate` → `docs/disclosure/zk-setup-status.md`
+> Verify: `github.com/wienerlabs/square` → `docs/disclosure/zk-setup-status.md`
 
 Rules for these materials:
 
@@ -174,7 +174,7 @@ Rules for these materials:
 - No slide, caption or chart label uses the word "production" about the ZK
   layer while [#16][i16] is open.
 
-[i16]: https://github.com/wienerlabs/mandate/issues/16
+[i16]: https://github.com/wienerlabs/square/issues/16
 
 ## 4. 1:1 notes and talk track
 

@@ -1,10 +1,10 @@
-# @mandate/did-resolver
+# @squaresdk/did-resolver
 
 W3C DID resolver for `did:aip` v2. Reads [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004)
 Identity Registries; depends on `viem` and nothing else.
 
 ```ts
-import { AipDidResolver } from "@mandate/did-resolver";
+import { AipDidResolver } from "@squaresdk/did-resolver";
 
 const resolver = new AipDidResolver({ rpc: { 5042002: "https://rpc.testnet.arc.io" } });
 

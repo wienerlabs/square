@@ -48,30 +48,30 @@ async function readRaw(): Promise<Partial<Config>> {
 }
 
 /**
- * Environment overrides. MANDATE_RPC_URL and MANDATE_REGISTRY apply to the
+ * Environment overrides. SQUARE_RPC_URL and SQUARE_REGISTRY apply to the
  * active chain only — they are the single-chain shorthand, and writing them
  * into the map keeps one code path downstream.
  */
 function withEnvOverrides(config: Config): Config {
-  const rawChain = nonEmpty(process.env.MANDATE_CHAIN_ID);
+  const rawChain = nonEmpty(process.env.SQUARE_CHAIN_ID);
   let chainId = config.chainId;
   if (rawChain !== undefined) {
     const parsed = Number(rawChain);
     if (!Number.isInteger(parsed) || parsed <= 0) {
-      throw new ConfigError(`MANDATE_CHAIN_ID is not a chain id: ${rawChain}`);
+      throw new ConfigError(`SQUARE_CHAIN_ID is not a chain id: ${rawChain}`);
     }
     chainId = parsed;
   }
 
   const rpc = { ...config.rpc };
-  const rpcUrl = nonEmpty(process.env.MANDATE_RPC_URL);
+  const rpcUrl = nonEmpty(process.env.SQUARE_RPC_URL);
   if (rpcUrl) rpc[String(chainId)] = rpcUrl;
 
   const registry = { ...config.registry };
-  const registryOverride = nonEmpty(process.env.MANDATE_REGISTRY);
+  const registryOverride = nonEmpty(process.env.SQUARE_REGISTRY);
   if (registryOverride) {
     if (!ADDRESS.test(registryOverride)) {
-      throw new ConfigError(`MANDATE_REGISTRY is not an address: ${registryOverride}`);
+      throw new ConfigError(`SQUARE_REGISTRY is not an address: ${registryOverride}`);
     }
     registry[String(chainId)] = registryOverride;
   }
@@ -128,7 +128,7 @@ export function resolveNetwork(config: Config, overrides: NetworkOverrides = {})
   if (!rpcUrl) {
     throw new ConfigError(
       `No RPC endpoint for chain ${chainId}`,
-      `Pass --rpc <url>, set MANDATE_RPC_URL, or run: mandate config set-rpc ${chainId} <url>`,
+      `Pass --rpc <url>, set SQUARE_RPC_URL, or run: square config set-rpc ${chainId} <url>`,
     );
   }
 
@@ -136,7 +136,7 @@ export function resolveNetwork(config: Config, overrides: NetworkOverrides = {})
   if (!registryRaw) {
     throw new ConfigError(
       `No ERC-8004 IdentityRegistry known for chain ${chainId}`,
-      `Pass --registry <address>, or run: mandate config set-registry ${chainId} <address>`,
+      `Pass --registry <address>, or run: square config set-registry ${chainId} <address>`,
     );
   }
   if (!ADDRESS.test(registryRaw)) {

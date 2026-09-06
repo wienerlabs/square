@@ -45,7 +45,7 @@ index fa4b0ad..e6a878d 100644
 +Confirm it against the shipped zkey rather than taking our word for it:
 +
 +```bash
-+node ../../../mandate/circuits/scripts/inspect-zkey-setup.mjs ../../services/prover-service/artifacts/payment.zkey
++node ../../../square/circuits/scripts/inspect-zkey-setup.mjs ../../services/prover-service/artifacts/payment.zkey
 +# phase-1 ceremony         UNRECOGNISED
 +# phase-2 contributions    1
 +# beacon applied           no

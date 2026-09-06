@@ -15,53 +15,53 @@ export const ExitCode = {
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
 
-export class MandateError extends Error {
+export class SquareError extends Error {
   readonly exitCode: ExitCodeValue;
   readonly hint: string | undefined;
 
   constructor(message: string, exitCode: ExitCodeValue = ExitCode.Generic, hint?: string) {
     super(message);
-    this.name = "MandateError";
+    this.name = "SquareError";
     this.exitCode = exitCode;
     this.hint = hint;
   }
 }
 
-export class ValidationError extends MandateError {
+export class ValidationError extends SquareError {
   constructor(message: string, hint?: string) {
     super(message, ExitCode.ValidationError, hint);
     this.name = "ValidationError";
   }
 }
 
-export class NetworkError extends MandateError {
+export class NetworkError extends SquareError {
   constructor(message: string, hint?: string) {
     super(message, ExitCode.NetworkError, hint);
     this.name = "NetworkError";
   }
 }
 
-export class NotFoundError extends MandateError {
+export class NotFoundError extends SquareError {
   constructor(message: string, hint?: string) {
     super(message, ExitCode.NotFound, hint);
     this.name = "NotFoundError";
   }
 }
 
-export class WalletError extends MandateError {
+export class WalletError extends SquareError {
   constructor(message: string, hint?: string) {
     super(message, ExitCode.WalletError, hint);
     this.name = "WalletError";
   }
 }
 
-export class ConfigError extends MandateError {
+export class ConfigError extends SquareError {
   constructor(message: string, hint?: string) {
     super(message, ExitCode.ConfigError, hint);
     this.name = "ConfigError";
   }
 }
 
-export function isMandateError(e: unknown): e is MandateError {
-  return e instanceof MandateError;
+export function isSquareError(e: unknown): e is SquareError {
+  return e instanceof SquareError;
 }

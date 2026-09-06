@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import * as p from "@clack/prompts";
-import { MandateError } from "../core/errors.js";
+import { SquareError } from "../core/errors.js";
 import { log } from "../core/logger.js";
 import { paths } from "../core/paths.js";
 import { deleteKeystore, keystoreExists } from "../core/wallet.js";
@@ -17,7 +17,7 @@ export function logoutCommand(): Command {
       }
       if (!opts.yes) {
         if (!process.stderr.isTTY) {
-          throw new MandateError(
+          throw new SquareError(
             "Confirmation required",
             undefined,
             "Re-run with --yes from a non-interactive context.",

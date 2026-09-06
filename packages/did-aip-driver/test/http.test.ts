@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createServer, type Server } from "node:http";
 import { createApp } from "../src/app.js";
-import type { DidResolutionResult } from "@mandate/did-resolver";
+import type { DidResolutionResult } from "@squaresdk/did-resolver";
 
 /**
  * The HTTP surface, driven end to end over a real socket with a stub resolver.

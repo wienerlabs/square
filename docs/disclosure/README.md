@@ -5,8 +5,8 @@ What this project says about itself when the honest answer is unflattering.
 Right now there is one such thing: the trusted setup inherited from
 [aperture](https://github.com/wienerlabs/aperture) is a demo in **both** phases
 — a locally generated powers of tau, and a phase 2 with one contribution and no
-beacon. Tracked as [#3](https://github.com/wienerlabs/mandate/issues/3), lifted
-by [#16](https://github.com/wienerlabs/mandate/issues/16).
+beacon. Tracked as [#3](https://github.com/wienerlabs/square/issues/3), lifted
+by [#16](https://github.com/wienerlabs/square/issues/16).
 
 | File | What it is |
 |---|---|

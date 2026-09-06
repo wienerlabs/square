@@ -11,7 +11,7 @@ diligence has caught us.
 This document is the source the other surfaces quote from. When the wording
 here changes, [surfaces.md](./surfaces.md) says where else it has to change.
 
-[i16]: https://github.com/wienerlabs/mandate/issues/16
+[i16]: https://github.com/wienerlabs/square/issues/16
 
 ---
 
@@ -133,7 +133,7 @@ is independent of any of this: re-parameterising the circuit changes what a
 proof commits to, not who could forge one.
 
 [ap]: https://github.com/wienerlabs/aperture
-[i14]: https://github.com/wienerlabs/mandate/issues/14
+[i14]: https://github.com/wienerlabs/square/issues/14
 
 ## What this does and does not mean
 
@@ -185,7 +185,7 @@ checked does not belong on any of these surfaces, including this one.
 [#16][i16] — the public ceremony — is the only thing that lifts it.
 
 Phase 1 is already settled, and by adoption rather than by running anything:
-[#15](https://github.com/wienerlabs/mandate/issues/15) adopted the Perpetual
+[#15](https://github.com/wienerlabs/square/issues/15) adopted the Perpetual
 Powers of Tau contribution 80, hash-verified, and keys built in this repository
 now stand on it — [docs/ceremony/phase1-ptau.md](../ceremony/phase1-ptau.md) is
 the record and `circuits/scripts/inspect-zkey-setup.mjs` recognises it in a
@@ -201,5 +201,5 @@ Until then, the sequence is fixed: [#14][i14] freezes the circuit, [#15][i15]
 organises the ceremony, [#16][i16] runs it, [#17][i17] deploys the verifier
 generated from its output.
 
-[i15]: https://github.com/wienerlabs/mandate/issues/15
-[i17]: https://github.com/wienerlabs/mandate/issues/17
+[i15]: https://github.com/wienerlabs/square/issues/15
+[i17]: https://github.com/wienerlabs/square/issues/17

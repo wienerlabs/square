@@ -1,7 +1,7 @@
-import type { DidResolutionResult, ResolutionErrorCode } from "@mandate/did-resolver";
+import type { DidResolutionResult, ResolutionErrorCode } from "@squaresdk/did-resolver";
 import {
   ConfigError,
-  MandateError,
+  SquareError,
   NetworkError,
   NotFoundError,
   ValidationError,
@@ -15,7 +15,7 @@ import {
  * CLI has the opposite obligation: the shell needs a non-zero status, and it
  * needs different ones for "your DID is malformed" and "the RPC is down".
  */
-export function resolutionError(code: ResolutionErrorCode, message: string): MandateError {
+export function resolutionError(code: ResolutionErrorCode, message: string): SquareError {
   switch (code) {
     case "invalidDid":
       return new ValidationError(message, "See docs/did-aip/method-spec-v2.md for the grammar.");
@@ -24,12 +24,12 @@ export function resolutionError(code: ResolutionErrorCode, message: string): Man
     case "unsupportedChain":
       return new ConfigError(
         message,
-        "Add an endpoint for that chain: mandate config set-rpc <chainId> <url>",
+        "Add an endpoint for that chain: square config set-rpc <chainId> <url>",
       );
     case "registryNotAllowed":
       return new ConfigError(message);
     case "unsupportedVersion":
-      return new MandateError(
+      return new SquareError(
         message,
         undefined,
         "did:aip v1 identifiers are Solana-era and are not resolved by this CLI.",
@@ -37,7 +37,7 @@ export function resolutionError(code: ResolutionErrorCode, message: string): Man
     case "networkError":
       return new NetworkError(message);
     case "representationNotSupported":
-      return new MandateError(message);
+      return new SquareError(message);
   }
 }
 

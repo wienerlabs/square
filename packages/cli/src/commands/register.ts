@@ -9,11 +9,11 @@ import {
   type Address,
   type PublicClient,
 } from "viem";
-import { formatDid } from "@mandate/did-resolver";
+import { formatDid } from "@squaresdk/did-resolver";
 import { loadCardFromFile, loadCardFromUri, type CardSummary } from "../core/agent-card.js";
 import { explorerTxUrl, toViemChain, type Network } from "../core/chains.js";
 import { loadConfig, resolveNetwork } from "../core/config.js";
-import { MandateError, NetworkError, ValidationError } from "../core/errors.js";
+import { SquareError, NetworkError, ValidationError } from "../core/errors.js";
 import {
   REGISTER_BARE_ABI,
   REGISTER_WITH_URI_ABI,
@@ -57,9 +57,9 @@ export function registerCommand(): Command {
       "after",
       `
 Examples:
-  $ mandate register --agent-uri https://acme.example/agent.json
-  $ mandate register --dry-run --agent-uri ipfs://bafkrei...
-  $ mandate register                      # register with an empty agent URI
+  $ square register --agent-uri https://acme.example/agent.json
+  $ square register --dry-run --agent-uri ipfs://bafkrei...
+  $ square register                      # register with an empty agent URI
 
 The DID is derived from what the chain did, never supplied: the agent id comes
 from the ERC-721 Transfer event in the receipt, and the registry and chain id
@@ -156,7 +156,7 @@ async function runRegister(opts: RegisterOpts): Promise<void> {
   if (!(await confirm(opts, network))) return;
 
   // Unreachable with wallet === null: the dry-run branch returned above.
-  if (!wallet) throw new MandateError("No signer");
+  if (!wallet) throw new SquareError("No signer");
 
   const walletClient = createWalletClient({
     account: wallet.account,
@@ -246,7 +246,7 @@ async function runRegister(opts: RegisterOpts): Promise<void> {
   const url = explorerTxUrl(network, hash);
   if (url) log.field("explorer", url);
   log.blank();
-  log.raw(`  Next: ${c.cyan(`mandate resolve ${did}`)}`);
+  log.raw(`  Next: ${c.cyan(`square resolve ${did}`)}`);
   log.blank();
 }
 
@@ -273,7 +273,7 @@ async function assertChainId(client: PublicClient, network: Network): Promise<vo
 }
 
 /**
- * The address a dry run simulates as: --from, else MANDATE_PRIVATE_KEY, else the
+ * The address a dry run simulates as: --from, else SQUARE_PRIVATE_KEY, else the
  * keystore — none of which requires the passphrase, because a simulation is a read.
  */
 async function dryRunAddress(from: string | undefined): Promise<Address> {
@@ -281,14 +281,14 @@ async function dryRunAddress(from: string | undefined): Promise<Address> {
     if (!isAddress(from)) throw new ValidationError(`'${from}' is not a 20-byte address`);
     return getAddress(from);
   }
-  const fromEnv = process.env.MANDATE_PRIVATE_KEY?.trim();
+  const fromEnv = process.env.SQUARE_PRIVATE_KEY?.trim();
   if (fromEnv) return importPrivateKey(fromEnv).address;
 
   const stored = await keystoreAddress();
   if (!stored) {
     throw new ValidationError(
       "No wallet to simulate as",
-      "Pass --from <address>, or run 'mandate login' first.",
+      "Pass --from <address>, or run 'square login' first.",
     );
   }
   return getAddress(stored);
@@ -386,7 +386,7 @@ function printPlan(
 async function confirm(opts: RegisterOpts, network: Network): Promise<boolean> {
   if (opts.yes) return true;
   if (!process.stderr.isTTY) {
-    throw new MandateError(
+    throw new SquareError(
       "Confirmation required",
       undefined,
       "Re-run with --yes from a non-interactive context.",

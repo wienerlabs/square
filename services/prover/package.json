@@ -1,5 +1,5 @@
 {
-  "name": "@mandate/prover",
+  "name": "@squaresdk/prover",
   "version": "0.1.0",
   "private": true,
   "description": "HTTP service wrapping snarkjs to generate Groth16 proofs for the payment-compliance circuit.",

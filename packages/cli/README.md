@@ -1,13 +1,13 @@
-# `@mandate/cli`
+# `@squaresdk/cli`
 
 Agent identity on Arc from the terminal: register an agent in the ERC-8004
 IdentityRegistry, and resolve the `did:aip` v2 identifier that registration
 produces.
 
 ```console
-$ mandate login
-$ mandate register --agent-uri https://acme.example/agent.json
-$ mandate resolve did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2
+$ square login
+$ square register --agent-uri https://acme.example/agent.json
+$ square resolve did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2
 ```
 
 ## Install
@@ -16,7 +16,7 @@ $ mandate resolve did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494b
 $ npm install && npm run build && npm link
 ```
 
-`@mandate/did-resolver` is linked by path, so build it first:
+`@squaresdk/did-resolver` is linked by path, so build it first:
 
 ```console
 $ npm --prefix ../did-resolver install && npm --prefix ../did-resolver run build
@@ -26,15 +26,15 @@ $ npm --prefix ../did-resolver install && npm --prefix ../did-resolver run build
 
 | | |
 |---|---|
-| `mandate login` | Create or import a secp256k1 wallet, encrypted at rest |
-| `mandate logout` | Delete the local keystore |
-| `mandate whoami` | Address, active network, balance |
-| `mandate register` | Register an agent, print the DID it minted |
-| `mandate resolve <did>` | Resolve a `did:aip` identifier to its DID Document |
-| `mandate config` | Inspect and change the network configuration |
+| `square login` | Create or import a secp256k1 wallet, encrypted at rest |
+| `square logout` | Delete the local keystore |
+| `square whoami` | Address, active network, balance |
+| `square register` | Register an agent, print the DID it minted |
+| `square resolve <did>` | Resolve a `did:aip` identifier to its DID Document |
+| `square config` | Inspect and change the network configuration |
 
 Every command takes `--json`. Machine output goes to stdout and everything else
-to stderr, so `mandate resolve <did> --json | jq` works.
+to stderr, so `square resolve <did> --json | jq` works.
 
 ## The DID is derived, never supplied
 
@@ -81,13 +81,13 @@ Any other chain needs both halves supplied, and the CLI refuses rather than
 guessing a registry address:
 
 ```console
-$ mandate config set-rpc 12345 https://rpc.example
-$ mandate config set-registry 12345 0x…
-$ mandate config use-chain 12345
+$ square config set-rpc 12345 https://rpc.example
+$ square config set-registry 12345 0x…
+$ square config use-chain 12345
 ```
 
-Overrides, strongest first: command flags, then `MANDATE_CHAIN_ID` /
-`MANDATE_RPC_URL` / `MANDATE_REGISTRY`, then `~/.mandate/config.json`, then the
+Overrides, strongest first: command flags, then `SQUARE_CHAIN_ID` /
+`SQUARE_RPC_URL` / `SQUARE_REGISTRY`, then `~/.square/config.json`, then the
 built-in table. Before it writes anything, `register` checks that the endpoint
 reports the chain id it was configured for — a registration cannot be moved
 between chains afterwards.
@@ -98,8 +98,8 @@ you do not register on still resolves as long as an endpoint for it is known.
 ## The keystore
 
 One secp256k1 private key, encrypted with scrypt (N = 2^17, r = 8, p = 1) and
-AES-256-GCM, written atomically to `~/.mandate/keystore.json` at mode `0600`.
-`MANDATE_HOME` moves it.
+AES-256-GCM, written atomically to `~/.square/keystore.json` at mode `0600`.
+`SQUARE_HOME` moves it.
 
 N = 2^17 costs roughly a second and 128 MiB per attempt. That cost is the point:
 it is the only thing between a stolen keystore file and the key inside it.
@@ -114,7 +114,7 @@ A version-1 keystore from the `aip` CLI is refused by name rather than misread.
 The wrapper is byte-identical, so it parses cleanly, but it holds an Ed25519
 Solana keypair that cannot sign anything on Arc.
 
-For unattended use, `MANDATE_PRIVATE_KEY` bypasses the keystore. It is announced
+For unattended use, `SQUARE_PRIVATE_KEY` bypasses the keystore. It is announced
 on stderr every time, because a key in an environment variable is a key in the
 process table.
 
@@ -123,7 +123,7 @@ process table.
 ```console
 $ npm test                                    # unit, no network
 $ LIVE=1 npm test                             # + live reads and a dry run on Arc
-$ LIVE=1 MANDATE_PRIVATE_KEY=0x… npm test     # + a real registration (spends gas)
+$ LIVE=1 SQUARE_PRIVATE_KEY=0x… npm test     # + a real registration (spends gas)
 ```
 
 The third form is the acceptance test: it drives the built binary to register an

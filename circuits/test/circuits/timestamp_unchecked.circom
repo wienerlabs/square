@@ -4,7 +4,7 @@ include "circomlib/circuits/comparators.circom";
 
 // The vulnerable decomposition, kept as a control. DO NOT USE IN PRODUCTION.
 //
-// This reproduces exactly what payment.circom carried before mandate#14: the
+// This reproduces exactly what payment.circom carried before square#14: the
 // division identities and the remainder checks, with no upper bound on the
 // quotients. It exists so the negative test can show that the forged weekday it
 // feeds is accepted here and rejected by the fixed template. Without that

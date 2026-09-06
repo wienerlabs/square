@@ -2,10 +2,10 @@ import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
 
-const APP_DIR = "mandate";
+const APP_DIR = "square";
 
 function root(): string {
-  const explicit = process.env.MANDATE_HOME;
+  const explicit = process.env.SQUARE_HOME;
   if (explicit) return explicit;
   const xdg = process.env.XDG_CONFIG_HOME;
   if (xdg && platform() === "linux") return join(xdg, APP_DIR);

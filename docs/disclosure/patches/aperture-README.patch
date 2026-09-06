@@ -57,7 +57,7 @@ index 7fff07c..338ae78 100644
 +Check the shipped artifact yourself:
 +
 +```bash
-+node ../mandate/circuits/scripts/inspect-zkey-setup.mjs services/prover-service/artifacts/payment.zkey
++node ../square/circuits/scripts/inspect-zkey-setup.mjs services/prover-service/artifacts/payment.zkey
 +# phase-1 ceremony         UNRECOGNISED
 +# phase-2 contributions    1
 +# beacon applied           no
@@ -66,7 +66,7 @@ index 7fff07c..338ae78 100644
 +The tool reads both phases out of the zkey binary. Phase 1 is identified by
 +`vk_alpha_1` and `vk_beta_2`, which snarkjs copies from the ptau and phase-2
 +contributions never touch, making them a fingerprint of the tau. It lives in the
-+[mandate](https://github.com/wienerlabs/mandate) repository, checked out beside
++[square](https://github.com/wienerlabs/square) repository, checked out beside
 +this one.
 +
 +A public multi-party ceremony covering **both** phases is planned: an external,

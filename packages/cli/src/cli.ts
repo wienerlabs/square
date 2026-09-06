@@ -5,13 +5,13 @@ import { logoutCommand } from "./commands/logout.js";
 import { registerCommand } from "./commands/register.js";
 import { resolveCommand } from "./commands/resolve.js";
 import { whoamiCommand } from "./commands/whoami.js";
-import { ExitCode, isMandateError } from "./core/errors.js";
+import { ExitCode, isSquareError } from "./core/errors.js";
 import { log } from "./core/logger.js";
 
 export const VERSION = "0.1.0";
 
 export function buildProgram(): Command {
-  const program = new Command("mandate")
+  const program = new Command("square")
     .description("Agent identity on Arc: did:aip v2 over the ERC-8004 IdentityRegistry.")
     .version(VERSION)
     .showHelpAfterError();
@@ -30,7 +30,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   try {
     await buildProgram().parseAsync(argv);
   } catch (err) {
-    if (isMandateError(err)) {
+    if (isSquareError(err)) {
       log.blank();
       log.error(err.message, err.hint);
       log.blank();

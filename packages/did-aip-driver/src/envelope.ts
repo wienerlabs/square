@@ -10,7 +10,7 @@
  * so nothing here uses try/catch for resolution outcomes; it branches on that
  * field.
  */
-import type { DidResolutionResult } from "@mandate/did-resolver";
+import type { DidResolutionResult } from "@squaresdk/did-resolver";
 
 export const DID_RESOLUTION_CONTEXT = "https://w3id.org/did-resolution/v1";
 export const DID_LD_JSON = "application/did+ld+json";

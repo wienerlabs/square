@@ -1,5 +1,5 @@
 {
-  "name": "@mandate/circuits",
+  "name": "@squaresdk/circuits",
   "version": "0.1.0",
   "private": true,
   "description": "Circom payment-compliance circuit and ceremony scripts.",
