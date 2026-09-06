@@ -1,0 +1,59 @@
+Square
+Copyright 2026 Wiener Labs
+
+This product includes software developed as part of the projects listed below.
+Square is licensed under Apache-2.0 (see LICENSE); the components below arrived
+under the MIT License, and MIT requires their copyright notices to travel with
+any substantial portion of them. This file is how they travel.
+
+Nothing here is derived from wienerlabs/covenant. That project is LGPL-2.1 and
+its relicensing chain is open (issue #2); no line of it enters this repository
+until that closes.
+
+--------------------------------------------------------------------------------
+wienerlabs/aperture — Copyright (c) 2026 Makinci — MIT
+
+  circuits/payment.circom
+      The compliance circuit, ported from aperture's Solana circuit and
+      reparameterised for EVM addresses.
+  services/prover/src/hash.js
+      Ported directly; the hashing has to agree with the circuit byte for byte.
+  services/prover/src/openapi.js
+      Inherited, then corrected where the spec had drifted from the code.
+  services/prover/test/rules.test.js
+  services/prover/test/tools/regenerate-ground-truth.mjs
+      The rule tests and the recorded circuit ground truth they check against.
+
+--------------------------------------------------------------------------------
+dr-wilson-empty/aip-beta — Copyright (c) 2026 Agent Internet Protocol — MIT
+
+  packages/cli/
+      The command-line client. src/core/wallet.ts keeps the scrypt and
+      AES-256-GCM keystore unchanged from the Solana original; the key inside
+      it is secp256k1 rather than Ed25519.
+  packages/did-aip-driver/
+      The Universal Resolver driver, carried over and rewritten to read
+      ERC-8004.
+  docs/did-aip/method-spec-v2.md
+      Supersedes the v1 did:aip method specification.
+
+--------------------------------------------------------------------------------
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
