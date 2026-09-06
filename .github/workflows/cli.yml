@@ -72,8 +72,12 @@ jobs:
           fail=0
           check() {  # name expected-exit-code args...
             local name="$1" expected="$2"; shift 2
-            node dist/index.js "$@" >/dev/null 2>&1
-            local code=$?
+            # Actions runs steps under `bash -e`, and most of these commands are
+            # supposed to fail. Assigning through `|| code=$?` keeps the call in
+            # a condition context, so a non-zero exit is data here rather than
+            # the end of the step.
+            local code=0
+            node dist/index.js "$@" >/dev/null 2>&1 || code=$?
             if [ "$code" = "$expected" ]; then echo "  ok   $name -> $code"
             else echo "  FAIL $name -> $code (expected $expected)"; fail=1; fi
           }
