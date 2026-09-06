@@ -60,35 +60,62 @@ signals describe the job actually being settled, is the hook's job in
 [#27](https://github.com/wienerlabs/square/issues/27). A proof that verifies but
 is not bound to a job is a proof of somebody else's payment.
 
+## Deployed
+
+| | |
+|---|---|
+| Network | Arc Testnet (`5042002`) |
+| `Groth16Verifier` | [`0x7b8E8089129094FD20a7C9243904343e4C6aBff7`](https://testnet.arcscan.app/address/0x7b8E8089129094FD20a7C9243904343e4C6aBff7) |
+| Deployment tx | [`0x4a26f96a…e259a5`](https://testnet.arcscan.app/tx/0x4a26f96a45a9fbaab85692afc9af9805f775e507962edb3e1fa2e985e5e259a5) |
+| Block | 60,816,910 |
+
+**This address is temporary.** The verifier is generated from a proving key and
+is valid only for that key, and the key behind this one is a development key —
+real phase 1 (Perpetual Powers of Tau contribution 80) but a single-contribution
+phase 2 with no beacon, because the ceremony has not run.
+[#16](https://github.com/wienerlabs/square/issues/16) produces a different key,
+which means a different verifier at a different address. See
+[docs/disclosure/zk-setup-status.md](../docs/disclosure/zk-setup-status.md).
+
 ## Measured cost
 
-Not estimates. `verifyProof` bracketed with `gasleft()` in Foundry, and
-`eth_estimateGas` against Arc testnet through a state override.
+From transaction receipts on Arc, not estimates and not local simulation.
 
-| | Gas |
+| | Gas | Cost at 22.17 gwei |
+|---|---|---|
+| **Deployment**, on chain | **486,154** | 0.01078 USDC |
+| **One verification**, on chain | **262,403** | 0.00582 USDC |
+
+[Verification tx](https://testnet.arcscan.app/tx/0x2a2e637745599c19152a032d8fa5d65dbc910e993e09d766c9019a4f592d6d14)
+— `verifyProof` is a `view` function, so this is a transaction sent to it purely
+to get a receipt with a real `gasUsed`.
+
+How that compares to what was measured off chain:
+
+| Measurement | Gas |
 |---|---|
-| `verifyProof` execution | **242,432** |
-| Calldata (16 words + selector) | 5,952 |
-| Local total, with the 21,000 base | 269,384 |
-| **Arc testnet, whole call** | **265,653** |
-| Deployment | 486,154 |
+| Arc receipt, whole transaction | 262,403 |
+| Arc `eth_estimateGas` | 265,653 |
+| Local: 21,000 base + calldata + execution | 269,384 |
+| Local: `verifyProof` execution alone | 242,432 |
 
-Reproduce both:
+The local deployment figure was 486,154 and the chain charged exactly that. The
+estimate ran 3,250 gas over what the transaction actually used, which is what an
+estimate is for.
+
+The report this work started from estimated 250–265k for a verification. The
+measurement is 262,403.
+
+Reproduce:
 
 ```bash
-forge test --match-test test_gas_verifyProof -vv     # local
-node script/verify-on-arc.mjs                        # Arc
+forge test --match-test test_gas_verifyProof -vv                  # local
+node script/verify-on-arc.mjs --address 0x7b8E8089129094FD20a7C9243904343e4C6aBff7
 ```
 
-The report this work started from estimated 250–265k. The measurement lands at
-the top of that range and slightly over it on the local number; Arc's own figure
-is 265,653.
-
-Arc settles gas in USDC, so a verification costs roughly 0.27 gas-units' worth
-at whatever the network price is — the number that matters for the product is
-that figure times the gas price, and it belongs in
-[#28](https://github.com/wienerlabs/square/issues/28) alongside the full release
-path rather than here, where only the pairing is being measured.
+That is the pairing alone. What a compliance-gated release costs end to end —
+the hook, the counter, the transfer — belongs in
+[#28](https://github.com/wienerlabs/square/issues/28).
 
 ## Verifying against Arc without deploying
 
@@ -121,7 +148,9 @@ real bytecode against the real precompiles for one call.
 
 Pass `--address 0x…` to point it at a deployed verifier instead.
 
-## Deploying
+## Redeploying
+
+After the ceremony, or after any change to the circuit:
 
 ```bash
 export ARC_RPC_URL=https://rpc.testnet.arc.io
@@ -130,15 +159,13 @@ forge script script/Deploy.s.sol --rpc-url "$ARC_RPC_URL" \
 node script/verify-on-arc.mjs --address <deployed address>
 ```
 
-Needs a funded Arc testnet account; Arc pays gas in USDC.
+Needs a funded Arc testnet account; Arc pays gas in USDC, and a deployment costs
+about 0.011 USDC at current prices. Testnet USDC comes from
+[faucet.circle.com](https://faucet.circle.com).
 
-**The address this produces is temporary.** The verifier is generated from a
-proving key and is valid only for that key. The key today is a development key —
-real phase 1 (Perpetual Powers of Tau contribution 80), single-contribution
-phase 2 with no beacon — so
-[#16](https://github.com/wienerlabs/square/issues/16) will produce a different
-key, a different verifier and a different address. See
-[docs/disclosure/zk-setup-status.md](../docs/disclosure/zk-setup-status.md).
+Regenerate `src/Groth16Verifier.sol` from the new key first — the contract is
+`snarkjs zkey export solidityverifier` output and a verifier from the old key
+will reject every proof from the new one.
 
 ## Fixtures
 

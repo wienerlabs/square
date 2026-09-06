@@ -10,7 +10,8 @@ fits the mandate. The receivable created during the challenge window is discount
 
 ## Status
 
-**Pre-alpha. Nothing is deployed. Nothing works yet.**
+**Pre-alpha.** One contract is on Arc testnet — the Groth16 verifier, at an
+address the ceremony will replace. Everything else is unbuilt.
 
 This repository is a ground-up rebuild on Arc (EVM, USDC-native gas), distilled from
 three Solana codebases. No Rust ports here — the contract layer is written fresh in
@@ -82,24 +83,26 @@ see [docs/decisions/erc20-vs-native-usdc.md](docs/decisions/erc20-vs-native-usdc
 
 | Contract | Address |
 |---|---|
-| `Groth16Verifier` | not deployed yet — needs a funded deployer |
+| `Groth16Verifier` | [`0x7b8E8089129094FD20a7C9243904343e4C6aBff7`](https://testnet.arcscan.app/address/0x7b8E8089129094FD20a7C9243904343e4C6aBff7) |
 
-A proof from the prover service already verifies against Arc's own EVM, without
-a deployment, through an `eth_call` state override:
+A proof from the prover service verifies against it on chain:
 
 ```console
-$ node contracts/script/verify-on-arc.mjs
+$ node contracts/script/verify-on-arc.mjs --address 0x7b8E8089129094FD20a7C9243904343e4C6aBff7
   ok    compliant proof verifies
   ok    non-compliant proof also verifies — is_compliant is a signal, not a gate
   ok    flipped is_compliant
   ok    altered amount
-Arc gas for one verification: 265653
 ```
 
-The address will be temporary when it lands: the verifier is generated from a
-proving key and is valid only for that key, and the key today is a development
-key. [#16](https://github.com/wienerlabs/square/issues/16) produces a different
-one. See [contracts/README.md](contracts/README.md).
+Measured from transaction receipts: **262,403 gas** for a verification,
+**486,154** to deploy — 0.0058 and 0.0108 USDC at current prices.
+
+**The address is temporary.** The verifier is generated from a proving key and
+is valid only for that key; today's is a development key, so
+[#16](https://github.com/wienerlabs/square/issues/16) will produce a different
+verifier at a different address. See
+[contracts/README.md](contracts/README.md).
 
 ## License
 
