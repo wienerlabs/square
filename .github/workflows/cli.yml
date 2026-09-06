@@ -1,0 +1,91 @@
+name: cli
+
+# Typecheck, unit-test and smoke-test @mandate/cli.
+#
+# Hermetic on purpose: no step contacts an RPC. The live checks against Arc
+# Testnet are opt-in (LIVE=1) and the acceptance test needs a funded key, so
+# neither belongs in a run that has to pass on every pull request.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/cli/**"
+      - "packages/did-resolver/**"
+      - ".github/workflows/cli.yml"
+  pull_request:
+    paths:
+      - "packages/cli/**"
+      - "packages/did-resolver/**"
+      - ".github/workflows/cli.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # The CLI depends on the resolver by path, so the resolver has to be built
+      # before the CLI can typecheck against its declarations.
+      - name: Build @mandate/did-resolver
+        working-directory: packages/did-resolver
+        run: |
+          npm install
+          npm run build
+          npm test
+
+      - name: Install @mandate/cli
+        working-directory: packages/cli
+        # --install-links copies the path dependency instead of symlinking it;
+        # a symlink here resolves outside the package and breaks the build.
+        run: npm install --install-links
+
+      - name: Typecheck
+        working-directory: packages/cli
+        run: npm run typecheck
+
+      - name: Unit tests
+        working-directory: packages/cli
+        run: npm test
+
+      - name: Build
+        working-directory: packages/cli
+        run: npm run build
+
+      - name: Smoke test (hermetic — no RPC is contacted)
+        working-directory: packages/cli
+        env:
+          NO_COLOR: "1"
+        run: |
+          set -uo pipefail
+          # A fresh HOME, so nothing here can read or write a real keystore.
+          export MANDATE_HOME="$(mktemp -d)"
+
+          fail=0
+          check() {  # name expected-exit-code args...
+            local name="$1" expected="$2"; shift 2
+            node dist/index.js "$@" >/dev/null 2>&1
+            local code=$?
+            if [ "$code" = "$expected" ]; then echo "  ok   $name -> $code"
+            else echo "  FAIL $name -> $code (expected $expected)"; fail=1; fi
+          }
+
+          check help 0 --help
+          check version 0 --version
+          check whoami 0 whoami --json
+          # The exit codes are the CLI's contract with a shell script, so each
+          # kind of failure has to stay distinguishable without parsing English.
+          check invalidDid 65 resolve did:aip:invalid
+          check v1Did 1 resolve did:aip:7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU:scribe
+          check unknownChain 78 resolve did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:1
+          check noWallet 65 register --dry-run
+
+          exit $fail
