@@ -11,32 +11,26 @@
 // content to the same rule: name the field, never the value.
 
 import { describe, it, expect } from 'vitest';
-import bs58 from 'bs58';
 import { buildCircuitInput } from '../src/prover.js';
 import { toFieldString, toIdentifier } from '../src/normalize.js';
-import { hashCategory, decodeAddress32, padAddressList } from '../src/hash.js';
+import { hashCategory, addressToField, padAddressList } from '../src/hash.js';
 
-function address(seed) {
-  const raw = Buffer.alloc(32, 0);
-  Buffer.from(seed).copy(raw);
-  raw[31] = 7;
-  return bs58.encode(raw);
-}
+const address = (nibble) => `0x${String(nibble).repeat(40)}`;
 
 const VALID = {
   policy_id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
-  operator_id: address('OPERATOR'),
-  max_daily_spend_lamports: '100000000',
-  max_per_transaction_lamports: '10000000',
+  operator_id: address(3),
+  max_daily_spend: '100000000',
+  max_per_transaction: '10000000',
   allowed_endpoint_categories: ['api-call'],
-  blocked_addresses: [address('BLOCKED')],
-  token_whitelist: [address('MINT')],
-  payment_amount_lamports: '5000000',
-  payment_token_mint: address('MINT'),
-  payment_recipient: address('RECIPIENT'),
+  blocked_addresses: [address(2)],
+  token_whitelist: [address(4)],
+  payment_amount: '5000000',
+  payment_token: address(4),
+  payment_recipient: address(1),
   payment_endpoint_category: 'api-call',
-  daily_spent_before_lamports: '50000000',
-  current_unix_timestamp: '1735689600',
+  daily_spent_before: '50000000',
+  current_unix_timestamp: '1788356730',
 };
 
 function requestWith(overrides) {
@@ -54,7 +48,7 @@ async function messageFor(promise) {
 
 describe('error messages name the field, never the value', () => {
   it('a malformed blocked address does not echo the address', async () => {
-    const secret = 'not-a-real-base58-address-!!!';
+    const secret = '0xNOT-A-REAL-ADDRESS-AT-ALL';
     const message = await messageFor(
       buildCircuitInput(requestWith({ blocked_addresses: [secret] })),
     );
@@ -63,7 +57,7 @@ describe('error messages name the field, never the value', () => {
   });
 
   it('a wrong-length blocked address does not echo the address', async () => {
-    const short = bs58.encode(Buffer.alloc(31, 3));
+    const short = '0xdeadbeef';
     const message = await messageFor(
       buildCircuitInput(requestWith({ blocked_addresses: [short] })),
     );
@@ -71,8 +65,8 @@ describe('error messages name the field, never the value', () => {
     expect(message).toContain('blocked_addresses');
   });
 
-  it('a malformed whitelisted mint does not echo the mint', async () => {
-    const secret = bs58.encode(Buffer.alloc(31, 9));
+  it('a malformed whitelisted token does not echo it', async () => {
+    const secret = '0x00000000000000000000000000000000000000';
     const message = await messageFor(
       buildCircuitInput(requestWith({ token_whitelist: [secret] })),
     );
@@ -92,19 +86,19 @@ describe('error messages name the field, never the value', () => {
   it('a non-numeric daily ceiling does not echo the ceiling', async () => {
     const secret = 'ceiling-is-987654321';
     const message = await messageFor(
-      buildCircuitInput(requestWith({ max_daily_spend_lamports: secret })),
+      buildCircuitInput(requestWith({ max_daily_spend: secret })),
     );
     expect(message).not.toContain(secret);
-    expect(message).toContain('max_daily_spend_lamports');
+    expect(message).toContain('max_daily_spend');
   });
 
   it('a non-numeric per-transaction ceiling does not echo the ceiling', async () => {
     const secret = '12_345_678';
     const message = await messageFor(
-      buildCircuitInput(requestWith({ max_per_transaction_lamports: secret })),
+      buildCircuitInput(requestWith({ max_per_transaction: secret })),
     );
     expect(message).not.toContain(secret);
-    expect(message).toContain('max_per_transaction_lamports');
+    expect(message).toContain('max_per_transaction');
   });
 
   it('an unknown weekday does not echo the day names', async () => {
@@ -118,7 +112,7 @@ describe('error messages name the field, never the value', () => {
   });
 
   it('an over-long list reports the ceiling but not how many entries were sent', async () => {
-    const blocked = Array.from({ length: 12 }, (_, i) => address(`BLOCKED-${i}`));
+    const blocked = Array.from({ length: 12 }, (_, i) => `0x${String(i % 10).repeat(40)}`);
     const message = await messageFor(
       buildCircuitInput(requestWith({ blocked_addresses: blocked })),
     );
@@ -131,35 +125,35 @@ describe('error messages name the field, never the value', () => {
 
   it('a missing field names the field only', async () => {
     const request = requestWith({});
-    delete request.max_daily_spend_lamports;
+    delete request.max_daily_spend;
     const message = await messageFor(buildCircuitInput(request));
-    expect(message).toContain('max_daily_spend_lamports');
+    expect(message).toContain('max_daily_spend');
   });
 });
 
 describe('normalize', () => {
   it('rejects a float rather than truncating a ceiling', () => {
-    expect(() => toFieldString(1.5, 'max_daily_spend_lamports')).toThrow(/whole number/);
+    expect(() => toFieldString(1.5, 'max_daily_spend')).toThrow(/whole number/);
   });
 
   it('rejects a number that has already lost precision', () => {
-    expect(() => toFieldString(2 ** 53 + 1, 'max_daily_spend_lamports'))
+    expect(() => toFieldString(2 ** 53 + 1, 'max_daily_spend'))
       .toThrow(/safe integer range/);
   });
 
   it('rejects a negative value', () => {
     const message = (() => {
-      try { toFieldString('-1', 'payment_amount_lamports'); return ''; }
+      try { toFieldString('-1', 'payment_amount'); return ''; }
       catch (e) { return e.message; }
     })();
     expect(message).not.toContain('-1');
-    expect(message).toContain('payment_amount_lamports');
+    expect(message).toContain('payment_amount');
   });
 
   it('rejects a value at or above the BN254 scalar field modulus', () => {
     const r = '21888242871839275222246405745257275088548364400416034343698204186575808495617';
     const message = (() => {
-      try { toFieldString(r, 'payment_amount_lamports'); return ''; }
+      try { toFieldString(r, 'payment_amount'); return ''; }
       catch (e) { return e.message; }
     })();
     expect(message).not.toContain(r);
@@ -179,9 +173,9 @@ describe('normalize', () => {
 });
 
 describe('hash helpers carry the label, not the value', () => {
-  it('decodeAddress32 reports the label on invalid base58', () => {
-    expect(() => decodeAddress32('!!!not base58!!!', 'blocked_addresses'))
-      .toThrow(/^blocked_addresses: not valid base58$/);
+  it('addressToField reports the label on a malformed address', () => {
+    expect(() => addressToField('0xnope', 'blocked_addresses'))
+      .toThrow(/^blocked_addresses: must be a 20-byte hex address$/);
   });
 
   it('hashCategory reports the label on an over-long category', async () => {
@@ -189,9 +183,9 @@ describe('hash helpers carry the label, not the value', () => {
       .rejects.toThrow(/^allowed_endpoint_categories: exceeds the 32-byte limit$/);
   });
 
-  it('padAddressList reports the label and the circuit maximum', async () => {
-    const addresses = Array.from({ length: 11 }, (_, i) => address(`A-${i}`));
-    await expect(padAddressList(addresses, 10, 'token_whitelist'))
-      .rejects.toThrow(/^token_whitelist: exceeds the circuit maximum of 10 entries$/);
+  it('padAddressList reports the label and the circuit maximum', () => {
+    const addresses = Array.from({ length: 11 }, (_, i) => `0x${String(i % 10).repeat(40)}`);
+    expect(() => padAddressList(addresses, 10, 'token_whitelist'))
+      .toThrow(/^token_whitelist: exceeds the circuit maximum of 10 entries$/);
   });
 });

@@ -2,14 +2,20 @@
 // Returned verbatim from GET /api-docs.json. Kept inline (no codegen) because
 // the API is tiny — two endpoints.
 //
-// The spec inherited from aperture had drifted away from the implementation: it
-// named `daily_spent_so_far_lamports` where the code reads
-// `daily_spent_before_lamports`, omitted `policy_id`, `operator_id`,
-// `current_unix_timestamp`, `time_restrictions` and `stripe_receipt_hash`
-// entirely, and still advertised `journal_digest`, `amount_range_min`,
-// `amount_range_max` and `image_id` — response fields left over from the RISC
-// Zero prover that the Circom implementation never produced. It is rewritten
-// here against the code rather than carried forward.
+// The spec inherited from aperture had drifted away from its implementation and
+// was rewritten against the code in #4. #18 then re-parameterised the service
+// for EVM, which changed the wire format again:
+//
+//   - Amount fields lost the `lamports` suffix. They are USDC base units at 6
+//     decimals now, and the circuit range-checks them to 64 bits — see
+//     docs/decisions/erc20-vs-native-usdc.md.
+//   - `payment_token_mint` became `payment_token`, and every address field
+//     takes a 20-byte EVM address instead of a base58 Solana pubkey.
+//   - `public_signals` carries eight entries rather than ten: an EVM address
+//     fits in one field element, so the high/low halves collapsed.
+//   - `groth16`, `proof_hash` and `receipt_bytes` are gone. They encoded a
+//     proof for groth16-solana; `solidity` replaces them with the arguments the
+//     on-chain verifier actually takes.
 export const openapiSpec = {
   openapi: '3.0.3',
   info: {
@@ -97,33 +103,51 @@ export const openapiSpec = {
         required: [
           'policy_id',
           'operator_id',
-          'max_daily_spend_lamports',
-          'max_per_transaction_lamports',
+          'max_daily_spend',
+          'max_per_transaction',
           'allowed_endpoint_categories',
           'blocked_addresses',
           'token_whitelist',
-          'payment_amount_lamports',
-          'payment_token_mint',
+          'payment_amount',
+          'payment_token',
           'payment_recipient',
           'payment_endpoint_category',
-          'daily_spent_before_lamports',
+          'daily_spent_before',
           'current_unix_timestamp',
         ],
         properties: {
           policy_id: { type: 'string', format: 'uuid' },
-          operator_id: { type: 'string', description: 'Base58 32-byte operator key.' },
-          max_daily_spend_lamports: { type: 'string', description: 'Non-negative integer.' },
-          max_per_transaction_lamports: { type: 'string', description: 'Non-negative integer.' },
+          operator_id: { type: 'string', description: '20-byte EVM address, 0x-prefixed.' },
+          max_daily_spend: {
+            type: 'string',
+            description: 'USDC base units, 6 decimals. Must be under 2^64.',
+          },
+          max_per_transaction: {
+            type: 'string',
+            description: 'USDC base units, 6 decimals. Must be under 2^64.',
+          },
           allowed_endpoint_categories: {
             type: 'array', items: { type: 'string', maxLength: 32 }, maxItems: 8,
           },
-          blocked_addresses: { type: 'array', items: { type: 'string' }, maxItems: 10 },
-          token_whitelist: { type: 'array', items: { type: 'string' }, maxItems: 10 },
-          payment_amount_lamports: { type: 'string', description: 'Non-negative integer.' },
-          payment_token_mint: { type: 'string' },
-          payment_recipient: { type: 'string' },
+          blocked_addresses: {
+            type: 'array', maxItems: 10,
+            items: { type: 'string', description: '20-byte EVM address.' },
+          },
+          token_whitelist: {
+            type: 'array', maxItems: 10,
+            items: { type: 'string', description: '20-byte EVM address.' },
+          },
+          payment_amount: {
+            type: 'string',
+            description: 'USDC base units, 6 decimals. Must be under 2^64.',
+          },
+          payment_token: { type: 'string', description: '20-byte EVM address.' },
+          payment_recipient: { type: 'string', description: '20-byte EVM address.' },
           payment_endpoint_category: { type: 'string', maxLength: 32 },
-          daily_spent_before_lamports: { type: 'string', description: 'Non-negative integer.' },
+          daily_spent_before: {
+            type: 'string',
+            description: 'USDC base units, 6 decimals. Must be under 2^64.',
+          },
           current_unix_timestamp: { type: 'string', description: 'Seconds since the epoch.' },
           stripe_receipt_hash: {
             type: 'string',
@@ -162,22 +186,27 @@ export const openapiSpec = {
           policy_data_hash_hex: { type: 'string', description: 'Same value, 32-byte hex.' },
           public_signals: {
             type: 'object',
-            description: 'The ten public signals, keyed by name in circuit output order.',
+            description:
+              'The eight public signals, keyed by name in circuit output order: '
+              + 'is_compliant, policy_data_hash, recipient, amount, token, '
+              + 'daily_spent_before, current_unix_timestamp, stripe_receipt_hash.',
           },
-          groth16: {
+          solidity: {
             type: 'object',
+            description:
+              'Arguments for the on-chain verifier\'s '
+              + 'verifyProof(uint[2] a, uint[2][2] b, uint[2] c, uint[8] input), '
+              + 'as 32-byte hex strings.',
             properties: {
-              proof_a: { type: 'string', description: '64-byte G1 point, base64 (Y-negated).' },
-              proof_b: { type: 'string', description: '128-byte G2 point, base64 (Fp2 reversed).' },
-              proof_c: { type: 'string', description: '64-byte G1 point, base64.' },
-              public_inputs: { type: 'array', items: { type: 'string' } },
+              a: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2 },
+              b: { type: 'array', items: { type: 'array', items: { type: 'string' } } },
+              c: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2 },
+              input: { type: 'array', items: { type: 'string' }, minItems: 8, maxItems: 8 },
             },
           },
           raw_proof: { type: 'object', description: 'Original snarkjs proof object.' },
           raw_public: { type: 'array', items: { type: 'string' } },
-          proof_hash: { type: 'string', description: 'Alias of policy_data_hash_hex.' },
           verification_timestamp: { type: 'string', format: 'date-time' },
-          receipt_bytes: { type: 'array', items: { type: 'integer' } },
           proving_time_ms: { type: 'integer' },
         },
       },
