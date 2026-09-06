@@ -1,0 +1,22 @@
+{
+  "name": "@squaresdk/a2a",
+  "version": "0.1.0",
+  "description": "A2A task protocol: JSON-RPC 2.0 handshake, task lifecycle, and its mapping onto ERC-8183 job state.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.9"
+  },
+  "engines": { "node": ">=20" }
+}
