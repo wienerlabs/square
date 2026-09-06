@@ -12,11 +12,15 @@ on:
     paths:
       - "packages/cli/**"
       - "packages/did-resolver/**"
+      - "docs/smoke/**"
+      - "docs/agent-card/schema.json"
       - ".github/workflows/cli.yml"
   pull_request:
     paths:
       - "packages/cli/**"
       - "packages/did-resolver/**"
+      - "docs/smoke/**"
+      - "docs/agent-card/schema.json"
       - ".github/workflows/cli.yml"
   workflow_dispatch:
 
@@ -93,3 +97,35 @@ jobs:
           check noWallet 65 register --dry-run
 
           exit $fail
+
+  # Phase 1's end-to-end proof, against the agents permanently registered on Arc
+  # Testnet. Read-only: no key, no gas, so it can run on every pull request.
+  #
+  # A separate job on purpose. It is the one thing here that talks to a network,
+  # and a testnet hiccup should read as "smoke failed", not as a unit-test
+  # regression.
+  smoke:
+    name: end-to-end (Arc Testnet)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build @squaresdk/did-resolver
+        working-directory: packages/did-resolver
+        run: |
+          npm install
+          npm run build
+
+      - name: Build @squaresdk/cli
+        working-directory: packages/cli
+        run: |
+          npm install --install-links
+          npm run build
+
+      - name: Resolve the permanent smoke agents
+        working-directory: packages/cli
+        run: npm run test:smoke

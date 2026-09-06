@@ -1,0 +1,44 @@
+{
+  "$comment": "The permanent smoke agents on Arc Testnet. Docs and tests read this file rather than repeating the identifiers, so there is one place for them to be wrong.",
+  "network": {
+    "chainId": 5042002,
+    "name": "Arc Testnet",
+    "rpc": "https://rpc.testnet.arc.io",
+    "identityRegistry": "0x8004a818bfb912233c491871b3d84c89a494bd9e",
+    "explorer": "https://testnet.arcscan.app"
+  },
+  "owner": "0xa52c81e6aD0d73f001c911d906a907e5E36733A2",
+  "agents": [
+    {
+      "label": "card",
+      "agentId": "892271",
+      "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:892271",
+      "cardFile": "agent-card.json",
+      "agentUriScheme": "data",
+      "transactionHash": "0xe9e6ff58ed6fcb39ffa83c80559b816ad297db49faa87e83ead86e6d275212c1",
+      "blockNumber": "60760626",
+      "expect": {
+        "serviceCount": 1,
+        "serviceTypes": ["A2A"],
+        "warnings": 0
+      }
+    },
+    {
+      "label": "no-card",
+      "agentId": "892272",
+      "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:892272",
+      "agentUriScheme": "none",
+      "transactionHash": "0x64d494154c07ef4303a911cd5d6879bd04039d756dd731ae8180defa0727ac5e",
+      "blockNumber": "60760653",
+      "expect": {
+        "serviceCount": 0,
+        "serviceTypes": [],
+        "warnings": 0
+      }
+    }
+  ],
+  "absent": {
+    "$comment": "An agent id far past the end of the registry. Used to check that a missing agent is reported as notFound rather than as a malformed identifier.",
+    "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:99999999"
+  }
+}

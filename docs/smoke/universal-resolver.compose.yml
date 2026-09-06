@@ -1,0 +1,43 @@
+# A Universal Resolver with the did:aip driver wired in, for checking that the
+# driver behaves the same inside the resolver as it does on its own.
+#
+#   docker compose -f docs/smoke/universal-resolver.compose.yml up --build -d
+#   curl -s -H 'Accept: application/ld+json' \
+#     http://localhost:8090/1.0/identifiers/did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:892271
+#   docker compose -f docs/smoke/universal-resolver.compose.yml down
+#
+# The driver is built from this repository rather than pulled, so this works
+# before ghcr.io/wienerlabs/driver-did-aip is public (#64) and before the
+# upstream driver entry lands (#65). Once both are done, the same check runs
+# against the real Universal Resolver with no local build.
+
+services:
+  driver-did-aip:
+    build:
+      # The build context is packages/, not the driver directory: the driver
+      # depends on ../did-resolver by path and Docker cannot reach outside its
+      # context. Same reason as .github/workflows/did-aip-driver.yml.
+      context: ../../packages
+      dockerfile: did-aip-driver/Dockerfile
+    environment:
+      RPC_5042002: https://rpc.testnet.arc.io
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8080/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  uni-resolver-web:
+    image: universalresolver/uni-resolver-web:latest
+    ports:
+      - "8090:8080"
+    environment:
+      # The driver table lives in the image's own application.yml and no
+      # environment variable can add an entry to it, so the table is replaced
+      # wholesale from a mounted file. See uni-resolver-application.yml.
+      SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+    volumes:
+      - ./uni-resolver-application.yml:/config/application.yml:ro
+    depends_on:
+      driver-did-aip:
+        condition: service_healthy
