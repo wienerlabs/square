@@ -1,0 +1,37 @@
+{
+  "name": "@squaresdk/keeper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Finalizes Square jobs whose challenge window closed, when doing so is profitable.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "square-keeper": "dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@squaresdk/core": "file:../../packages/core",
+    "@squaresdk/data": "file:../../packages/data",
+    "@squaresdk/did-resolver": "file:../../packages/did-resolver",
+    "@squaresdk/observability": "file:../../packages/observability",
+    "hono": "^4.6.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.9",
+    "@squaresdk/indexer": "file:../indexer"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
