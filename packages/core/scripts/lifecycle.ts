@@ -1,0 +1,328 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  createPublicClient,
+  createTestClient,
+  createWalletClient,
+  defineChain,
+  formatUnits,
+  http,
+  parseEther,
+  parseUnits,
+  type Address,
+  type Chain,
+  type Hex,
+  type TransactionReceipt,
+} from "viem";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import {
+  createSquareClient,
+  deploymentFromJson,
+  eventsNamed,
+  hashDeliverable,
+  JobStatus,
+  Outcome,
+  squareJobAbi,
+  type SquareClient,
+  type SquareDeployment,
+} from "../dist/index.js";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const rpcUrl = process.env["RPC_URL"] ?? "http://127.0.0.1:8545";
+const chainId = Number(process.env["CHAIN_ID"] ?? 31337);
+const isAnvil = process.env["ANVIL"] === "1" || chainId === 31337;
+const deploymentFile = process.env["SQUARE_DEPLOYMENT_FILE"] ?? join(here, "..", "..", "..", "contracts", "deployments", `${chainId}.json`);
+const reportFile = process.env["LIFECYCLE_REPORT"] ?? join(here, "..", "..", "..", "docs", "deploy", `lifecycle-${chainId}.md`);
+const actorsFile = process.env["LIFECYCLE_ACTORS_FILE"];
+const funderKey = process.env["DEPLOYER_PRIVATE_KEY"] as Hex | undefined;
+const nativeGasPriceWei = BigInt(process.env["GAS_PRICE_WEI"] ?? "20000000000");
+const explorer = process.env["EXPLORER_URL"] ?? (chainId === 5042002 ? "https://testnet.arcscan.app" : "");
+
+const anvilKeys: Hex[] = [
+  "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+  "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
+  "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6",
+  "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a",
+  "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba",
+  "0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356",
+];
+
+interface Actors {
+  client: Hex;
+  provider: Hex;
+  buyer: Hex;
+  arbiterA: Hex;
+  arbiterB: Hex;
+  cranker: Hex;
+}
+
+interface Row {
+  path: string;
+  step: string;
+  txHash: Hex;
+  gasUsed: bigint;
+}
+
+const chain: Chain = defineChain({
+  id: chainId,
+  name: `chain-${chainId}`,
+  nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+  rpcUrls: { default: { http: [rpcUrl] } },
+});
+
+const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+const testClient = createTestClient({ chain, mode: "anvil", transport: http(rpcUrl) });
+const rows: Row[] = [];
+
+function loadActors(): Actors {
+  if (actorsFile && existsSync(actorsFile)) {
+    const parsed = Object.fromEntries(
+      readFileSync(actorsFile, "utf8")
+        .split("\n")
+        .filter((line) => line.includes("="))
+        .map((line) => line.split("=", 2) as [string, string]),
+    );
+    return {
+      client: parsed["CLIENT_KEY"] as Hex,
+      provider: parsed["PROVIDER_KEY"] as Hex,
+      buyer: parsed["BUYER_KEY"] as Hex,
+      arbiterA: parsed["ARBITER_A_KEY"] as Hex,
+      arbiterB: parsed["ARBITER_B_KEY"] as Hex,
+      cranker: parsed["CRANKER_KEY"] as Hex,
+    };
+  }
+  if (isAnvil) {
+    return { client: anvilKeys[0]!, provider: anvilKeys[1]!, buyer: anvilKeys[2]!, arbiterA: anvilKeys[3]!, arbiterB: anvilKeys[4]!, cranker: anvilKeys[5]! };
+  }
+  const fresh: Actors = {
+    client: generatePrivateKey(),
+    provider: generatePrivateKey(),
+    buyer: generatePrivateKey(),
+    arbiterA: generatePrivateKey(),
+    arbiterB: generatePrivateKey(),
+    cranker: generatePrivateKey(),
+  };
+  if (actorsFile) {
+    writeFileSync(
+      actorsFile,
+      Object.entries(fresh)
+        .map(([name, key]) => `${name.replace(/[A-Z]/g, (c) => `_${c}`).toUpperCase()}_KEY=${key}`)
+        .join("\n") + "\n",
+      { mode: 0o600 },
+    );
+  }
+  return fresh;
+}
+
+function actor(deployment: SquareDeployment, key: Hex): SquareClient {
+  return createSquareClient({
+    publicClient,
+    deployment,
+    walletClient: createWalletClient({ chain, transport: http(rpcUrl), account: privateKeyToAccount(key) }),
+  });
+}
+
+function record(path: string, step: string, receipt: TransactionReceipt): void {
+  rows.push({ path, step, txHash: receipt.transactionHash, gasUsed: receipt.gasUsed });
+  console.log(`${path} | ${step} | ${receipt.transactionHash} | ${receipt.gasUsed} gas`);
+}
+
+async function now(): Promise<bigint> {
+  return (await publicClient.getBlock()).timestamp;
+}
+
+async function waitUntil(timestamp: bigint, label: string): Promise<void> {
+  const current = await now();
+  if (current >= timestamp) return;
+  const gap = timestamp - current + 1n;
+  if (isAnvil) {
+    await testClient.increaseTime({ seconds: Number(gap) });
+    await testClient.mine({ blocks: 1 });
+    return;
+  }
+  console.log(`waiting ${gap}s for ${label}`);
+  await new Promise((resolve) => setTimeout(resolve, Number(gap) * 1000 + 3000));
+}
+
+async function fundActors(deployment: SquareDeployment, actors: Actors): Promise<void> {
+  const addresses = Object.values(actors).map((key) => privateKeyToAccount(key).address);
+  if (isAnvil) {
+    const funder = createWalletClient({ chain, transport: http(rpcUrl), account: privateKeyToAccount("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80") });
+    const mintAbi = [{ type: "function", name: "mint", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [] }] as const;
+    for (const address of addresses) {
+      await testClient.setBalance({ address, value: parseEther("10") });
+      const hash = await funder.writeContract({ abi: mintAbi, address: deployment.usdc, functionName: "mint", args: [address, parseUnits("500", 6)] });
+      await publicClient.waitForTransactionReceipt({ hash });
+    }
+    return;
+  }
+  if (!funderKey) throw new Error("DEPLOYER_PRIVATE_KEY is required to fund the actors on a live chain");
+  const funder = createWalletClient({ chain, transport: http(rpcUrl), account: privateKeyToAccount(funderKey) });
+  const perActor = parseEther(process.env["FUND_PER_ACTOR"] ?? "2");
+  for (const address of addresses) {
+    const balance = await publicClient.getBalance({ address });
+    if (balance >= perActor) continue;
+    const hash = await funder.sendTransaction({ to: address, value: perActor - balance });
+    await publicClient.waitForTransactionReceipt({ hash });
+    console.log(`funded ${address} with ${formatUnits(perActor - balance, 18)} USDC`);
+  }
+}
+
+async function submittedJob(client: SquareClient, provider: SquareClient, budget: bigint, path: string, expiryOffset = 30n * 24n * 3600n): Promise<bigint> {
+  const created = await client.createJob({ provider: provider.account, expiredAt: (await now()) + expiryOffset, spec: { path, at: Date.now() } });
+  record(path, "createJob", created.receipt);
+  record(path, "setBudget", (await provider.setBudget(created.jobId, budget)).receipt);
+  record(path, "fund", (await client.fund(created.jobId, budget)).receipt);
+  record(path, "submit", (await provider.submit({ jobId: created.jobId, deliverable: hashDeliverable(`${path} ${created.jobId}`), agentId: process.env["AGENT_ID"] ? BigInt(process.env["AGENT_ID"]) : undefined })).receipt);
+  return created.jobId;
+}
+
+async function expectRevert(label: string, fn: () => Promise<unknown>, pattern: RegExp): Promise<void> {
+  try {
+    await fn();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (pattern.test(message)) {
+      console.log(`adversarial | ${label} | reverted as expected (${pattern.source})`);
+      rows.push({ path: "adversarial", step: `${label}: reverted with ${pattern.source}`, txHash: "0x", gasUsed: 0n });
+      return;
+    }
+    throw new Error(`${label} reverted with an unexpected error: ${message}`);
+  }
+  throw new Error(`${label} did not revert`);
+}
+
+async function main(): Promise<void> {
+  const deployment = deploymentFromJson(JSON.parse(readFileSync(deploymentFile, "utf8")));
+  const actors = loadActors();
+  await fundActors(deployment, actors);
+  const client = actor(deployment, actors.client);
+  const provider = actor(deployment, actors.provider);
+  const buyer = actor(deployment, actors.buyer);
+  const arbiterA = actor(deployment, actors.arbiterA);
+  const arbiterB = actor(deployment, actors.arbiterB);
+  const cranker = actor(deployment, actors.cranker);
+  const budget = parseUnits(process.env["BUDGET_USDC"] ?? "5", 6);
+  const horizon = BigInt(await client.settlementHorizon());
+
+  const optimistic = await submittedJob(client, provider, budget, "1-optimistic");
+  await expectRevert("finalize before the window closes", () => cranker.finalize(optimistic), /WindowOpen/);
+  await waitUntil(BigInt(await client.challengeEndsAt(optimistic)), "the challenge window");
+  const finalized = await cranker.finalize(optimistic);
+  record("1-optimistic", "finalize (permissionless)", finalized.receipt);
+  record("1-optimistic", "withdraw", (await provider.withdraw()).receipt);
+  if ((await client.getJobRecord(optimistic)).status !== JobStatus.Completed) throw new Error("optimistic job did not complete");
+
+  const rejectPath = await submittedJob(client, provider, budget, "2a-dispute-client-wins");
+  record("2a-dispute-client-wins", "dispute (bonded)", (await client.dispute(rejectPath, hashDeliverable("evidence"))).receipt);
+  record("2a-dispute-client-wins", "vote 1/2", (await arbiterA.vote(rejectPath, Outcome.Reject, 0)).receipt);
+  await expectRevert("finalizeDecided below the threshold", () => cranker.finalizeDecided(rejectPath), /NotDecided/);
+  record("2a-dispute-client-wins", "vote 2/2 (applies the rejection)", (await arbiterB.vote(rejectPath, Outcome.Reject, 0)).receipt);
+  record("2a-dispute-client-wins", "withdrawBond", (await client.withdrawBond()).receipt);
+  if ((await client.getJobRecord(rejectPath)).status !== JobStatus.Rejected) throw new Error("rejection did not apply");
+
+  const completePath = await submittedJob(client, provider, budget, "2b-dispute-provider-wins");
+  record("2b-dispute-provider-wins", "dispute (bonded)", (await client.dispute(completePath, hashDeliverable("evidence"))).receipt);
+  record("2b-dispute-provider-wins", "vote 1/2", (await arbiterA.vote(completePath, Outcome.Complete, 10_000)).receipt);
+  record("2b-dispute-provider-wins", "vote 2/2", (await arbiterB.vote(completePath, Outcome.Complete, 10_000)).receipt);
+  record("2b-dispute-provider-wins", "finalizeDecided (permissionless)", (await cranker.finalizeDecided(completePath)).receipt);
+  record("2b-dispute-provider-wins", "withdrawBond (provider takes the bond)", (await provider.withdrawBond()).receipt);
+
+  const splitPath = await submittedJob(client, provider, budget, "2c-dispute-split");
+  record("2c-dispute-split", "dispute (bonded)", (await client.dispute(splitPath, hashDeliverable("evidence"))).receipt);
+  record("2c-dispute-split", "vote 1/2 (4000 bps)", (await arbiterA.vote(splitPath, Outcome.Complete, 4_000)).receipt);
+  record("2c-dispute-split", "vote 2/2 (4000 bps)", (await arbiterB.vote(splitPath, Outcome.Complete, 4_000)).receipt);
+  const split = await cranker.finalizeDecided(splitPath);
+  record("2c-dispute-split", "finalizeDecided (split through the hook)", split.receipt);
+  const routed = eventsNamed(split.events, "PayoutRouted")[0];
+  if (!routed || routed.args.providerBps !== 4_000) throw new Error("split was not routed through the hook");
+
+  const expiryPath = "3-expiry";
+  const expiring = await client.createJob({ provider: provider.account, expiredAt: (await now()) + horizon + 30n, spec: { path: expiryPath } });
+  record(expiryPath, "createJob (short expiry)", expiring.receipt);
+  record(expiryPath, "setBudget", (await provider.setBudget(expiring.jobId, budget)).receipt);
+  record(expiryPath, "fund", (await client.fund(expiring.jobId, budget)).receipt);
+  await expectRevert("claimRefund before expiry", () => cranker.claimRefund(expiring.jobId), /NotExpired/);
+
+  const cancelPath = "4-cancel-before-funding";
+  const cancelled = await client.createJob({ provider: provider.account, expiredAt: (await now()) + 30n * 24n * 3600n, spec: { path: cancelPath } });
+  record(cancelPath, "createJob", cancelled.receipt);
+  record(cancelPath, "setBudget", (await provider.setBudget(cancelled.jobId, budget)).receipt);
+  record(cancelPath, "reject (client, Open)", (await client.reject(cancelled.jobId)).receipt);
+
+  const receivablePath = "6-receivable";
+  const sold = await submittedJob(client, provider, budget, receivablePath);
+  record(receivablePath, "list", (await provider.listClaim(sold, (budget * 9n) / 10n)).receipt);
+  record(receivablePath, "buy", (await buyer.buyClaim(sold)).receipt);
+  await waitUntil(BigInt(await client.challengeEndsAt(sold)), "the challenge window of the sold receivable");
+  const paidToBuyer = await cranker.finalize(sold);
+  record(receivablePath, "finalize (pays the buyer)", paidToBuyer.receipt);
+  const released = eventsNamed(paidToBuyer.events, "PaymentReleased")[0];
+  if (released?.args.provider.toLowerCase() !== buyer.account.toLowerCase()) throw new Error("the buyer was not paid");
+
+  await expectRevert(
+    "createJob with a non-whitelisted hook",
+    () => client.createJob({ provider: provider.account, expiredAt: 0n, description: "x", hook: deployment.usdc }),
+    /ExpiryInPast|HookNotWhitelisted/,
+  );
+  await expectRevert(
+    "createJob with a non-whitelisted hook and a valid expiry",
+    async () => {
+      const expiredAt = (await now()) + 30n * 24n * 3600n;
+      return client.createJob({ provider: provider.account, expiredAt, description: "x", hook: deployment.usdc });
+    },
+    /HookNotWhitelisted/,
+  );
+  await expectRevert("dispute by a stranger", () => buyer.dispute(optimistic), /NotSubmitted|OnlyClient/);
+  await expectRevert("vote by a non-arbiter", () => buyer.vote(rejectPath, Outcome.Reject, 0), /AlreadyDecided|NotAnArbiter/);
+  await expectRevert("double finalize", () => cranker.finalize(optimistic), /NotSubmitted/);
+
+  await waitUntil(BigInt((await client.getJobRecord(expiring.jobId)).expiredAt), "the short expiry");
+  record(expiryPath, "claimRefund (anyone)", (await cranker.claimRefund(expiring.jobId)).receipt);
+  record(expiryPath, "withdraw (client)", (await client.withdraw()).receipt);
+  if ((await client.getJobRecord(expiring.jobId)).status !== JobStatus.Expired) throw new Error("expiry did not apply");
+
+  const totalGas = rows.reduce((sum, row) => sum + row.gasUsed, 0n);
+  const perPath = new Map<string, bigint>();
+  for (const row of rows) perPath.set(row.path, (perPath.get(row.path) ?? 0n) + row.gasUsed);
+  const usdcOf = (gas: bigint): string => formatUnits((gas * nativeGasPriceWei) / 1_000_000_000_000n, 6);
+  const link = (hash: Hex): string => (hash === "0x" ? "" : explorer ? `[${hash.slice(0, 10)}...](${explorer}/tx/${hash})` : hash);
+  const lines = [
+    `# Lifecycle run on chain ${chainId}`,
+    "",
+    `Run at ${new Date().toISOString()} against ${rpcUrl}. Gas price used for the USDC column: ${formatUnits(nativeGasPriceWei, 9)} gwei (1 gas = ${formatUnits(nativeGasPriceWei, 18)} USDC).`,
+    "",
+    "| Path | Step | Transaction | Gas |",
+    "|---|---|---|---|",
+    ...rows.map((row) => `| ${row.path} | ${row.step} | ${link(row.txHash)} | ${row.gasUsed === 0n ? "" : row.gasUsed.toString()} |`),
+    "",
+    "## Per path",
+    "",
+    "| Path | Gas | USDC |",
+    "|---|---|---|",
+    ...[...perPath.entries()].filter(([, gas]) => gas > 0n).map(([path, gas]) => `| ${path} | ${gas} | ${usdcOf(gas)} |`),
+    `| all | ${totalGas} | ${usdcOf(totalGas)} |`,
+    "",
+    "## Deployment",
+    "",
+    "| Contract | Address |",
+    "|---|---|",
+    ...Object.entries(deployment)
+      .filter(([key]) => key !== "chainId")
+      .map(([key, value]) => `| ${key} | ${explorer ? `[${value}](${explorer}/address/${value})` : value} |`),
+    "",
+  ];
+  mkdirSync(dirname(reportFile), { recursive: true });
+  writeFileSync(reportFile, lines.join("\n"));
+  console.log(`report written to ${reportFile}`);
+  const counter = await publicClient.readContract({ abi: squareJobAbi, address: deployment.squareJob, functionName: "jobCounter" });
+  console.log(`jobs on chain: ${counter}`);
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+
+export type { Address };

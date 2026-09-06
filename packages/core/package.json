@@ -25,7 +25,8 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:anvil": "ANVIL=1 vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lifecycle": "node --experimental-strip-types scripts/lifecycle.ts"
   },
   "dependencies": {
     "@squaresdk/did-resolver": "file:../did-resolver",
