@@ -333,7 +333,7 @@ network operations. Step 7 is the only step that leaves the chain.
 | `didResolutionMetadata.contentType` | `application/did+ld+json` |
 | `didResolutionMetadata.warnings` | Non-fatal problems, e.g. an unreachable Agent URI |
 | `didDocumentMetadata.versionId` | The block number the state was read at |
-| `didDocumentMetadata.deactivated` | `true` per §7 |
+| `didDocumentMetadata.deactivated` | `true` per §7.4 |
 | `didDocumentMetadata.agentRegistry` | The ERC-8004 `agentRegistry` string |
 
 `versionId` is the block number, not a timestamp: on a chain with sub-second deterministic
@@ -346,7 +346,67 @@ not just the lookup.
 
 ---
 
-## 7. Deactivation
+## 7. DID Operations (Normative)
+
+This method does not define its own operations. Every one of them is an ERC-8004 or
+ERC-721 call, and this section says which call, and what it means for the DID. Anything
+not listed here does not change the DID Document.
+
+### 7.1 Create
+
+An agent is created by calling `register()` or `register(agentURI)` on an Identity
+Registry. Both forms exist in ERC-8004 and both are present in the reference deployment;
+the no-argument form registers an agent with an empty Agent URI, which §5 treats as valid
+rather than as an error.
+
+Registration is permissionless. The registry mints an ERC-721 to `msg.sender`, and the
+`tokenId` it assigns is the `agent-id` of §3.2. The DID follows from three values, none of
+which the creator supplies:
+
+| | comes from |
+|---|---|
+| `chain-id` | the chain the transaction was mined on |
+| `registry` | the contract the transaction was sent to |
+| `agent-id` | the `tokenId` in the mint's `Transfer` event |
+
+A creator **MUST** read the `agent-id` from the `Transfer` event in the transaction
+receipt, where `from` is the zero address and `to` is the registering account. A creator
+**MUST NOT** take it from a prior `eth_call` of `register`. Registration is permissionless,
+so another registration can be mined between the simulation and the transaction, and the
+simulated value then belongs to a different agent. The receipt is the only account of what
+was actually minted.
+
+A creator **MUST NOT** treat a DID as existing before the transaction is mined. Until then
+there is no `agent-id`, and any identifier constructed in advance names an agent that may
+never exist or may belong to somebody else.
+
+### 7.2 Read
+
+Resolution is §6. It is the only operation a consumer needs and the only one that requires
+no key.
+
+### 7.3 Update
+
+The identifier is immutable. No operation changes `chain-id`, `registry` or `agent-id`, so
+no operation changes the DID. What the DID *resolves to* changes in three ways:
+
+- **The Agent URI**, via `setAgentURI(agentId, uri)`. This replaces the Registration File
+  the DID Document's `service` entries are derived from (§4.5). It is how an agent card
+  written before registration acquires the `agent-id` it could not have known: register
+  first, then set the URI once the id exists.
+- **The Owner**, via ERC-721 transfer. The DID does not change; `controller` and the
+  `#owner` verification method do (§4.3). ERC-8004 clears the Agent Wallet on transfer, so
+  `#agent-wallet` changes with it — see §10.2 for why a resolver must not cache across a
+  `Transfer`.
+- **The Agent Wallet**, via `setAgentWallet`, where the registry exposes it. This function
+  is OPTIONAL in ERC-8004 and is **not** exposed by the reference deployment on Arc
+  Testnet. §4.4 already handles its absence: the Agent Wallet defaults to the Owner, and a
+  revert means "not exposed", not "resolution failed".
+
+There is no operation that edits a DID Document directly. Every property in it is derived,
+and the only way to change one is to change what it is derived from.
+
+### 7.4 Deactivate
 
 An agent is deactivated when either holds:
 
@@ -525,7 +585,7 @@ than letting each lookup reach the Owner's server directly.
 | DID Documents are DID Core 1.0 conformant | ✅ §4 |
 | `id` matches the resolved DID | ✅ §4.1 |
 | Verification method types are registered | ✅ `EcdsaSecp256k1RecoveryMethod2020` |
-| CRUD operations are specified | ✅ ERC-8004 (create/update), §7 (deactivate) |
+| CRUD operations are specified | ✅ §7 |
 | Resolution is specified | ✅ §6 |
 | Security considerations | ✅ §10 |
 | Privacy considerations | ✅ §11 |
@@ -578,6 +638,30 @@ Checklist for the new PR:
 - [ ] State in the PR description that this is a substrate change (Solana → ERC-8004), not
       an editorial clarification, so reviewers do not skim it
 - [ ] Cross-reference ERC-8004 as the underlying registry
+
+### 13.1 What the registry checks
+
+Two automated gates run against a pull request touching `methods/**`, and knowing what
+they are is cheaper than discovering them in review.
+
+`tooling/validate-registry.js` validates every entry against the JSON Schema in
+`tooling/did-method-registry-entry.yml`. `name`, `status` and `specification` are required,
+`additionalProperties` is false, and `status` is one of `registered`, `withdrawn`,
+`deprecated`. It is a shape check and nothing more.
+
+`.github/workflows/ai-spec-review.yml` runs a preliminary review of the linked
+specification against `tooling/spec-review-checklist.md`. Eight MUST criteria, and any one
+of them failing blocks the merge. Three of them bear directly on this document:
+
+- **M1 — the specification URL must resolve.** An unreachable specification is a hard
+  failure, evaluated by the tooling rather than by judgement: a document that cannot be
+  fetched cannot be reviewed. The pull request therefore cannot be opened before this
+  document is publicly readable at the URL in the entry.
+- **M3 — CRUD operations must be described.** The reviewer judges only what is in the
+  fetched text, so delegating create and update to ERC-8004 by reference is not enough.
+  §7 exists for this reason.
+- **M4 and M5 — Security and Privacy Considerations must be substantive**, meaning a
+  paragraph of prose naming a concrete method-relevant risk, not a heading. §10 and §11.
 
 ## 14. References
 
