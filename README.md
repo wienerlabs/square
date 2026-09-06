@@ -59,7 +59,7 @@ is not ported.
 contracts/   Foundry — SquareJob, ComplianceHook, Groth16Verifier, PolicyRegistry,
              ClaimMarket, AipDidRegistry
 circuits/    Circom payment-compliance circuit + ceremony scripts
-packages/    did-resolver, sdk, cli, mcp
+packages/    did-resolver, core, agent, cli, mcp
 services/    prover, indexer
 app/         Next.js reference application
 docs/        Specifications and design notes
