@@ -17,3 +17,9 @@ coverage/
 
 .DS_Store
 *.log
+
+# Foundry build output. lib/ is a git submodule and is tracked as one, so that
+# `forge test` works from a fresh clone after `git submodule update --init`.
+contracts/out/
+contracts/cache/
+contracts/broadcast/
