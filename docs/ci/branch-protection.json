@@ -1,0 +1,34 @@
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "build, test, gas",
+      "@squaresdk/core against anvil",
+      "verifies on Arc Testnet",
+      "circuits",
+      "prover (real proving key)",
+      "services/prover (hermetic)",
+      "packages/data",
+      "packages/hardening",
+      "packages/observability",
+      "packages/x402 (anvil)",
+      "packages/aa (anvil)",
+      "services/indexer (anvil)",
+      "services/keeper (anvil)",
+      "app (static export)",
+      "a2a",
+      "cli",
+      "did-aip-driver (unit)",
+      "did-aip-driver image",
+      "secret scan",
+      "forbidden strings"
+    ]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": null,
+  "restrictions": null,
+  "required_linear_history": false,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "required_conversation_resolution": true
+}

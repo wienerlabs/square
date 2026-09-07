@@ -1,0 +1,43 @@
+name: circom
+description: Install a pinned circom compiler on a Linux runner, checksum-verified.
+
+# circom is a Rust binary and building it from source takes minutes; iden3
+# publishes a release binary, so CI takes that. The version is pinned and the
+# download is checked against a sha256 recorded here, because an unpinned
+# compiler silently changes what the constraint tests are testing, and an
+# unverified download means whoever can answer for github.com chooses the
+# compiler that produces this project's proving key.
+#
+# The digest below was taken from the released asset:
+#   curl -sSL -o circom https://github.com/iden3/circom/releases/download/v2.2.3/circom-linux-amd64
+#   shasum -a 256 circom
+#   85342c7ff332d948df7c0c50ecf201e6129349aef550ce873f3c811b79fe53a3
+
+inputs:
+  version:
+    description: circom release tag.
+    required: false
+    default: v2.2.3
+  sha256:
+    description: sha256 of that release's circom-linux-amd64 asset.
+    required: false
+    default: 85342c7ff332d948df7c0c50ecf201e6129349aef550ce873f3c811b79fe53a3
+
+runs:
+  using: composite
+  steps:
+    - name: Install circom
+      shell: bash
+      # The inputs go through the environment rather than into the script text:
+      # an expression interpolated into a `run:` body is executed, not quoted.
+      env:
+        CIRCOM_VERSION: ${{ inputs.version }}
+        CIRCOM_SHA256: ${{ inputs.sha256 }}
+      run: |
+        set -euo pipefail
+        url="https://github.com/iden3/circom/releases/download/${CIRCOM_VERSION}/circom-linux-amd64"
+        curl -fsSL --retry 3 --retry-delay 2 -o /tmp/circom "$url"
+        echo "${CIRCOM_SHA256}  /tmp/circom" | sha256sum -c -
+        chmod +x /tmp/circom
+        sudo mv /tmp/circom /usr/local/bin/circom
+        circom --version

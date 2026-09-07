@@ -7,11 +7,10 @@ on:
       - "contracts/**"
       - "packages/core/**"
       - ".github/workflows/contracts.yml"
+  # No path filter on pull_request, deliberately. A required status check that a
+  # filter skips never reports, and GitHub blocks the merge waiting for a run
+  # that will not happen. The push filter above still keeps main's runs narrow.
   pull_request:
-    paths:
-      - "contracts/**"
-      - "packages/core/**"
-      - ".github/workflows/contracts.yml"
   workflow_dispatch:
 
 permissions:
@@ -45,6 +44,24 @@ jobs:
       - name: Gas report
         working-directory: contracts
         run: forge test --gas-report > ../gas-report.txt
+
+      # --ir-minimum because coverage disables the optimizer to keep the source
+      # mapping honest, and SquareJob then fails to compile with "stack too
+      # deep". Deployment scripts and mocks are excluded: neither has assertions
+      # to cover, and counting them reports the contracts that ship as lower
+      # than they are.
+      - name: Coverage
+        working-directory: contracts
+        run: |
+          set -o pipefail
+          forge coverage --ir-minimum --no-match-coverage "(script|test)/" | tee ../coverage.txt
+          {
+            echo '### Contract coverage'
+            echo
+            echo '```'
+            sed -n '/^╭/,/^╰/p' ../coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Gas report on the pull request
         if: github.event_name == 'pull_request'
@@ -117,3 +134,41 @@ jobs:
         run: |
           npm run lifecycle
           cat "$LIFECYCLE_REPORT"
+
+  # Arc's precompiles, not revm's. "It verifies in Foundry" and "it verifies on
+  # Arc" are different claims; this job is the second one. An eth_call with a
+  # state override runs the real bytecode against the real 0x06/0x07/0x08 for
+  # one call, so it needs no deployment, no key and no gas — which is why it can
+  # run on fork pull requests too.
+  arc:
+    name: verifies on Arc Testnet
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: A proof the prover produced, against Arc's precompiles
+        run: node script/verify-on-arc.mjs
+
+      # The deployed verifier, when the repository says where one is. The
+      # address lives in a repository variable rather than in this file because
+      # it is temporary — square#16 produces a new proving key and therefore a
+      # new verifier at a new address — so an unset variable makes the step
+      # disappear instead of failing against a stale address.
+      - name: The deployed verifier, if one is configured
+        if: vars.ARC_VERIFIER_ADDRESS != ''
+        env:
+          ADDRESS: ${{ vars.ARC_VERIFIER_ADDRESS }}
+        run: node script/verify-on-arc.mjs --address "$ADDRESS"

@@ -1,0 +1,175 @@
+name: circuits
+
+# The circuit, and the one job that proves against it for real.
+#
+# Both live here because both need the same thing: a pinned circom and a built
+# proving key. Splitting them into two workflows would install and build twice.
+#
+# The building is the point, not setup. Every describe() in circuits/test is
+# guarded by skipIf(!isBuilt(...)), and three suites in services/prover skip
+# without a proving key. Those guards are right on a laptop and wrong in CI —
+# a runner with no compiler reports green having executed almost nothing. Both
+# jobs therefore build first and then fail if the artifacts are not on disk,
+# and both name every test that was skipped anyway on the run summary.
+#
+# Measured, on this repository, with the artifacts moved aside:
+#   circuits        8 passed | 41 skipped (49), exit 0
+#   prover          63 passed |  6 skipped (69), exit 0
+#
+# Hermetic apart from one fetch: the phase-1 powers of tau, hash-checked against
+# the adopted file by circuits/scripts/fetch-ptau.mjs, so neither the mirror nor
+# the Actions cache is trusted for its contents.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "circuits/**"
+      - "services/prover/**"
+      - ".github/actions/circom/**"
+      - ".github/scripts/vitest-summary.mjs"
+      - ".github/workflows/circuits.yml"
+  # No path filter on pull_request, deliberately. A required status check that a
+  # filter skips never reports, and GitHub blocks the merge waiting for a run
+  # that will not happen. The push filter above still keeps main's runs narrow.
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: circuits-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  circuits:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: circuits
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: circuits/package-lock.json
+
+      - uses: ./.github/actions/circom
+
+      - run: npm ci
+
+      # 9.5 MB from S3 on every run otherwise. Keyed on fetch-ptau.mjs, which is
+      # where the adoption record lives — filename, size and both digests — so
+      # adopting a different powers of tau misses the cache instead of reusing
+      # the old file. fetch-ptau.mjs re-verifies the bytes on every run either
+      # way, which is what makes caching a downloaded trust anchor safe at all.
+      - name: Cache the phase-1 powers of tau
+        uses: actions/cache@v4
+        with:
+          path: circuits/build/ppot_0080_13.ptau
+          key: ptau-${{ hashFiles('circuits/scripts/fetch-ptau.mjs') }}
+
+      - name: Compile the circuits and build a development proving key
+        run: npm run build
+
+      - name: The artifacts the tests refuse to run without
+        run: |
+          set -uo pipefail
+          missing=0
+          for f in \
+            build/payment_js/payment.wasm \
+            build/payment.zkey \
+            build/payment_vk.json \
+            build/timestamp_checked_js/timestamp_checked.wasm \
+            build/timestamp_unchecked_js/timestamp_unchecked.wasm
+          do
+            if [ -f "$f" ]; then echo "  ok      $f"
+            else echo "  MISSING $f"; missing=1; fi
+          done
+          exit $missing
+
+      # What the key is, printed on every run, read out of the binary rather
+      # than taken from a claim in a README: a real phase 1 and a development
+      # phase 2, until square#16's ceremony runs.
+      - name: What the proving key's setup actually is
+        run: node scripts/inspect-zkey-setup.mjs build/payment.zkey
+
+      - name: Tests
+        run: npm test -- --reporter=default --reporter=json --outputFile.json=/tmp/circuits.json
+
+      - name: How many tests ran
+        if: always()
+        run: node ../.github/scripts/vitest-summary.mjs /tmp/circuits.json circuits
+
+  # packages.yml already runs this service hermetically, which is the right
+  # check for a contributor who has not built the circuit. It is not the whole
+  # story: without a key, five real tests skip — the three that drive POST
+  # /prove through a genuine Groth16 prove, and the two that check the prover's
+  # Solidity calldata against `snarkjs zkey export soliditycalldata`. Those are
+  # the two claims this service exists to support. This job runs them.
+  proving:
+    name: prover (real proving key)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: ./.github/actions/circom
+
+      # Same key as the job above, so the two share one cached download.
+      - name: Cache the phase-1 powers of tau
+        uses: actions/cache@v4
+        with:
+          path: circuits/build/ppot_0080_13.ptau
+          key: ptau-${{ hashFiles('circuits/scripts/fetch-ptau.mjs') }}
+
+      - name: Build the circuit and a development proving key
+        working-directory: circuits
+        run: |
+          npm ci
+          npm run build
+
+      # The prover depends on @squaresdk/observability by path.
+      - name: Build @squaresdk/observability
+        working-directory: packages/observability
+        run: |
+          npm install
+          npm run build
+
+      # What services/prover/README.md tells a contributor to do by hand.
+      - name: Put the artifacts where the service looks for them
+        run: |
+          set -euo pipefail
+          mkdir -p services/prover/artifacts
+          cp circuits/build/payment.zkey services/prover/artifacts/
+          cp circuits/build/payment_js/payment.wasm services/prover/artifacts/
+          ls -l services/prover/artifacts
+
+      - name: The artifacts the end-to-end suites refuse to run without
+        run: |
+          set -uo pipefail
+          missing=0
+          for f in services/prover/artifacts/payment.wasm services/prover/artifacts/payment.zkey; do
+            if [ -f "$f" ]; then echo "  ok      $f"
+            else echo "  MISSING $f"; missing=1; fi
+          done
+          exit $missing
+
+      - name: Tests, with the real circuit
+        working-directory: services/prover
+        env:
+          NODE_ENV: test
+          PROVER_ARTIFACTS_DIR: ./artifacts
+        run: |
+          npm install --install-links
+          npm test -- --reporter=default --reporter=json --outputFile.json=/tmp/proving.json
+
+      - name: How many tests ran
+        if: always()
+        run: node .github/scripts/vitest-summary.mjs /tmp/proving.json "prover (real proving key)"
