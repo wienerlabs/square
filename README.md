@@ -20,6 +20,7 @@ replace. Nothing carries an assurance claim.
 | Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | deployed on Arc Testnet, 102 Foundry tests, the five settlement paths run on the testnet with real USDC and the deployed ERC-8004 registries ([docs/deploy/lifecycle-5042002.md](docs/deploy/lifecycle-5042002.md)) |
 | Services: indexer, keeper, x402 gateway, data layer, observability | implemented and tested against the local stack |
 | Compliance: circuit, prover, Groth16 verifier, `ComplianceHook` | circuit, prover and verifier live (#14, #18, #17); the hook slot is open (#27) |
+| App: reference web application (`app/`) | static Next.js export that reads the deployed contracts through `@squaresdk/core` and drives every lifecycle action from a connected wallet; no mocked data ([app/README.md](app/README.md)) |
 
 > The ZK trusted setup inherited from the prior work is a **demo setup**, not a
 > ceremony, in **both phases**: phase 2 carries a single contribution and no
@@ -77,7 +78,7 @@ packages/    did-resolver, cli, did-aip-driver, core (SDK, embedded ABIs), data 
              failover, signed actions), observability (logs, metrics, health, alerts),
              x402 (payment gateway), aa (ERC-4337 smart accounts)
 services/    prover, indexer, keeper
-app/         Next.js reference application
+app/         Next.js reference application (static export, wagmi, Open Runde design system)
 docs/        Specifications, design notes, measurements, disclosure
 ```
 

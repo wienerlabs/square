@@ -12,6 +12,7 @@ on:
       - "services/indexer/**"
       - "services/keeper/**"
       - "services/prover/**"
+      - "app/**"
       - "contracts/**"
       - ".github/workflows/packages.yml"
   pull_request:
@@ -24,6 +25,7 @@ on:
       - "services/indexer/**"
       - "services/keeper/**"
       - "services/prover/**"
+      - "app/**"
       - "contracts/**"
       - ".github/workflows/packages.yml"
   workflow_dispatch:
@@ -114,3 +116,25 @@ jobs:
         run: |
           npm install --install-links
           npm test
+
+  app:
+    name: app (static export)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build path dependencies
+        run: |
+          for dep in packages/did-resolver packages/core; do
+            (cd "$dep" && npm install --install-links && npm run build)
+          done
+      - name: Install, typecheck, build
+        working-directory: app
+        run: |
+          npm install --install-links
+          npm run typecheck
+          npm run build
+      - name: Export is complete
+        run: test -f app/out/index.html && test -f app/out/dashboard/index.html
