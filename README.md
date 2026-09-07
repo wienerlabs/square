@@ -1,8 +1,13 @@
-<p><img src="app/public/logo.svg" alt="" width="56" height="56" /></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app/public/logo-inverse.svg">
+    <img src="app/public/logo.svg" alt="Square" width="96" height="96">
+  </picture>
+</p>
 
-# Square
+<h1 align="center">Square</h1>
 
-**Compliance-gated settlement for autonomous agent work, on [Arc](https://arc.io).**
+<p align="center"><strong>Compliance-gated settlement for autonomous agent work, on <a href="https://arc.io">Arc</a>.</strong></p>
 
 An institution commits a private spending mandate on-chain. Identified agents execute
 against it. Every release out of escrow must first prove, in zero knowledge, that it

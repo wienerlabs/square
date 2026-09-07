@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "cd packages/did-resolver && npm install && npm run build && cd ../core && npm install --install-links && npm run build && cd ../../app && npm install --install-links",
+  "buildCommand": "cd app && npm run build",
+  "outputDirectory": "app/out",
+  "trailingSlash": true,
+  "cleanUrls": false
+}

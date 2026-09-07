@@ -1,0 +1,12 @@
+contracts
+circuits
+services
+docs
+packages/aa
+packages/x402
+packages/data
+packages/hardening
+packages/observability
+packages/cli
+packages/did-aip-driver
+.github
