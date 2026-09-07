@@ -6,19 +6,36 @@ pragma solidity ^0.8.28;
 ///         counter that makes the circuit's `daily_spent_before` signal mean
 ///         something.
 ///
-/// The policy itself stays private. What lives here is a Poseidon commitment to
-/// it — the circuit's `policy_data_hash`, public signal 1 — plus the running
-/// total the compliance module holds a proof to. Everything the policy actually
-/// says (the ceilings, the token whitelist, the blocked addresses, the allowed
-/// hours) never reaches the chain.
+/// The policy itself stays off chain. What lives here is a Poseidon commitment
+/// to it — the circuit's `policy_data_hash`, public signal 1 — plus the running
+/// total the compliance module holds a proof to, and the public daily ceiling
+/// argued in docs/decisions/public-daily-ceiling.md.
+///
+/// The commitment is `Poseidon(8)` over eight policy fields and **carries no
+/// nonce** (circuits/payment.circom:395-404). It hides the policy only as far
+/// as those fields are hard to guess, and `max_daily` is one of them and is
+/// published here as `dailyLimit`. What the hiding actually rests on, and what
+/// an operator has to do to keep it true, is written down in
+/// docs/decisions/public-daily-ceiling.md — read it before describing anything
+/// here as private.
 interface IPolicyRegistry {
     /// @param commitment  Poseidon `policy_data_hash`. Zero means "no policy".
-    /// @param dailyLimit  Public ceiling in USDC base units, 6 decimals.
+    /// @param dailyLimit  Public ceiling in USDC base units, 6 decimals. Bounded
+    ///        by `type(uint64).max` because the circuit constrains
+    ///        `daily_spent_before` to 64 bits (`Num2Bits(64)`), and a counter
+    ///        the proof system cannot express is a state nobody could ever
+    ///        prove their way out of.
     /// @param updatedAt   When the commitment last changed.
+    /// @param epoch       Incremented on every `setPolicy`. A proof is built
+    ///        against one version of a policy; without a monotonic version a
+    ///        consumer cannot tell that the commitment was replaced between
+    ///        generating the proof and verifying it. `updatedAt` cannot serve —
+    ///        two writes in one block share a timestamp.
     struct Policy {
         bytes32 commitment;
         uint128 dailyLimit;
         uint64 updatedAt;
+        uint64 epoch;
     }
 
     /// @param day    UTC day index, `timestamp / 86400`.
@@ -28,7 +45,9 @@ interface IPolicyRegistry {
         uint128 spent;
     }
 
-    event PolicyCommitted(address indexed poster, bytes32 indexed commitment, uint128 dailyLimit);
+    event PolicyCommitted(
+        address indexed poster, bytes32 indexed commitment, uint128 dailyLimit, uint64 epoch
+    );
     event SpendRecorded(address indexed poster, uint64 indexed day, uint256 amount, uint256 spentAfter);
     event SpenderUpdated(address indexed spender, bool allowed);
 
@@ -36,6 +55,8 @@ interface IPolicyRegistry {
     error ZeroAddress();
     error NoPolicy(address poster);
     error NotASpender(address caller);
+    error LimitExceedsProofRange(uint128 dailyLimit);
+    error RenounceDisabled();
     error DailyLimitExceeded(address poster, uint256 spentBefore, uint256 amount, uint128 dailyLimit);
 
     /// @notice Commit to a policy for the caller, or replace the commitment.
@@ -44,8 +65,24 @@ interface IPolicyRegistry {
     function setPolicy(bytes32 commitment, uint128 dailyLimit) external;
 
     /// @notice Add `amount` to `poster`'s spend for the current UTC day.
+    ///
     /// @dev Callable only by a registered spender — the compliance module,
     ///      inline during a release.
+    ///
+    ///      **`amount` is what is released to the payee, not what left the
+    ///      client's treasury.** It is the same number the proof carries as
+    ///      public signal 3, which is what makes the counter and the circuit's
+    ///      rule 2 talk about the same quantity. The only caller that can reach
+    ///      this is the compliance module from `SquareHook._checkRelease`,
+    ///      where it is `netPayout(jobId) * providerBps / 10_000` — the budget
+    ///      after the platform and evaluator fees and after any arbitration
+    ///      split.
+    ///
+    ///      The consequence, stated rather than left to be discovered: fees and
+    ///      the part of a disputed budget refunded to the client are **not**
+    ///      counted against the daily ceiling. The ceiling bounds what agents
+    ///      are paid, not what the escrow consumed.
+    ///
     /// @return spentBefore The poster's total for the day *before* this
     ///         payment: the value the proof's `daily_spent_before` has to agree
     ///         with.
@@ -55,6 +92,7 @@ interface IPolicyRegistry {
     function setSpender(address spender, bool allowed) external;
 
     function policyOf(address poster) external view returns (Policy memory);
+    function epochOf(address poster) external view returns (uint64);
     function commitmentOf(address poster) external view returns (bytes32);
     function spentToday(address poster) external view returns (uint256);
     function currentDay() external view returns (uint64);

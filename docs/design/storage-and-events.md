@@ -38,6 +38,7 @@ other is implemented. The two questions #6 was asked answer as follows.
 | `Arbitration` | bonded disputes, versioned arbiter set, M-of-N vote by bitmask, decision record | yes: dispute bonds until the dispute closes |
 | `ClaimMarket` | receivable listing, purchase, cancellation, payee lookup | no: price moves buyer → seller directly |
 | `SquareHook` | the single whitelisted `IACPHook`: payout routing, compliance slot, reputation and validation writes | no |
+| `PolicyRegistry` | the policy commitment and the daily spend counter the compliance module reads and moves | no |
 
 `SquareJob` never reads a live token balance. Every transfer out is computed
 from the stored `budget` and the fee basis points snapshotted at funding.
@@ -209,10 +210,36 @@ validationOf       mapping(uint256 jobId => bytes32 requestHash)     bound at su
 recorded           mapping(uint256 jobId => bool)                    reputation written once
 ```
 
+## PolicyRegistry storage
+
+Not part of the job lifecycle: it is keyed by the institution, not by `jobId`, so
+nothing here appears in a per-job filter.
+
+```
+policies    mapping(address poster => Policy)
+              commitment  bytes32     the circuit's policy_data_hash; zero means no policy
+              dailyLimit  uint128     public ceiling, USDC base units, bounded by uint64 max
+              updatedAt   uint64      when the commitment last changed
+              epoch       uint64      +1 on every setPolicy; what a proof binds to
+spend       mapping(address poster => DailySpend)
+              day         uint64      UTC day index, timestamp / 86400
+              spent       uint128     recorded against that day; stale days read as zero
+spenders    mapping(address spender => bool)   who may move a counter — #27's module
+```
+
+`Policy` is two slots (`bytes32`, then `uint128 + uint64 + uint64`) and
+`DailySpend` is one (`uint64 + uint128`), so a second release in the same day is
+a single warm `SSTORE`.
+
+The reset is lazy: a stored `day` that is not today reads as zero and nothing has
+to run at midnight. It is a calendar day, not a rolling window — see
+[public-daily-ceiling.md](../decisions/public-daily-ceiling.md).
+
 ## Events
 
 Every event carries `jobId` as its first indexed topic so one filter per contract
-returns a job's whole history.
+returns a job's whole history. `PolicyRegistry` is the exception, below: it is
+keyed by the institution and has no `jobId` to carry.
 
 ### SquareJob, normative (ERC-8183)
 
@@ -289,6 +316,20 @@ What the normative set does not carry and the indexer needs.
 | `ValidationRecorded(uint256 indexed jobId, bytes32 indexed requestHash, uint8 response)` | |
 | `ValidationWriteFailed(uint256 indexed jobId, bytes32 indexed requestHash, bytes reason)` | |
 | `ComplianceModuleUpdated(address indexed module)` | |
+
+### PolicyRegistry
+
+Keyed by `poster` rather than `jobId`. An indexer reconstructing an
+institution's compliance state filters on the poster address.
+
+| Event | Carries |
+|---|---|
+| `PolicyCommitted(address indexed poster, bytes32 indexed commitment, uint128 dailyLimit, uint64 epoch)` | on every `setPolicy`, including a replacement; `epoch` is what distinguishes them |
+| `SpendRecorded(address indexed poster, uint64 indexed day, uint256 amount, uint256 spentAfter)` | on every accepted release; `day` is the UTC day index |
+| `SpenderUpdated(address indexed spender, bool allowed)` | owner only |
+
+A refused release emits nothing: `recordSpend` reverts, and the revert
+propagates out of `SquareJob.complete`, so there is no partial state to observe.
 
 ## When the ERC-8004 registries are written
 

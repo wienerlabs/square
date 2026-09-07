@@ -7,6 +7,7 @@ import {KeeperEvaluator} from "../src/KeeperEvaluator.sol";
 import {Arbitration} from "../src/Arbitration.sol";
 import {ClaimMarket} from "../src/ClaimMarket.sol";
 import {SquareHook} from "../src/SquareHook.sol";
+import {PolicyRegistry} from "../src/PolicyRegistry.sol";
 import {MockUSDC3009} from "../test/mocks/MockUSDC3009.sol";
 import {MockIdentityRegistry, MockReputationRegistry, MockValidationRegistry} from "../test/mocks/MockRegistries.sol";
 
@@ -32,6 +33,7 @@ contract DeployLocal is Script {
         Arbitration arbitration;
         ClaimMarket market;
         SquareHook hook;
+        PolicyRegistry policy;
     }
 
     function run() external {
@@ -65,6 +67,12 @@ contract DeployLocal is Script {
             address(m.validation),
             deployer
         );
+        // Deployed but not wired: the hook's compliance slot stays empty until
+        // square#27 supplies a module, and the registry's spender set stays
+        // empty until there is one to register. Deploying it here means the
+        // local stack matches the tree, and the address is in 31337.json for
+        // whoever writes that module.
+        s.policy = new PolicyRegistry(deployer);
         s.keeper.setArbitration(address(s.arbitration));
         s.kernel.setHookWhitelist(address(s.hook), true);
         address[] memory arbiters = new address[](3);
@@ -89,6 +97,7 @@ contract DeployLocal is Script {
         vm.serializeAddress(json, "Arbitration", address(s.arbitration));
         vm.serializeAddress(json, "ClaimMarket", address(s.market));
         vm.serializeAddress(json, "SquareHook", address(s.hook));
+        vm.serializeAddress(json, "PolicyRegistry", address(s.policy));
         vm.serializeAddress(json, "USDC", address(m.usdc));
         vm.serializeAddress(json, "IdentityRegistry", address(m.identity));
         vm.serializeAddress(json, "ReputationRegistry", address(m.reputation));

@@ -31,7 +31,7 @@ contract PolicyRegistryTest is Test {
     address internal mallory = makeAddr("mallory");
 
     uint256 internal constant USDC = 1e6;
-    uint128 internal constant LIMIT = 50_000e6; // 50,000 USDC
+    uint128 internal constant LIMIT = 50_000e6; // 50,000 USDC, well inside uint64
     bytes32 internal constant COMMITMENT = bytes32(uint256(0x9f01));
     bytes32 internal constant OTHER_COMMITMENT = bytes32(uint256(0xbeef));
 
@@ -64,7 +64,7 @@ contract PolicyRegistryTest is Test {
 
     function test_setPolicy_emits() public {
         vm.expectEmit(true, true, false, true, address(registry));
-        emit IPolicyRegistry.PolicyCommitted(alice, COMMITMENT, LIMIT);
+        emit IPolicyRegistry.PolicyCommitted(alice, COMMITMENT, LIMIT, 1);
         _commit(alice, LIMIT);
     }
 
@@ -102,7 +102,7 @@ contract PolicyRegistryTest is Test {
         _commit(alice, LIMIT);
 
         vm.prank(mallory);
-        registry.setPolicy(OTHER_COMMITMENT, type(uint128).max);
+        registry.setPolicy(OTHER_COMMITMENT, type(uint64).max);
 
         assertEq(registry.commitmentOf(alice), COMMITMENT, "alice untouched");
         assertEq(registry.policyOf(alice).dailyLimit, LIMIT, "alice's limit untouched");
@@ -224,7 +224,9 @@ contract PolicyRegistryTest is Test {
         assertEq(registry.spentToday(alice), LIMIT, "the limit itself is allowed");
 
         vm.prank(hook);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(IPolicyRegistry.DailyLimitExceeded.selector, alice, LIMIT, 1, LIMIT)
+        );
         registry.recordSpend(alice, 1);
     }
 
@@ -237,7 +239,11 @@ contract PolicyRegistryTest is Test {
         registry.recordSpend(alice, 10_000 * USDC);
 
         vm.prank(hook);
-        vm.expectRevert();
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IPolicyRegistry.DailyLimitExceeded.selector, alice, 10_000 * USDC, LIMIT, LIMIT
+            )
+        );
         registry.recordSpend(alice, LIMIT);
 
         assertEq(registry.spentToday(alice), 10_000 * USDC, "unchanged");
@@ -343,19 +349,133 @@ contract PolicyRegistryTest is Test {
         new PolicyRegistry(address(0));
     }
 
+    // -------------------------------------------------- what the proof can carry
+
+    /// The circuit constrains daily_spent_before to 64 bits. A ceiling above
+    /// that would let the counter reach a value no proof could ever carry, and
+    /// the release would then fail in a way indistinguishable from a policy
+    /// mismatch.
+    function test_setPolicy_refusesACeilingTheProofCannotExpress() public {
+        uint128 tooBig = uint128(type(uint64).max) + 1;
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IPolicyRegistry.LimitExceedsProofRange.selector, tooBig));
+        registry.setPolicy(COMMITMENT, tooBig);
+    }
+
+    function test_setPolicy_allowsExactlyTheProofRange() public {
+        vm.prank(alice);
+        registry.setPolicy(COMMITMENT, type(uint64).max);
+        assertEq(registry.policyOf(alice).dailyLimit, type(uint64).max);
+    }
+
+    // ------------------------------------------------------------ the epoch
+
+    /// A proof is built against one version of a policy. Without a monotonic
+    /// version nobody can tell the commitment was replaced between generating
+    /// the proof and verifying it — and `updatedAt` cannot serve, because two
+    /// writes in one block share a timestamp.
+    function test_setPolicy_bumpsTheEpochEveryTime() public {
+        assertEq(registry.epochOf(alice), 0, "no policy, no epoch");
+
+        _commit(alice, LIMIT);
+        assertEq(registry.epochOf(alice), 1);
+
+        vm.prank(alice);
+        registry.setPolicy(OTHER_COMMITMENT, LIMIT);
+        assertEq(registry.epochOf(alice), 2);
+    }
+
+    function test_epoch_movesEvenWhenTheTimestampDoesNot() public {
+        _commit(alice, LIMIT);
+        uint64 at = registry.policyOf(alice).updatedAt;
+
+        vm.prank(alice);
+        registry.setPolicy(OTHER_COMMITMENT, LIMIT);
+
+        assertEq(registry.policyOf(alice).updatedAt, at, "same block, same timestamp");
+        assertEq(registry.epochOf(alice), 2, "the epoch still moved");
+    }
+
+    // ------------------------------------------------ the day is a calendar day
+
+    /// Not a rolling 24 hours: the whole ceiling at 23:59:59 and the whole of it
+    /// again one second later is within the policy. Asserted rather than left
+    /// implicit, because it is the kind of thing a reader assumes the other way.
+    function test_recordSpend_theCeilingIsPerCalendarDayNotPerRollingDay() public {
+        _commit(alice, LIMIT);
+
+        uint64 day = registry.currentDay();
+        vm.warp((uint256(day) + 1) * 1 days - 1); // 23:59:59
+        vm.prank(hook);
+        registry.recordSpend(alice, LIMIT);
+
+        vm.warp((uint256(day) + 1) * 1 days); // 00:00:00, one second later
+        vm.prank(hook);
+        registry.recordSpend(alice, LIMIT);
+
+        assertEq(registry.spentToday(alice), LIMIT, "a fresh day");
+        // Twice the daily ceiling inside one second. Bounding the burst is the
+        // per-transaction ceiling's job, inside the private policy.
+    }
+
+    // ------------------------------------------------------ the hazard, named
+
+    /// A client can zero its own ceiling at any time, and `recordSpend` then
+    /// reverts, and that revert propagates out of `SquareJob.complete`.
+    ///
+    /// On its own that is fail-closed and correct. Combined with square#90 —
+    /// where an expired job refunds the client in full — it is a way for a
+    /// client to refuse to pay for delivered work at the cost of one
+    /// transaction. The registry cannot fix that alone and does not try; the
+    /// test exists so the hazard is in the suite rather than only in prose.
+    /// See docs/decisions/public-daily-ceiling.md.
+    function test_theClientCanZeroItsOwnCeilingAndBlockEveryRelease() public {
+        _commit(alice, LIMIT);
+        vm.prank(hook);
+        registry.recordSpend(alice, 1_000 * USDC);
+
+        vm.prank(alice);
+        registry.setPolicy(COMMITMENT, 0);
+
+        vm.prank(hook);
+        // The day's spend is already above the new ceiling of zero, so every
+        // further release is refused — and so is `SquareJob.complete`.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IPolicyRegistry.DailyLimitExceeded.selector, alice, 1_000 * USDC, 1, uint128(0)
+            )
+        );
+        registry.recordSpend(alice, 1);
+    }
+
+    // ---------------------------------------------------------- renouncing
+
+    /// The owner's only power is the spender set, and `recordSpend` is
+    /// unreachable without a registered spender. Renouncing would freeze that
+    /// set permanently and with it every compliance-gated release.
+    function test_renounceOwnershipIsDisabled() public {
+        vm.prank(owner);
+        vm.expectRevert(IPolicyRegistry.RenounceDisabled.selector);
+        registry.renounceOwnership();
+
+        assertEq(registry.owner(), owner);
+    }
+
     // ------------------------------------------------------------- property
 
     /// However the day and the payments fall, the counter never passes the
     /// ceiling and never counts a reverted payment.
     function testFuzz_theCounterNeverPassesTheCeiling(uint128 limit, uint96 a, uint96 b, uint32 gap) public {
-        limit = uint128(bound(limit, 1, type(uint96).max));
+        limit = uint128(bound(limit, 1, type(uint64).max));
         _commit(alice, limit);
 
         vm.startPrank(hook);
         if (a <= limit) {
             registry.recordSpend(alice, a);
         } else {
-            vm.expectRevert();
+            vm.expectRevert(
+                abi.encodeWithSelector(IPolicyRegistry.DailyLimitExceeded.selector, alice, 0, a, limit)
+            );
             registry.recordSpend(alice, a);
         }
 
@@ -366,7 +486,9 @@ contract PolicyRegistryTest is Test {
         if (uint256(carried) + b <= limit) {
             registry.recordSpend(alice, b);
         } else {
-            vm.expectRevert();
+            vm.expectRevert(
+                abi.encodeWithSelector(IPolicyRegistry.DailyLimitExceeded.selector, alice, carried, b, limit)
+            );
             registry.recordSpend(alice, b);
         }
         vm.stopPrank();
