@@ -153,22 +153,47 @@ async function fundActors(deployment: SquareDeployment, actors: Actors): Promise
   }
   if (!funderKey) throw new Error("DEPLOYER_PRIVATE_KEY is required to fund the actors on a live chain");
   const funder = createWalletClient({ chain, transport: http(rpcUrl), account: privateKeyToAccount(funderKey) });
-  const perActor = parseEther(process.env["FUND_PER_ACTOR"] ?? "2");
+  const perActor = parseEther(process.env["FUND_PER_ACTOR"] ?? "1");
+  const clientFund = parseEther(process.env["FUND_CLIENT"] ?? "7");
+  const clientAddress = privateKeyToAccount(actors.client).address;
   for (const address of addresses) {
+    const target = address === clientAddress ? clientFund : perActor;
     const balance = await publicClient.getBalance({ address });
-    if (balance >= perActor) continue;
-    const hash = await funder.sendTransaction({ to: address, value: perActor - balance });
+    if (balance >= target) continue;
+    const hash = await funder.sendTransaction({ to: address, value: target - balance });
     await publicClient.waitForTransactionReceipt({ hash });
-    console.log(`funded ${address} with ${formatUnits(perActor - balance, 18)} USDC`);
+    console.log(`funded ${address} with ${formatUnits(target - balance, 18)} USDC`);
   }
 }
+
+const identityRegistryAbi = [
+  { type: "function", name: "register", stateMutability: "nonpayable", inputs: [], outputs: [{ type: "uint256" }] },
+  { type: "event", name: "Transfer", inputs: [{ name: "from", type: "address", indexed: true }, { name: "to", type: "address", indexed: true }, { name: "tokenId", type: "uint256", indexed: true }] },
+] as const;
+
+async function registerAgent(deployment: SquareDeployment, providerKey: Hex): Promise<bigint | undefined> {
+  if (process.env["AGENT_ID"]) return BigInt(process.env["AGENT_ID"]);
+  if (process.env["REGISTER_AGENT"] !== "1") return isAnvil ? 1n : undefined;
+  const wallet = createWalletClient({ chain, transport: http(rpcUrl), account: privateKeyToAccount(providerKey) });
+  const hash = await wallet.writeContract({ abi: identityRegistryAbi, address: deployment.identityRegistry, functionName: "register" });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  record("0-identity", "IdentityRegistry.register (provider agent)", receipt);
+  const minted = receipt.logs.find((log) => log.address.toLowerCase() === deployment.identityRegistry.toLowerCase() && log.topics.length === 4);
+  if (!minted || !minted.topics[3]) throw new Error("registration minted no agent");
+  const agentId = BigInt(minted.topics[3]);
+  console.log(`provider registered as ERC-8004 agent ${agentId}`);
+  return agentId;
+}
+
+let agentId: bigint | undefined;
 
 async function submittedJob(client: SquareClient, provider: SquareClient, budget: bigint, path: string, expiryOffset = 30n * 24n * 3600n): Promise<bigint> {
   const created = await client.createJob({ provider: provider.account, expiredAt: (await now()) + expiryOffset, spec: { path, at: Date.now() } });
   record(path, "createJob", created.receipt);
   record(path, "setBudget", (await provider.setBudget(created.jobId, budget)).receipt);
   record(path, "fund", (await client.fund(created.jobId, budget)).receipt);
-  record(path, "submit", (await provider.submit({ jobId: created.jobId, deliverable: hashDeliverable(`${path} ${created.jobId}`), agentId: process.env["AGENT_ID"] ? BigInt(process.env["AGENT_ID"]) : undefined })).receipt);
+  const submitArgs = agentId === undefined ? { jobId: created.jobId, deliverable: hashDeliverable(`${path} ${created.jobId}`) } : { jobId: created.jobId, deliverable: hashDeliverable(`${path} ${created.jobId}`), agentId };
+  record(path, "submit", (await provider.submit(submitArgs)).receipt);
   return created.jobId;
 }
 
@@ -199,12 +224,16 @@ async function main(): Promise<void> {
   const cranker = actor(deployment, actors.cranker);
   const budget = parseUnits(process.env["BUDGET_USDC"] ?? "5", 6);
   const horizon = BigInt(await client.settlementHorizon());
+  agentId = await registerAgent(deployment, actors.provider);
 
   const optimistic = await submittedJob(client, provider, budget, "1-optimistic");
   await expectRevert("finalize before the window closes", () => cranker.finalize(optimistic), /WindowOpen/);
   await waitUntil(BigInt(await client.challengeEndsAt(optimistic)), "the challenge window");
   const finalized = await cranker.finalize(optimistic);
   record("1-optimistic", "finalize (permissionless)", finalized.receipt);
+  const reputation = finalized.events.find((e) => e.contract === "SquareHook" && (e.eventName === "ReputationRecorded" || e.eventName === "ReputationWriteFailed"));
+  if (reputation) console.log(`1-optimistic | ${reputation.eventName} | agent ${agentId ?? "none"}`);
+  if (agentId !== undefined && reputation?.eventName !== "ReputationRecorded") throw new Error("reputation was not written for the registered agent");
   record("1-optimistic", "withdraw", (await provider.withdraw()).receipt);
   if ((await client.getJobRecord(optimistic)).status !== JobStatus.Completed) throw new Error("optimistic job did not complete");
 
@@ -231,6 +260,8 @@ async function main(): Promise<void> {
   record("2c-dispute-split", "finalizeDecided (split through the hook)", split.receipt);
   const routed = eventsNamed(split.events, "PayoutRouted")[0];
   if (!routed || routed.args.providerBps !== 4_000) throw new Error("split was not routed through the hook");
+  record("2c-dispute-split", "withdrawBond (returned to the client)", (await client.withdrawBond()).receipt);
+  record("2c-dispute-split", "withdraw (client share)", (await client.withdraw()).receipt);
 
   const expiryPath = "3-expiry";
   const expiring = await client.createJob({ provider: provider.account, expiredAt: (await now()) + horizon + 30n, spec: { path: expiryPath } });

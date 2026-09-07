@@ -68,6 +68,23 @@ anvil --port 8546 --chain-id 5042002 --fork-url https://rpc.testnet.arc.io
 cd packages/core && ARC_FORK_RPC_URL=http://127.0.0.1:8546 npm test
 ```
 
+## Deployed settlement stack
+
+| | |
+|---|---|
+| Network | Arc Testnet (`5042002`) |
+| `SquareJob` | [`0x2570a1511a562020c4F20c7ce97229376fe6B500`](https://testnet.arcscan.app/address/0x2570a1511a562020c4F20c7ce97229376fe6B500) |
+| `KeeperEvaluator` | [`0x6c62D57Ba7665ABF29795ac0c6d0245A0Ee8921e`](https://testnet.arcscan.app/address/0x6c62D57Ba7665ABF29795ac0c6d0245A0Ee8921e) |
+| `Arbitration` | [`0xA10C2e9f927BcEb6FB677b446E8ac8a4dd6cea4E`](https://testnet.arcscan.app/address/0xA10C2e9f927BcEb6FB677b446E8ac8a4dd6cea4E) |
+| `ClaimMarket` | [`0xc5495bc52f64C9Fa04c3906ca0d751D7bC3F56f3`](https://testnet.arcscan.app/address/0xc5495bc52f64C9Fa04c3906ca0d751D7bC3F56f3) |
+| `SquareHook` | [`0x92EC31aAdcD98Ba3528cfef67ec0690433c43E57`](https://testnet.arcscan.app/address/0x92EC31aAdcD98Ba3528cfef67ec0690433c43E57) |
+| Parameters | challenge window 120 s, dispute window 300 s, evaluator fee 50 bp, platform fee 100 bp, bond 1000 bp with a 1 USDC floor, 3 arbiters, threshold 2 |
+| Deployment file | `deployments/5042002.json`, embedded in `@squaresdk/core` |
+
+The windows are testnet values chosen so the acceptance run finishes in minutes;
+production values are days. The run itself, with every transaction and its gas,
+is [docs/deploy/lifecycle-5042002.md](../docs/deploy/lifecycle-5042002.md).
+
 ## Measured gas
 
 [docs/deploy/gas.md](../docs/deploy/gas.md).

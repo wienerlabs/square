@@ -45,8 +45,22 @@ const localAnvil: SquareDeployment = {
   squareHook: "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6",
 };
 
+const arcTestnet: SquareDeployment = {
+  chainId: ARC_TESTNET_CHAIN_ID,
+  usdc: "0x3600000000000000000000000000000000000000",
+  identityRegistry: "0x8004A818BFB912233c491871b3d84c89A494BD9e",
+  reputationRegistry: "0x8004B663056A597Dffe9eCcC1965A193B7388713",
+  validationRegistry: "0x8004Cb1BF31DAf7788923b405b754f57acEB4272",
+  squareJob: "0x2570a1511a562020c4F20c7ce97229376fe6B500",
+  keeperEvaluator: "0x6c62D57Ba7665ABF29795ac0c6d0245A0Ee8921e",
+  arbitration: "0xA10C2e9f927BcEb6FB677b446E8ac8a4dd6cea4E",
+  claimMarket: "0xc5495bc52f64C9Fa04c3906ca0d751D7bC3F56f3",
+  squareHook: "0x92EC31aAdcD98Ba3528cfef67ec0690433c43E57",
+};
+
 export const deployments: Readonly<Record<number, SquareDeployment>> = {
   [ANVIL_CHAIN_ID]: localAnvil,
+  [ARC_TESTNET_CHAIN_ID]: arcTestnet,
 };
 
 export function deploymentFor(chainId: number): SquareDeployment {

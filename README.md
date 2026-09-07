@@ -10,15 +10,14 @@ fits the mandate. The receivable created during the challenge window is discount
 
 ## Status
 
-**Pre-alpha on Arc Testnet.** One contract is on the testnet, the Groth16
-verifier, at an address the ceremony will replace. The settlement layer is
-implemented and tested; its deployment is the next step and its addresses will
-appear below when it lands. Nothing carries an assurance claim.
+**Pre-alpha on Arc Testnet.** The settlement layer and the Groth16 verifier are
+deployed on the testnet; the verifier sits at an address the ceremony will
+replace. Nothing carries an assurance claim.
 
 | Layer | State |
 |---|---|
 | Identity: `did:aip` v2, agent card, CLI, Universal Resolver driver | live against ERC-8004 on Arc Testnet ([docs/smoke](docs/smoke/)) |
-| Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | implemented, 102 Foundry tests, lifecycle proven on anvil and on an Arc Testnet fork with the deployed ERC-8004 registries; testnet deployment pending |
+| Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | deployed on Arc Testnet, 102 Foundry tests, the five settlement paths run on the testnet with real USDC and the deployed ERC-8004 registries ([docs/deploy/lifecycle-5042002.md](docs/deploy/lifecycle-5042002.md)) |
 | Services: indexer, keeper, x402 gateway, data layer, observability | implemented and tested against the local stack |
 | Compliance: circuit, prover, Groth16 verifier, `ComplianceHook` | circuit, prover and verifier live (#14, #18, #17); the hook slot is open (#27) |
 
@@ -124,11 +123,24 @@ verifier at a different address. See
 
 ### Square contracts
 
-Not deployed yet. The deployment is one command
-([contracts/README.md](contracts/README.md)) from the deployer at
-`0xaFF9CD31ae93e1bdD70FFDf0763C2e010037c65c` once it holds testnet USDC; the
-addresses, the transaction hashes of the five settlement paths and the measured
-gas land in [docs/deploy/](docs/deploy/) with that run.
+Deployed on 2026-09-07 from `0xaFF9CD31ae93e1bdD70FFDf0763C2e010037c65c` with
+`contracts/script/DeploySettlement.s.sol`. Testnet parameters: challenge window
+120 s, dispute window 300 s, evaluator fee 0.5 %, platform fee 1 %, bond 10 %
+with a 1 USDC floor, three arbiters with threshold 2. The owner is still the
+deployer; a Safe takes over before mainnet.
+
+| Contract | Address |
+|---|---|
+| `SquareJob` | [`0x2570a1511a562020c4F20c7ce97229376fe6B500`](https://testnet.arcscan.app/address/0x2570a1511a562020c4F20c7ce97229376fe6B500) |
+| `KeeperEvaluator` | [`0x6c62D57Ba7665ABF29795ac0c6d0245A0Ee8921e`](https://testnet.arcscan.app/address/0x6c62D57Ba7665ABF29795ac0c6d0245A0Ee8921e) |
+| `Arbitration` | [`0xA10C2e9f927BcEb6FB677b446E8ac8a4dd6cea4E`](https://testnet.arcscan.app/address/0xA10C2e9f927BcEb6FB677b446E8ac8a4dd6cea4E) |
+| `ClaimMarket` | [`0xc5495bc52f64C9Fa04c3906ca0d751D7bC3F56f3`](https://testnet.arcscan.app/address/0xc5495bc52f64C9Fa04c3906ca0d751D7bC3F56f3) |
+| `SquareHook` | [`0x92EC31aAdcD98Ba3528cfef67ec0690433c43E57`](https://testnet.arcscan.app/address/0x92EC31aAdcD98Ba3528cfef67ec0690433c43E57) |
+
+`@squaresdk/core` carries these addresses (`deployments[5042002]`). The five
+settlement paths were run against them with real USDC and a provider registered
+as ERC-8004 agent `892531`; every transaction hash and the measured gas are in
+[docs/deploy/lifecycle-5042002.md](docs/deploy/lifecycle-5042002.md).
 
 ## License
 
