@@ -168,3 +168,15 @@ the whole flow end to end, including the replay and tampering cases. `npm run
 test:live` additionally runs against Arc testnet with the real USDC contract when
 `ARC_TESTNET_RPC_URL`, `X402_FACILITATOR_PRIVATE_KEY` and
 `X402_PAYER_PRIVATE_KEY` are set; without them the live suite skips.
+
+## Verified on Arc Testnet
+
+The live suite ran on 2026-09-07 against the real USDC at
+`0x3600000000000000000000000000000000000000`: an unpaid request got a 402 with
+`PAYMENT-REQUIRED`, the paying client signed an EIP-3009 authorization, the
+in-process facilitator verified it, recorded it in the replay ledger and settled
+it with `transferWithAuthorization` in transaction
+[`0xf46145e280a3367ca5c4d8395b9f86dfee9a9f0a415fa09f1b5e355da04b8248`](https://testnet.arcscan.app/tx/0xf46145e280a3367ca5c4d8395b9f86dfee9a9f0a415fa09f1b5e355da04b8248)
+(91 665 gas, about 0.002 USDC at 22 gwei). On Arc the payee must be an address
+other than the facilitator, because the native balance that pays gas and the
+ERC-20 balance are the same account: pass `X402_PAYEE_ADDRESS`.
