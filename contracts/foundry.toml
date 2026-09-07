@@ -19,9 +19,10 @@ remappings = [
 
 [profile.ci]
 fuzz = { runs = 512 }
-# No invariant setting here until there is an invariant test to configure.
-# `invariant = { runs = 128, depth = 32 }` sat here and ran nothing: there is
-# no invariant_ function under test/. Put it back with the first one.
+# This ran nothing when #43 first looked: there was no invariant_ function under
+# test/. square#26 supplies the first two, on PolicyRegistry, so it is live again
+# — 128 runs of 32 calls each.
+invariant = { runs = 128, depth = 32 }
 
 [fmt]
 line_length = 110
