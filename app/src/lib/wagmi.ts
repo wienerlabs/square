@@ -7,6 +7,7 @@ export const ANVIL_RPC_URL = "http://127.0.0.1:8545";
 export const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
 export const DOCS_URL = "https://github.com/wienerlabs/square/tree/main/docs/design";
 export const REPO_URL = "https://github.com/wienerlabs/square";
+export const SITE_URL = "https://square-protocol.vercel.app";
 
 export const arcTestnet = defineChain({
   id: ARC_TESTNET_CHAIN_ID,
