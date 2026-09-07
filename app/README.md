@@ -13,8 +13,8 @@ The reference web application for Square, the compliance-gated settlement protoc
 
 | Route | Purpose |
 |---|---|
-| `/` | Landing page with the three settlement layers, the lifecycle and a live network strip (chain id, block, contract addresses, settlement horizon). |
-| `/dashboard` | Metric tiles, a filterable jobs table (All, Open, In window, Finalizable, Completed, Disputed) and, with a wallet connected, the pull-payment balances on SquareJob and Arbitration with Withdraw buttons. |
+| `/` | Landing page with live numbers (jobs opened, USDC escrowed, settled, last activity), the three settlement layers, the lifecycle and a live network strip. |
+| `/dashboard` | Metric tiles, the escrow flow and pipeline charts, a jobs table with phase filters, a search by id or address and a button that reads 50 older jobs at a time, and, with a wallet connected, the pull-payment balances with Withdraw buttons plus an inbox of the jobs waiting on that wallet: deliverable to submit, escrow to fund, budget to agree, challenge window open, ready to finalize, refund available. |
 | `/job?id=N` | The full job record, a timeline built from the record's timestamps, listing and dispute details, and every lifecycle action the connected wallet may take: set budget, fund (with automatic USDC approval), submit, finalize, dispute, vote, apply a decision, lapse, list, buy or cancel a claim, reject, claim refund, withdraw, record expiry. |
 | `/new` | Create a job: provider, expiry (at least the settlement horizon away), a JSON spec hashed to `spec:0x...`, and an optional budget set right after creation. |
 | `/network` | Keeper windows, fees and treasury, the arbiter set and threshold, bond parameters, registry addresses, the read path and links to the design notes. |
@@ -53,8 +53,11 @@ Install with links so the two workspace packages are copied into `node_modules` 
 ```console
 $ npm install --install-links
 $ npm run typecheck
+$ npm test
 $ npm run build
 ```
+
+`npm test` runs the unit tests with Vitest: the phase derivation, the formatters, the chart aggregation, the wallet inbox and the live statistics are pure modules under `src/lib` and are tested without a chain.
 
 `npm run build` writes the static site to `out/`. Serve it with any static file server, for example:
 

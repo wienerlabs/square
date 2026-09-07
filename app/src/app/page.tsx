@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Chip } from "@/components/Chip";
 import { GhostButton } from "@/components/GhostButton";
+import { LiveStats } from "@/components/LiveStats";
 import { NetworkStrip } from "@/components/NetworkStrip";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { SectionHeading } from "@/components/SectionHeading";
@@ -51,6 +52,10 @@ export default function LandingPage() {
             Read the design
           </GhostButton>
         </div>
+      </section>
+
+      <section aria-label="Live numbers" className="flex flex-col gap-4">
+        <LiveStats />
       </section>
 
       <section aria-label="Features" className="grid gap-4 md:grid-cols-3">

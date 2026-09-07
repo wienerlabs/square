@@ -4,6 +4,7 @@ import { JobStatus } from "@squaresdk/core";
 import Link from "next/link";
 import { useState } from "react";
 import { useAccount } from "wagmi";
+import { ActionInbox } from "@/components/ActionInbox";
 import { AddressLink } from "@/components/AddressLink";
 import { AmountUsdc } from "@/components/AmountUsdc";
 import { EscrowFlowChart } from "@/components/charts/EscrowFlowChart";
@@ -20,7 +21,9 @@ import { TabBar } from "@/components/TabBar";
 import { escrowFlow, phaseBreakdown } from "@/lib/charts";
 import { formatBigint, formatCountdown, formatTimestamp } from "@/lib/format";
 import { indexerUrl, useIndexerOverview } from "@/lib/indexer";
-import { jobPhase, PHASE_LABELS, useJobs, useNow, usePositions, useSquare, type JobPhase, type JobSummary } from "@/lib/square";
+import { inputClass } from "@/components/Field";
+import { jobPhase, PHASE_LABELS, RECENT_JOB_WINDOW, useJobs, useNow, usePositions, useSquare, type JobPhase, type JobSummary } from "@/lib/square";
+import { matchesQuery } from "@/lib/stats";
 import { describeError, useTx } from "@/lib/tx";
 import { activeChain } from "@/lib/wagmi";
 
@@ -69,8 +72,10 @@ function ChallengeCell({ job, now }: { job: JobSummary; now: number }) {
 
 export function DashboardView() {
   const [tab, setTab] = useState("all");
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(RECENT_JOB_WINDOW);
   const now = useNow();
-  const jobsQuery = useJobs();
+  const jobsQuery = useJobs(limit);
   const indexer = useIndexerOverview();
   const { address, chainId } = useAccount();
   const positions = usePositions(address);
@@ -95,7 +100,8 @@ export function DashboardView() {
     completed: counts.completed,
     disputed: counts.disputed,
   };
-  const filtered = withPhase.filter(({ job, phase }) => matchesTab(job, phase, tab));
+  const filtered = withPhase.filter(({ job, phase }) => matchesTab(job, phase, tab) && matchesQuery(job, query));
+  const olderAvailable = jobsQuery.data ? jobsQuery.data.counter > BigInt(jobsQuery.data.scanned) : false;
   const flow = jobsQuery.data ? escrowFlow(jobs) : null;
   const slices = jobsQuery.data ? phaseBreakdown(jobs, now, PHASE_LABELS) : [];
 
@@ -177,6 +183,8 @@ export function DashboardView() {
         <p className="text-caption text-graphite">{caption}</p>
       </section>
 
+      {address ? <ActionInbox jobs={jobs} address={address} now={now} scanned={scanned} /> : null}
+
       <section aria-label="Activity" className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
         <EscrowFlowChart series={flow} scanned={scanned} loading={jobsQuery.isPending} />
         <PipelineChart slices={slices} scanned={scanned} loading={jobsQuery.isPending} />
@@ -233,7 +241,23 @@ export function DashboardView() {
       ) : null}
 
       <section className="flex flex-col gap-6">
-        <TabBar tabs={tabs.map((entry) => ({ ...entry, count: tabCounts[entry.id] ?? 0 }))} active={tab} onChange={setTab} label="Job filters" />
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0 flex-1">
+            <TabBar tabs={tabs.map((entry) => ({ ...entry, count: tabCounts[entry.id] ?? 0 }))} active={tab} onChange={setTab} label="Job filters" />
+          </div>
+          <label className="flex flex-col gap-2 lg:w-72">
+            <span className="sr-only">Find a job by id or address</span>
+            <input
+              type="search"
+              className={inputClass}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Job id or address"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+        </div>
         <DataTable
           caption="Jobs"
           columns={columns}
@@ -251,10 +275,23 @@ export function DashboardView() {
                 action={<PrimaryButton href="/new">Create the first job</PrimaryButton>}
               />
             ) : (
-              <EmptyState title="No jobs match this filter" hint={`Nothing among the ${scanned} most recent jobs is in this state.`} />
+              <EmptyState
+                title={query.trim().length > 0 ? "No jobs match this search" : "No jobs match this filter"}
+                hint={query.trim().length > 0 ? `Nothing among the ${scanned} most recent jobs has that id or address.` : `Nothing among the ${scanned} most recent jobs is in this state.`}
+              />
             )
           }
         />
+        {olderAvailable ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <GhostButton size="sm" onClick={() => setLimit((current) => current + RECENT_JOB_WINDOW)} disabled={jobsQuery.isFetching}>
+              {jobsQuery.isFetching ? "Reading" : `Load ${RECENT_JOB_WINDOW} older jobs`}
+            </GhostButton>
+            <span className="text-caption text-ash">
+              {scanned} of {jobsQuery.data ? formatBigint(jobsQuery.data.counter) : ""} jobs loaded.
+            </span>
+          </div>
+        ) : null}
       </section>
     </div>
   );
