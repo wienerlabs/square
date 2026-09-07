@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Logo } from "./Logo";
 import { WalletButton } from "./WalletButton";
 import { DOCS_URL } from "@/lib/wagmi";
 
@@ -23,7 +24,7 @@ export function NavPill() {
         className="pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto rounded-full border border-fog bg-paper-white p-1.5 shadow-subtle-2"
       >
         <Link href="/" className={`${linkClass} gap-2 pl-3 text-carbon`}>
-          <span aria-hidden="true" className="size-2.5 rounded-[2px] bg-carbon" />
+          <Logo className="size-4 text-carbon" />
           Square
         </Link>
         <span aria-hidden="true" className="mx-1 h-5 w-px bg-fog" />

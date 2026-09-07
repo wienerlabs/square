@@ -1,69 +1,44 @@
 "use client";
 
-import { ColorType, createChart, CrosshairMode, HistogramSeries, LineSeries, LineStyle, type UTCTimestamp } from "lightweight-charts";
-import { useEffect, useRef } from "react";
-import { chartColors, chartFont, formatCompactUsdc, HOUR, type FlowSeries } from "@/lib/charts";
+import { Area, Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { chartColors, chartFont, DAY, formatCompactUsdc, HOUR, type FlowPoint, type FlowSeries } from "@/lib/charts";
 import { ChartFrame, ChartPlaceholder } from "./ChartFrame";
 
 const HEIGHT = 260;
 
-function Canvas({ series }: { series: FlowSeries }) {
-  const container = useRef<HTMLDivElement>(null);
+function tickLabel(time: number, bucket: number): string {
+  const date = new Date(time * 1000);
+  if (bucket >= DAY) return date.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+  return date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
 
-  useEffect(() => {
-    const element = container.current;
-    if (!element) return;
-    const chart = createChart(element, {
-      autoSize: true,
-      layout: {
-        background: { type: ColorType.Solid, color: chartColors.paper },
-        textColor: chartColors.graphite,
-        fontFamily: chartFont,
-        fontSize: 12,
-        attributionLogo: false,
-      },
-      grid: { vertLines: { color: chartColors.fog }, horzLines: { color: chartColors.fog } },
-      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.16, bottom: 0.04 } },
-      timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false, fixLeftEdge: true, fixRightEdge: true },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-        vertLine: { color: chartColors.lavender, width: 1, style: LineStyle.Solid, labelBackgroundColor: chartColors.carbon },
-        horzLine: { color: chartColors.lavender, width: 1, style: LineStyle.Solid, labelBackgroundColor: chartColors.carbon },
-      },
-      handleScroll: false,
-      handleScale: false,
-      localization: { priceFormatter: (price: number) => `${formatCompactUsdc(price)} USDC` },
-    });
-    const funded = chart.addSeries(HistogramSeries, {
-      color: chartColors.lavender,
-      priceFormat: { type: "custom", formatter: (price: number) => formatCompactUsdc(price), minMove: 0.000001 },
-      priceLineVisible: false,
-      lastValueVisible: false,
-    });
-    const cumulativeFunded = chart.addSeries(LineSeries, {
-      color: chartColors.carbon,
-      lineWidth: 2,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      priceFormat: { type: "custom", formatter: (price: number) => formatCompactUsdc(price), minMove: 0.000001 },
-    });
-    const cumulativeSubmitted = chart.addSeries(LineSeries, {
-      color: chartColors.sky,
-      lineWidth: 2,
-      lineStyle: LineStyle.Dashed,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      priceFormat: { type: "custom", formatter: (price: number) => formatCompactUsdc(price), minMove: 0.000001 },
-    });
-    const stamp = (time: number) => time as UTCTimestamp;
-    funded.setData(series.points.map((point) => ({ time: stamp(point.time), value: point.funded })));
-    cumulativeFunded.setData(series.points.map((point) => ({ time: stamp(point.time), value: point.cumulativeFunded })));
-    cumulativeSubmitted.setData(series.points.map((point) => ({ time: stamp(point.time), value: point.cumulativeSubmitted })));
-    chart.timeScale().fitContent();
-    return () => chart.remove();
-  }, [series]);
+function fullLabel(time: number, bucket: number): string {
+  const date = new Date(time * 1000);
+  const day = date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  if (bucket >= DAY) return day;
+  const from = date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const to = new Date((time + bucket) * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return `${day}, ${from} to ${to}`;
+}
 
-  return <div ref={container} style={{ height: HEIGHT }} className="w-full" />;
+function FlowTooltip({ active, payload, bucket }: { active?: boolean; payload?: { payload: FlowPoint }[]; bucket: number }) {
+  const point = payload?.[0]?.payload;
+  if (!active || !point) return null;
+  return (
+    <div className="rounded-xl border border-fog bg-paper-white px-4 py-3 shadow-subtle-2">
+      <p className="text-caption font-medium text-carbon">{fullLabel(point.time, bucket)}</p>
+      <dl className="mt-1 grid grid-cols-[auto_auto] gap-x-4 gap-y-0.5 text-caption">
+        <dt className="text-graphite">Funded</dt>
+        <dd className="tabular-nums text-carbon">{formatCompactUsdc(point.funded)} USDC</dd>
+        <dt className="text-graphite">Submitted</dt>
+        <dd className="tabular-nums text-carbon">{formatCompactUsdc(point.submitted)} USDC</dd>
+        <dt className="text-graphite">Funded so far</dt>
+        <dd className="tabular-nums text-carbon">{formatCompactUsdc(point.cumulativeFunded)} USDC</dd>
+        <dt className="text-graphite">Submitted so far</dt>
+        <dd className="tabular-nums text-carbon">{formatCompactUsdc(point.cumulativeSubmitted)} USDC</dd>
+      </dl>
+    </div>
+  );
 }
 
 export function EscrowFlowChart({ series, scanned, loading }: { series: FlowSeries | null; scanned: number; loading: boolean }) {
@@ -77,18 +52,70 @@ export function EscrowFlowChart({ series, scanned, loading }: { series: FlowSeri
         { label: "Cumulative funded", color: chartColors.carbon },
         { label: "Cumulative submitted", color: chartColors.sky, dashed: true, value: series ? `${formatCompactUsdc(series.totalSubmitted)} USDC` : undefined },
       ]}
-      caption={
-        <>
-          Built from the fundedAt and submittedAt timestamps of the {scanned} most recent job records. Times are UTC. Chart by TradingView Lightweight Charts.
-        </>
-      }
+      caption={`Built from the fundedAt and submittedAt timestamps of the ${scanned} most recent job records, in your local time.`}
     >
       {loading ? (
         <ChartPlaceholder height={HEIGHT} label="Reading job records from the chain" />
       ) : !series || series.points.length === 0 ? (
         <ChartPlaceholder height={HEIGHT} label="No job has been funded yet" />
       ) : (
-        <Canvas series={series} />
+        <div style={{ height: HEIGHT }} className="w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={series.points} margin={{ top: 12, right: 12, left: 0, bottom: 0 }} barCategoryGap="45%">
+              <defs>
+                <linearGradient id="escrow-flow-fill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={chartColors.lavender} stopOpacity={0.18} />
+                  <stop offset="100%" stopColor={chartColors.lavender} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke={chartColors.fog} vertical={false} />
+              <XAxis
+                dataKey="time"
+                tickLine={false}
+                axisLine={false}
+                minTickGap={28}
+                tickFormatter={(value: number) => tickLabel(value, series.bucket)}
+                tick={{ fill: chartColors.graphite, fontSize: 12, fontFamily: chartFont }}
+              />
+              <YAxis
+                tickLine={false}
+                axisLine={false}
+                width={52}
+                tickFormatter={(value: number) => formatCompactUsdc(value)}
+                tick={{ fill: chartColors.ash, fontSize: 12, fontFamily: chartFont }}
+              />
+              <Tooltip cursor={{ fill: chartColors.mist }} content={<FlowTooltip bucket={series.bucket} />} />
+              <Area
+                type="monotone"
+                dataKey="cumulativeFunded"
+                stroke="none"
+                fill="url(#escrow-flow-fill)"
+                isAnimationActive={false}
+                activeDot={false}
+              />
+              <Bar dataKey="funded" fill={chartColors.lavender} radius={[6, 6, 6, 6]} barSize={10} isAnimationActive={false} />
+              <Line
+                type="monotone"
+                dataKey="cumulativeFunded"
+                stroke={chartColors.carbon}
+                strokeWidth={2}
+                dot={{ r: 3, fill: chartColors.paper, stroke: chartColors.carbon, strokeWidth: 2 }}
+                activeDot={{ r: 4, fill: chartColors.carbon, stroke: chartColors.paper, strokeWidth: 2 }}
+                isAnimationActive={false}
+              />
+              <Line
+                type="monotone"
+                dataKey="cumulativeSubmitted"
+                stroke={chartColors.sky}
+                strokeWidth={2}
+                strokeDasharray="5 4"
+                dot={false}
+                activeDot={{ r: 4, fill: chartColors.sky, stroke: chartColors.paper, strokeWidth: 2 }}
+                isAnimationActive={false}
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
       )}
     </ChartFrame>
   );
