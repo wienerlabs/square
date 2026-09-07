@@ -54,6 +54,7 @@ Design notes, each the record of a decision:
 - [ERC-20 versus native USDC](docs/decisions/erc20-vs-native-usdc.md)
 - [x402: own facilitator versus Circle Gateway](docs/decisions/x402-facilitator.md)
 - [ERC-4337: is sponsorship needed](docs/decisions/erc4337-sponsorship.md)
+- [The daily ceiling is public, the policy behind it is not](docs/decisions/public-daily-ceiling.md)
 - [Gas, measured](docs/deploy/gas.md)
 
 ## Provenance
