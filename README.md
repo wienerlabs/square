@@ -34,7 +34,8 @@ replace. Nothing carries an assurance claim.
 | Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | deployed on Arc Testnet, 102 Foundry tests, the five settlement paths run on the testnet with real USDC and the deployed ERC-8004 registries ([docs/deploy/lifecycle-5042002.md](docs/deploy/lifecycle-5042002.md)) |
 | Services: indexer, keeper, x402 gateway, data layer, observability | implemented and tested against the local stack |
 | Compliance: circuit, prover, Groth16 verifier, `ComplianceHook` | circuit, prover and verifier live (#14, #18, #17); the hook slot is open (#27) |
-| App: reference web application (`app/`) | static Next.js export that reads the deployed contracts through `@squaresdk/core` and drives every lifecycle action from a connected wallet; no mocked data ([app/README.md](app/README.md)) |
+| Website (`site/`) | live at [square-protocol.vercel.app](https://square-protocol.vercel.app), adapted from an MIT template with Square's own copy and surfaces, every button leads to the app |
+| App: reference web application (`app/`) | live at [square-wienerlabs.vercel.app](https://square-wienerlabs.vercel.app), a static Next.js export that reads the deployed contracts through `@squaresdk/core` and drives every lifecycle action from a connected wallet; no mocked data ([app/README.md](app/README.md)) |
 
 > The ZK trusted setup inherited from the prior work is a **demo setup**, not a
 > ceremony, in **both phases**: phase 2 carries a single contribution and no
@@ -93,7 +94,7 @@ packages/    did-resolver, cli, did-aip-driver, core (SDK, embedded ABIs), data 
              x402 (payment gateway), aa (ERC-4337 smart accounts)
 services/    prover, indexer, keeper
 app/         Next.js reference application (static export, wagmi, Open Runde design system)
-site/        The website: what Square is, and the door to the app
+site/        The website at https://square-protocol.vercel.app: what Square is, and the door to the app
 docs/        Specifications, design notes, measurements, disclosure
 ```
 
