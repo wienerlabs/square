@@ -1,4 +1,9 @@
-<p><img src="public/logo.svg" alt="" width="56" height="56" /></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="public/logo-inverse.svg">
+    <img src="public/logo.svg" alt="Square" width="72" height="72">
+  </picture>
+</p>
 
 # Square app
 
