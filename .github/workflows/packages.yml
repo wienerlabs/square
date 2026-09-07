@@ -13,6 +13,7 @@ on:
       - "services/keeper/**"
       - "services/prover/**"
       - "app/**"
+      - "site/**"
       - "contracts/**"
       - ".github/workflows/packages.yml"
   pull_request:
@@ -26,6 +27,7 @@ on:
       - "services/keeper/**"
       - "services/prover/**"
       - "app/**"
+      - "site/**"
       - "contracts/**"
       - ".github/workflows/packages.yml"
   workflow_dispatch:
@@ -139,3 +141,20 @@ jobs:
           npm run build
       - name: Export is complete
         run: test -f app/out/index.html && test -f app/out/dashboard/index.html
+
+  site:
+    name: site (static export)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install, typecheck, build
+        working-directory: site
+        run: |
+          npm install
+          npm run typecheck
+          npm run build
+      - name: Export is complete
+        run: test -f site/out/index.html

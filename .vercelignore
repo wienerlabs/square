@@ -10,3 +10,4 @@ packages/observability
 packages/cli
 packages/did-aip-driver
 .github
+site

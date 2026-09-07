@@ -93,6 +93,7 @@ packages/    did-resolver, cli, did-aip-driver, core (SDK, embedded ABIs), data 
              x402 (payment gateway), aa (ERC-4337 smart accounts)
 services/    prover, indexer, keeper
 app/         Next.js reference application (static export, wagmi, Open Runde design system)
+site/        The website: what Square is, and the door to the app
 docs/        Specifications, design notes, measurements, disclosure
 ```
 
