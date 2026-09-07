@@ -5,30 +5,82 @@ import { useEffect, useMemo, useState } from "react";
 import { getAddress, isAddress, type Hex } from "viem";
 import { useAccount } from "wagmi";
 import { AddressLink, TxLink } from "@/components/AddressLink";
+import { AmountUsdc } from "@/components/AmountUsdc";
 import { Field, inputClass } from "@/components/Field";
 import { GhostButton } from "@/components/GhostButton";
 import { PanelCard } from "@/components/PanelCard";
+import { PillToggle } from "@/components/PillToggle";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { SectionHeading } from "@/components/SectionHeading";
-import { formatDuration, formatTimestamp, fromDatetimeLocal, parseUsdc, toDatetimeLocal } from "@/lib/format";
+import { Step, type StepState } from "@/components/Step";
+import { WalletButton } from "@/components/WalletButton";
+import { formatBps, formatDuration, formatTimestamp, formatUsdc, fromDatetimeLocal, parseUsdc, shortHash, toDatetimeLocal } from "@/lib/format";
 import { useNetwork, useNow, useSquare } from "@/lib/square";
 import { describeError, useTx } from "@/lib/tx";
 import { activeChain, deployment } from "@/lib/wagmi";
 
+const DAY = 86_400;
+
+const EXPIRY_PRESETS = [
+  { id: "1d", label: "1 day", seconds: DAY },
+  { id: "3d", label: "3 days", seconds: 3 * DAY },
+  { id: "1w", label: "1 week", seconds: 7 * DAY },
+  { id: "30d", label: "30 days", seconds: 30 * DAY },
+] as const;
+
+const BUDGET_PRESETS = ["10", "50", "100", "500"] as const;
+
+const SPEC_TEMPLATES = [
+  {
+    id: "labelling",
+    label: "Data labelling",
+    spec: {
+      task: "Label 500 product images with exactly one of: shoe, bag, jacket, other",
+      input: "Zip of JPEG files, delivered by link before the job is funded",
+      deliverable: "labels.jsonl with one {file, label} object per line",
+      acceptance: "A spot check of 50 images agrees with the labels on at least 48",
+    },
+  },
+  {
+    id: "review",
+    label: "Code review",
+    spec: {
+      task: "Review one pull request for correctness and security",
+      input: "Repository and pull request number",
+      deliverable: "Markdown report with findings ranked by severity, each naming a file and line",
+      acceptance: "Every finding reproduces; no finding above medium is a false positive",
+    },
+  },
+  {
+    id: "brief",
+    label: "Research brief",
+    spec: {
+      task: "Two page brief on the corporate tax filing calendar for a mainland UAE LLC",
+      deliverable: "PDF with every date traced to a Federal Tax Authority publication",
+      acceptance: "No date without a source; delivered before the expiry",
+    },
+  },
+] as const;
+
 type SpecState =
   | { kind: "empty" }
   | { kind: "error"; message: string }
-  | { kind: "ok"; value: unknown; description: string };
+  | { kind: "ok"; value: unknown; description: string; hash: string };
 
 function parseSpec(source: string): SpecState {
   const trimmed = source.trim();
   if (trimmed.length === 0) return { kind: "empty" };
   try {
     const value: unknown = JSON.parse(trimmed);
-    return { kind: "ok", value, description: specDescription(value) };
+    const description = specDescription(value);
+    return { kind: "ok", value, description, hash: description.replace(/^spec:/, "") };
   } catch (error) {
-    return { kind: "error", message: error instanceof Error ? error.message : "Invalid JSON" };
+    return { kind: "error", message: error instanceof Error ? error.message.replace(/^JSON\.parse: /, "") : "Invalid JSON" };
   }
+}
+
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
 }
 
 interface Created {
@@ -36,31 +88,54 @@ interface Created {
   createHash: Hex;
   budgetHash?: Hex;
   budgetFailed: boolean;
+  budget: bigint | null;
+}
+
+function Row({ label, children, muted = false }: { label: string; children: React.ReactNode; muted?: boolean }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 border-b border-fog py-3 last:border-b-0">
+      <dt className="shrink-0 text-caption text-graphite">{label}</dt>
+      <dd className={`min-w-0 text-right text-body tabular-nums ${muted ? "text-ash" : "text-carbon"}`}>{children}</dd>
+    </div>
+  );
+}
+
+function Check({ done, children }: { done: boolean; children: React.ReactNode }) {
+  return (
+    <li className="flex items-center gap-2.5 text-caption">
+      <span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${done ? "bg-mint" : "bg-fog"}`} />
+      <span className={done ? "text-carbon" : "text-graphite"}>{children}</span>
+      <span className="sr-only">{done ? "(done)" : "(pending)"}</span>
+    </li>
+  );
 }
 
 export function NewJobView() {
   const network = useNetwork();
   const now = useNow(10_000);
   const square = useSquare();
-  const { run, busy } = useTx();
+  const { run, busy, state: txState } = useTx();
   const { address, chainId } = useAccount();
 
   const [provider, setProvider] = useState("");
   const [expiry, setExpiry] = useState("");
+  const [expiryPreset, setExpiryPreset] = useState<string | null>("1w");
   const [spec, setSpec] = useState("");
+  const [template, setTemplate] = useState<string | null>(null);
   const [budget, setBudget] = useState("");
+  const [stage, setStage] = useState<"create" | "budget" | null>(null);
   const [created, setCreated] = useState<Created | null>(null);
+
+  useEffect(() => {
+    setExpiry((current) => (current.length === 0 ? toDatetimeLocal(Math.floor(Date.now() / 1000) + 7 * DAY) : current));
+  }, []);
 
   const horizon = network.data?.settlementHorizon;
   const minExpiry = horizon === undefined ? null : now + horizon;
 
-  useEffect(() => {
-    if (horizon === undefined) return;
-    setExpiry((current) => (current.length === 0 ? toDatetimeLocal(Math.floor(Date.now() / 1000) + horizon + 86_400) : current));
-  }, [horizon]);
-
   const specState = useMemo(() => parseSpec(spec), [spec]);
-  const providerError = provider.length === 0 || isAddress(provider) ? null : "Enter a 0x address.";
+  const providerValid = isAddress(provider);
+  const providerError = provider.length === 0 || providerValid ? null : "Enter a 0x address of 40 hex characters.";
   const expirySeconds = fromDatetimeLocal(expiry);
   const expiryError =
     expiry.length === 0
@@ -68,79 +143,170 @@ export function NewJobView() {
       : expirySeconds === null
         ? "Enter a date and time."
         : minExpiry !== null && expirySeconds < minExpiry
-          ? `The expiry must be at least ${formatDuration(horizon ?? 0)} from now.`
+          ? `The expiry must be at least ${formatDuration(horizon ?? 0)} from now, so the challenge and dispute windows fit before it.`
           : null;
+  const expiryValid = expirySeconds !== null && expiryError === null;
   const budgetAmount = budget.trim().length === 0 ? null : parseUsdc(budget);
   const budgetError = budget.trim().length > 0 && budgetAmount === null ? "Enter an amount with up to six decimals." : null;
+  const budgetValid = budgetError === null;
   const onActiveChain = address !== undefined && chainId === activeChain.id;
-  const ready =
-    isAddress(provider) && expirySeconds !== null && expiryError === null && specState.kind === "ok" && budgetError === null && onActiveChain && !busy;
+  const ready = providerValid && expiryValid && specState.kind === "ok" && budgetValid && onActiveChain && !busy;
+
+  const fees =
+    budgetAmount !== null && budgetAmount > 0n && network.data
+      ? {
+          platform: (budgetAmount * BigInt(network.data.platformFeeBP)) / 10_000n,
+          evaluator: (budgetAmount * BigInt(network.data.evaluatorFeeBP)) / 10_000n,
+        }
+      : null;
+  const net = fees && budgetAmount !== null ? budgetAmount - fees.platform - fees.evaluator : null;
+
+  const providerState: StepState = providerValid ? "done" : providerError ? "error" : "todo";
+  const expiryState: StepState = expiryValid ? "done" : expiryError ? "error" : "todo";
+  const specStepState: StepState = specState.kind === "ok" ? "done" : specState.kind === "error" ? "error" : "todo";
+  const budgetState: StepState = budgetAmount !== null && budgetAmount > 0n ? "done" : budgetError ? "error" : "todo";
+
+  function chooseExpiry(id: string, seconds: number) {
+    setExpiryPreset(id);
+    setExpiry(toDatetimeLocal(Math.floor(Date.now() / 1000) + seconds));
+  }
+
+  function applyTemplate(id: string) {
+    const found = SPEC_TEMPLATES.find((entry) => entry.id === id);
+    if (!found) return;
+    setTemplate(id);
+    setSpec(JSON.stringify(found.spec, null, 2));
+  }
+
+  function formatSpec() {
+    if (specState.kind !== "ok") return;
+    setSpec(JSON.stringify(specState.value, null, 2));
+  }
+
+  function reset() {
+    setCreated(null);
+    setProvider("");
+    setSpec("");
+    setTemplate(null);
+    setBudget("");
+    setExpiryPreset("1w");
+    setExpiry(toDatetimeLocal(Math.floor(Date.now() / 1000) + 7 * DAY));
+  }
 
   async function submit() {
     if (!ready || expirySeconds === null || specState.kind !== "ok") return;
+    setStage("create");
     const result = await run("Create job", () =>
       square.createJob({ provider: getAddress(provider), expiredAt: BigInt(expirySeconds), spec: specState.value }),
     );
-    if (!result) return;
+    if (!result) {
+      setStage(null);
+      return;
+    }
     let budgetHash: Hex | undefined;
     let budgetFailed = false;
     if (budgetAmount !== null && budgetAmount > 0n) {
+      setStage("budget");
       const set = await run("Set budget", () => square.setBudget(result.jobId, budgetAmount));
       if (set) budgetHash = set.hash;
       else budgetFailed = true;
     }
-    setCreated({ jobId: result.jobId, createHash: result.hash, budgetHash, budgetFailed });
+    setStage(null);
+    setCreated({ jobId: result.jobId, createHash: result.hash, budgetHash, budgetFailed, budget: budgetAmount });
   }
 
-  return (
-    <div className="flex flex-col gap-16">
-      <SectionHeading
-        title="New job"
-        description="Opens a job on SquareJob with the keeper evaluator and the Square hook bound at creation."
-      />
+  const ctaLabel =
+    stage === "create"
+      ? "Confirm createJob in the wallet"
+      : stage === "budget"
+        ? "Confirm setBudget in the wallet"
+        : budgetAmount !== null && budgetAmount > 0n
+          ? "Create job and set budget"
+          : "Create job";
 
-      {created ? (
-        <PanelCard elevated title={`Job #${created.jobId.toString()} created`} description="Both receipts are linked to the explorer.">
-          <dl className="grid gap-x-8 gap-y-5 sm:grid-cols-2">
-            <div>
-              <dt className="text-caption text-graphite">createJob</dt>
-              <dd className="mt-1 text-body">
+  if (created) {
+    const href = `/job?id=${created.jobId.toString()}`;
+    return (
+      <div className="flex flex-col gap-16">
+        <SectionHeading title="New job" description="Opens a job on SquareJob with the keeper evaluator and the Square hook bound at creation." />
+        <PanelCard elevated title={`Job #${created.jobId.toString()} is on chain`} description="Both receipts link to the explorer. The job is open until it is funded.">
+          <div className="grid gap-8 lg:grid-cols-[1fr_1.2fr]">
+            <dl className="flex flex-col">
+              <Row label="createJob">
                 <TxLink hash={created.createHash} />
-              </dd>
-            </div>
-            <div>
-              <dt className="text-caption text-graphite">setBudget</dt>
-              <dd className="mt-1 text-body">
+              </Row>
+              <Row label="setBudget" muted={!created.budgetHash && !created.budgetFailed}>
                 {created.budgetHash ? (
                   <TxLink hash={created.budgetHash} />
                 ) : created.budgetFailed ? (
-                  <span className="text-magenta">Failed; set it from the job page.</span>
+                  <span className="text-magenta">Not sent; set it from the job page</span>
                 ) : (
-                  <span className="text-ash">Skipped</span>
+                  "Skipped"
                 )}
-              </dd>
+              </Row>
+              <Row label="Provider">
+                <AddressLink address={provider} />
+              </Row>
+              <Row label="Budget" muted={created.budget === null}>
+                {created.budget !== null ? <AmountUsdc value={created.budget} /> : "Not set"}
+              </Row>
+            </dl>
+            <div className="flex flex-col gap-4">
+              <p className="text-caption font-medium text-carbon">What happens next</p>
+              <ol className="flex flex-col gap-3">
+                {[
+                  { title: "Fund the escrow", body: created.budget ? "Approve USDC and fund from the job page. The fee basis points are snapshotted at that moment." : "Set a budget on the job page, then approve USDC and fund it." },
+                  { title: "Hand the job to the provider", body: "Share the job link. The provider submits the deliverable hash before the expiry, optionally bound to an ERC-8004 agent." },
+                  { title: "Watch the challenge window", body: `After submission you have ${network.data ? formatDuration(network.data.window.challengeWindow) : "the challenge window"} to dispute; otherwise anyone finalizes and the payee is credited.` },
+                ].map((step, index) => (
+                  <li key={step.title} className="flex gap-3">
+                    <span aria-hidden="true" className="flex size-6 shrink-0 items-center justify-center rounded-full bg-mist text-caption tabular-nums text-graphite">
+                      {index + 1}
+                    </span>
+                    <span>
+                      <span className="block text-body font-medium text-carbon">{step.title}</span>
+                      <span className="block text-caption text-graphite">{step.body}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              <div className="mt-2 flex flex-wrap gap-3">
+                <PrimaryButton href={href}>Open job #{created.jobId.toString()}</PrimaryButton>
+                <GhostButton onClick={reset}>Create another</GhostButton>
+              </div>
             </div>
-          </dl>
-          <div className="mt-6 flex flex-wrap gap-3">
-            <PrimaryButton href={`/job?id=${created.jobId.toString()}`}>Open job #{created.jobId.toString()}</PrimaryButton>
-            <GhostButton onClick={() => setCreated(null)}>Create another</GhostButton>
           </div>
         </PanelCard>
-      ) : null}
+      </div>
+    );
+  }
 
-      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-        <PanelCard title="Job">
-          <form
-            className="flex flex-col gap-6"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submit();
-            }}
+  return (
+    <div className="flex flex-col gap-12">
+      <SectionHeading
+        title="New job"
+        description="Four decisions, one transaction. The keeper evaluator and the Square hook are bound at creation; funding comes after."
+      />
+
+      <div className="grid gap-8 lg:grid-cols-[1.5fr_1fr] lg:gap-12">
+        <form
+          className="flex flex-col"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <Step
+            number={1}
+            title="Who does the work"
+            description="The provider's wallet. It is fixed at creation and receives the net payout unless the receivable is sold."
+            state={providerState}
+            aside={providerValid ? <AddressLink address={provider} /> : null}
           >
-            <Field label="Provider address" htmlFor="provider" hint="The agent's wallet. It must be set before the job can be funded." error={providerError}>
+            <Field label="Provider address" htmlFor="provider" error={providerError} hint={providerValid ? "Checksummed and ready." : "An agent's wallet on this chain."}>
               <input
                 id="provider"
-                className={inputClass}
+                className={`${inputClass} font-mono text-[13px]`}
                 value={provider}
                 onChange={(event) => setProvider(event.target.value.trim())}
                 placeholder="0x"
@@ -148,17 +314,33 @@ export function NewJobView() {
                 spellCheck={false}
               />
             </Field>
+          </Step>
+
+          <Step
+            number={2}
+            title="When it must be done"
+            description="After the expiry the provider can no longer submit and the client can reclaim the escrow."
+            state={expiryState}
+            aside={expiryValid && expirySeconds !== null ? <span className="text-caption tabular-nums text-graphite">in {formatDuration(expirySeconds - now)}</span> : null}
+          >
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Expiry presets">
+              {EXPIRY_PRESETS.map((preset) => (
+                <PillToggle key={preset.id} selected={expiryPreset === preset.id} onClick={() => chooseExpiry(preset.id, preset.seconds)}>
+                  {preset.label}
+                </PillToggle>
+              ))}
+            </div>
             <Field
               label="Expiry"
               htmlFor="expiry"
+              error={expiryError}
               hint={
                 minExpiry !== null && horizon !== undefined
-                  ? `Minimum now plus the settlement horizon of ${formatDuration(horizon)}: ${formatTimestamp(minExpiry)}. Refunds open at expiry.`
+                  ? `Earliest ${formatTimestamp(minExpiry)}, which is now plus the settlement horizon of ${formatDuration(horizon)}.`
                   : network.isError
                     ? `The settlement horizon could not be read: ${describeError(network.error)}`
                     : "Reading the settlement horizon from KeeperEvaluator."
               }
-              error={expiryError}
             >
               <input
                 id="expiry"
@@ -166,79 +348,198 @@ export function NewJobView() {
                 className={inputClass}
                 value={expiry}
                 min={minExpiry !== null ? toDatetimeLocal(minExpiry) : undefined}
-                onChange={(event) => setExpiry(event.target.value)}
+                onChange={(event) => {
+                  setExpiryPreset(null);
+                  setExpiry(event.target.value);
+                }}
               />
             </Field>
+          </Step>
+
+          <Step
+            number={3}
+            title="What is being bought"
+            description="A JSON spec. It is canonicalized and hashed locally; only spec: followed by the keccak256 hash is stored on chain."
+            state={specStepState}
+            aside={
+              specState.kind === "ok" ? (
+                <span className="inline-flex items-center gap-2 text-caption text-graphite">
+                  <span aria-hidden="true" className="size-1.5 rounded-full bg-mint" />
+                  Valid JSON, {byteLength(spec)} bytes
+                </span>
+              ) : specState.kind === "error" ? (
+                <span className="inline-flex items-center gap-2 text-caption text-magenta">
+                  <span aria-hidden="true" className="size-1.5 rounded-full bg-magenta" />
+                  Not valid JSON
+                </span>
+              ) : null
+            }
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="mr-1 text-caption text-graphite">Start from</span>
+              {SPEC_TEMPLATES.map((entry) => (
+                <PillToggle key={entry.id} selected={template === entry.id} onClick={() => applyTemplate(entry.id)}>
+                  {entry.label}
+                </PillToggle>
+              ))}
+              <span className="ml-auto flex items-center gap-2">
+                <GhostButton size="sm" onClick={formatSpec} disabled={specState.kind !== "ok"}>
+                  Format
+                </GhostButton>
+                <GhostButton
+                  size="sm"
+                  onClick={() => {
+                    setSpec("");
+                    setTemplate(null);
+                  }}
+                  disabled={spec.length === 0}
+                >
+                  Clear
+                </GhostButton>
+              </span>
+            </div>
             <Field
               label="Spec (JSON)"
               htmlFor="spec"
+              error={specState.kind === "error" ? specState.message : null}
               hint={
                 specState.kind === "ok" ? (
-                  <span className="break-all tabular-nums">On-chain description {specState.description}</span>
+                  <span className="break-all font-mono text-[12px]">spec:{specState.hash}</span>
                 ) : (
-                  "Canonicalized and hashed locally; the description stored on chain is spec: followed by the keccak256 hash."
+                  "Say what is delivered, how it is accepted and by when. Edit every template; the words never leave this page."
                 )
               }
-              error={specState.kind === "error" ? `Invalid JSON: ${specState.message}` : null}
             >
               <textarea
                 id="spec"
-                rows={8}
-                className={`${inputClass} font-[inherit]`}
+                rows={12}
+                className={`${inputClass} min-h-[240px] resize-y font-mono text-[13px] leading-relaxed`}
                 value={spec}
-                onChange={(event) => setSpec(event.target.value)}
-                placeholder={'{"task": "...", "acceptance": "..."}'}
+                onChange={(event) => {
+                  setTemplate(null);
+                  setSpec(event.target.value);
+                }}
+                placeholder={'{\n  "task": "...",\n  "deliverable": "...",\n  "acceptance": "..."\n}'}
                 spellCheck={false}
               />
             </Field>
-            <Field label="Budget (USDC, optional)" htmlFor="budget-amount" hint="Sent as a second transaction right after creation. Funding happens from the job page." error={budgetError}>
+          </Step>
+
+          <Step
+            number={4}
+            title="What it pays"
+            description="Optional now. A budget is a second signature right after creation; the USDC itself moves when the job is funded."
+            state={budgetState}
+            last
+            aside={net !== null ? <span className="text-caption tabular-nums text-graphite">{formatUsdc(net)} USDC net to the provider</span> : null}
+          >
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Budget presets">
+              {BUDGET_PRESETS.map((preset) => (
+                <PillToggle key={preset} selected={budget === preset} onClick={() => setBudget(preset)}>
+                  {preset} USDC
+                </PillToggle>
+              ))}
+              <PillToggle selected={budget.length === 0} onClick={() => setBudget("")}>
+                Later
+              </PillToggle>
+            </div>
+            <Field label="Budget (USDC)" htmlFor="budget-amount" error={budgetError} hint="Up to six decimals. The provider agrees to it before funding.">
               <input id="budget-amount" inputMode="decimal" className={inputClass} value={budget} onChange={(event) => setBudget(event.target.value)} placeholder="0.00" />
             </Field>
-            <div className="flex flex-wrap items-center gap-3">
-              <PrimaryButton type="submit" disabled={!ready}>
-                {busy ? "Sending" : "Create job"}
-              </PrimaryButton>
-              {address === undefined ? (
-                <span className="text-caption text-ash">Connect a wallet to create a job.</span>
-              ) : chainId !== activeChain.id ? (
-                <span className="text-caption text-ash">Switch the wallet to {activeChain.name}.</span>
-              ) : null}
-            </div>
-          </form>
-        </PanelCard>
+          </Step>
+        </form>
 
-        <PanelCard title="Bound at creation" description="These come from the SDK's deployment table for this chain.">
-          <dl className="flex flex-col gap-5">
-            <div>
-              <dt className="text-caption text-graphite">Evaluator</dt>
-              <dd className="mt-1 text-body">
-                <AddressLink address={deployment.keeperEvaluator} /> <span className="text-caption text-graphite">KeeperEvaluator</span>
-              </dd>
+        <aside className="lg:sticky lg:top-28 lg:self-start">
+          <PanelCard elevated title="Preview" description="What createJob writes, and what the budget would split into.">
+            <dl className="flex flex-col">
+              <Row label="Client" muted={address === undefined}>
+                {address ? <AddressLink address={address} /> : "No wallet connected"}
+              </Row>
+              <Row label="Provider" muted={!providerValid}>
+                {providerValid ? <AddressLink address={provider} /> : "Not set"}
+              </Row>
+              <Row label="Expires" muted={!expiryValid}>
+                {expiryValid && expirySeconds !== null ? formatTimestamp(expirySeconds) : "Not set"}
+              </Row>
+              <Row label="Spec" muted={specState.kind !== "ok"}>
+                {specState.kind === "ok" ? <span title={specState.description}>spec:{shortHash(specState.hash)}</span> : "Not set"}
+              </Row>
+              <Row label="Budget" muted={budgetAmount === null || budgetAmount === 0n}>
+                {budgetAmount !== null && budgetAmount > 0n ? <AmountUsdc value={budgetAmount} /> : "Set later"}
+              </Row>
+              {fees && net !== null && network.data ? (
+                <>
+                  <Row label={`Platform fee ${formatBps(network.data.platformFeeBP)}`}>
+                    <AmountUsdc value={fees.platform} />
+                  </Row>
+                  <Row label={`Evaluator fee ${formatBps(network.data.evaluatorFeeBP)}`}>
+                    <AmountUsdc value={fees.evaluator} />
+                  </Row>
+                  <Row label="Net to the provider">
+                    <AmountUsdc value={net} className="font-medium" />
+                  </Row>
+                </>
+              ) : null}
+            </dl>
+
+            <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-fog bg-linen p-5">
+              <p className="text-caption font-medium text-carbon">Bound at creation</p>
+              <dl className="flex flex-col gap-2 text-caption">
+                <div className="flex justify-between gap-4">
+                  <dt className="text-graphite">Evaluator</dt>
+                  <dd>
+                    <AddressLink address={deployment.keeperEvaluator} label="KeeperEvaluator" />
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="text-graphite">Hook</dt>
+                  <dd>
+                    <AddressLink address={deployment.squareHook} label="SquareHook" />
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="text-graphite">Escrow token</dt>
+                  <dd>
+                    <AddressLink address={deployment.usdc} label="USDC" />
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="text-graphite">Chain</dt>
+                  <dd className="tabular-nums text-carbon">
+                    {activeChain.name} ({activeChain.id})
+                  </dd>
+                </div>
+              </dl>
             </div>
-            <div>
-              <dt className="text-caption text-graphite">Hook</dt>
-              <dd className="mt-1 text-body">
-                <AddressLink address={deployment.squareHook} /> <span className="text-caption text-graphite">SquareHook</span>
-              </dd>
+
+            <ul className="mt-6 flex flex-col gap-2" aria-label="Ready to send">
+              <Check done={providerValid}>Provider address</Check>
+              <Check done={expiryValid}>Expiry after the settlement horizon</Check>
+              <Check done={specState.kind === "ok"}>Valid JSON spec</Check>
+              <Check done={onActiveChain}>Wallet connected on {activeChain.name}</Check>
+            </ul>
+
+            <div className="mt-6 flex flex-col gap-3">
+              <PrimaryButton type="submit" disabled={!ready} onClick={() => void submit()} className="w-full">
+                {ctaLabel}
+              </PrimaryButton>
+              {!onActiveChain ? (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-caption text-graphite">{address === undefined ? "Connect a wallet to send." : `Switch to ${activeChain.name} to send.`}</span>
+                  <WalletButton />
+                </div>
+              ) : null}
+              {txState.status === "error" ? (
+                <p className="text-caption text-magenta" role="alert">
+                  {txState.label}: {txState.message}
+                </p>
+              ) : null}
+              <p className="text-caption text-ash">
+                {budgetAmount !== null && budgetAmount > 0n ? "Two signatures: createJob, then setBudget." : "One signature: createJob."} Funding is a separate step on the job page.
+              </p>
             </div>
-            <div>
-              <dt className="text-caption text-graphite">Payment token</dt>
-              <dd className="mt-1 text-body">
-                <AddressLink address={deployment.usdc} /> <span className="text-caption text-graphite">USDC, 6 decimals</span>
-              </dd>
-            </div>
-            <div>
-              <dt className="text-caption text-graphite">Settlement horizon</dt>
-              <dd className="mt-1 text-body tabular-nums">
-                {horizon !== undefined ? `${formatDuration(horizon)} (${horizon} s)` : network.isError ? "Unavailable" : "Loading"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-caption text-graphite">Client</dt>
-              <dd className="mt-1 text-body">{address ? <AddressLink address={address} /> : <span className="text-ash">No wallet connected</span>}</dd>
-            </div>
-          </dl>
-        </PanelCard>
+          </PanelCard>
+        </aside>
       </div>
     </div>
   );
