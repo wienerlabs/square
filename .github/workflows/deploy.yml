@@ -1,0 +1,48 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "packages/core/**"
+      - "packages/did-resolver/**"
+      - "vercel.json"
+      - ".vercelignore"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  vercel:
+    name: production on Vercel
+    runs-on: ubuntu-latest
+    env:
+      HAS_TOKEN: ${{ secrets.VERCEL_TOKEN != '' }}
+      VERCEL_ORG_ID: team_wML3WbnwklsgJHt67DPZEEh5
+      VERCEL_PROJECT_ID: prj_IRSHYMtewTBdz9TWm38uuU8k7jyx
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip without a Vercel token
+        if: env.HAS_TOKEN != 'true'
+        run: echo "VERCEL_TOKEN is not set; add it as a repository secret and this job deploys every push to main." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-node@v4
+        if: env.HAS_TOKEN == 'true'
+        with:
+          node-version: "22"
+      - name: Deploy
+        if: env.HAS_TOKEN == 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          npm install --global vercel@50
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          vercel deploy --prod --yes --token="$VERCEL_TOKEN" | tee deploy.log
+          url=$(grep -oE 'https://[a-z0-9.-]+\.vercel\.app' deploy.log | tail -1)
+          echo "Deployed $url" >> "$GITHUB_STEP_SUMMARY"
