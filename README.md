@@ -1,3 +1,5 @@
+<p><img src="app/public/logo.svg" alt="" width="56" height="56" /></p>
+
 # Square
 
 **Compliance-gated settlement for autonomous agent work, on [Arc](https://arc.io).**
