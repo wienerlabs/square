@@ -14,6 +14,21 @@ The reference web application for Square, the compliance-gated settlement protoc
 
 Static export means there are no dynamic route segments, so the job page reads its id from the query string. All data is fetched on the client with React Query and refreshed every ten seconds.
 
+## Charts
+
+Every chart is computed from the job records the page already reads; nothing is sampled, estimated or mocked.
+
+| Where | Chart | Data | Library |
+|---|---|---|---|
+| Dashboard | Escrow flow: USDC funded per hour or day as bars, running totals funded and submitted as lines | `fundedAt`, `submittedAt` and `budget` of the most recent job records | TradingView Lightweight Charts |
+| Dashboard | Pipeline by phase: budget held per phase with the job count on top | phase derived from status, challenge window and dispute flag | Recharts |
+| Job | Settlement clock: the job's phases laid out in time with the live one outlined and a marker for now | record timestamps, `challengeEndsAt`, the dispute's `resolveBy` | SVG |
+| Job | Payout split: net payout, client share after a decision, platform and evaluator fees | the fee basis points snapshotted at funding, `netPayout`, `providerBps` | SVG |
+| Network | Keeper windows against the settlement horizon; fee basis points against the combined cap | `currentWindow`, `settlementHorizon`, `platformFeeBP`, `evaluatorFeeBP`, `MAX_TOTAL_FEE_BP` | SVG |
+| Network | Settled on recent jobs: paid to payees, platform fees, evaluator fees, refunded | terminal job records and their snapshotted fees | Recharts |
+
+The bucket of the escrow flow is an hour while the records span three days or less and a day after that. The settlement clock scales to the job's own activity; an expiry far beyond it is written under the clock instead of flattening it. Time-series charts are drawn by [TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts) (Apache-2.0), which is credited in each chart's caption; categorical charts by [Recharts](https://recharts.org) (MIT).
+
 ## Environment variables
 
 | Variable | Default | Meaning |

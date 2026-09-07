@@ -2,13 +2,16 @@
 
 import { AddressLink } from "@/components/AddressLink";
 import { AmountUsdc } from "@/components/AmountUsdc";
+import { FeeTotalsChart } from "@/components/charts/FeeTotalsChart";
+import { SegmentBar } from "@/components/charts/SegmentBar";
 import { EmptyState } from "@/components/EmptyState";
 import { NetworkStrip } from "@/components/NetworkStrip";
 import { PanelCard } from "@/components/PanelCard";
 import { SectionHeading } from "@/components/SectionHeading";
+import { chartColors, feeTotals } from "@/lib/charts";
 import { formatBigint, formatBps, formatDuration, formatTimestamp, isZeroAddress } from "@/lib/format";
 import { indexerUrl, useIndexerStatus } from "@/lib/indexer";
-import { useNetwork } from "@/lib/square";
+import { useJobs, useNetwork } from "@/lib/square";
 import { describeError } from "@/lib/tx";
 import { activeChain, deployment, rpcUrl } from "@/lib/wagmi";
 
@@ -33,7 +36,10 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export function NetworkView() {
   const network = useNetwork();
   const indexer = useIndexerStatus();
+  const jobs = useJobs();
   const data = network.data;
+  const totals = jobs.data ? feeTotals(jobs.data.jobs) : null;
+  const scanned = jobs.data?.scanned ?? 0;
 
   return (
     <div className="flex flex-col gap-16">
@@ -54,6 +60,20 @@ export function NetworkView() {
               <Row label="Effective from">{data ? (data.window.effectiveFrom === 0 ? "Since deployment (0)" : formatTimestamp(data.window.effectiveFrom)) : "Loading"}</Row>
               <Row label="Arbitration wired">{data ? <AddressLink address={data.arbitrationAddress} /> : "Loading"}</Row>
             </dl>
+            {data ? (
+              <div className="mt-6">
+                <SegmentBar
+                  ariaLabel="Keeper windows against the settlement horizon"
+                  total={data.settlementHorizon}
+                  segments={[
+                    { key: "challenge", label: "Challenge window", value: data.window.challengeWindow, color: chartColors.amber, display: formatDuration(data.window.challengeWindow) },
+                    { key: "dispute", label: "Dispute window", value: data.window.disputeWindow, color: chartColors.magenta, display: formatDuration(data.window.disputeWindow) },
+                  ]}
+                  remainderLabel="Horizon"
+                  remainderDisplay={formatDuration(data.settlementHorizon)}
+                />
+              </div>
+            ) : null}
           </PanelCard>
 
           <PanelCard title="Fees and treasury" description="Contract-wide values on SquareJob; each job snapshots them at funding.">
@@ -64,7 +84,25 @@ export function NetworkView() {
               <Row label="Treasury">{data ? <AddressLink address={data.treasury} /> : "Loading"}</Row>
               <Row label="Unclaimed on the ledger">{data ? <AmountUsdc value={data.totalWithdrawable} /> : "Loading"}</Row>
             </dl>
+            {data ? (
+              <div className="mt-6">
+                <SegmentBar
+                  ariaLabel="Fee basis points against the combined cap"
+                  total={Number(data.maxTotalFeeBP)}
+                  segments={[
+                    { key: "platform", label: "Platform", value: data.platformFeeBP, color: chartColors.carbon, display: formatBps(data.platformFeeBP) },
+                    { key: "evaluator", label: "Evaluator", value: data.evaluatorFeeBP, color: chartColors.amber, display: formatBps(data.evaluatorFeeBP) },
+                  ]}
+                  remainderLabel="Headroom to the cap"
+                  remainderDisplay={formatBps(Number(data.maxTotalFeeBP) - data.platformFeeBP - data.evaluatorFeeBP)}
+                />
+              </div>
+            ) : null}
           </PanelCard>
+
+          <div className="lg:col-span-2">
+            <FeeTotalsChart totals={totals} scanned={scanned} loading={jobs.isPending} />
+          </div>
 
           <PanelCard title="Arbiters" description="Arbitration.arbiterSet for the current version. Open disputes keep the version they were opened under.">
             <dl>
