@@ -1,0 +1,10 @@
+export const APP_URL = "https://square-wienerlabs.vercel.app";
+export const REPO_URL = "https://github.com/wienerlabs/square";
+export const DOCS_URL = "https://github.com/wienerlabs/square/tree/main/docs/design";
+export const CONTRACTS_URL = "https://github.com/wienerlabs/square/tree/main/contracts";
+export const SDK_URL = "https://github.com/wienerlabs/square/tree/main/packages/core";
+export const EXPLORER_URL = "https://testnet.arcscan.app";
+export const ARC_URL = "https://www.arc.io";
+export const RPC_URL = "https://rpc.testnet.arc.io";
+export const CHAIN_ID = 5042002;
+export const SQUARE_JOB = "0x2570a1511a562020c4F20c7ce97229376fe6B500";
