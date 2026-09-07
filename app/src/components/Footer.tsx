@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Logo } from "./Logo";
 import { activeChain, DOCS_URL, explorerUrl, REPO_URL, rpcUrl } from "@/lib/wagmi";
 
 const columnTitle = "text-caption font-medium text-carbon";
@@ -10,7 +11,7 @@ export function Footer() {
       <div className="mx-auto grid w-full max-w-[1200px] gap-8 px-6 py-12 md:grid-cols-4">
         <div className="flex flex-col gap-3">
           <p className="flex items-center gap-2 text-body font-medium text-carbon">
-            <span aria-hidden="true" className="size-2.5 rounded-[2px] bg-carbon" />
+            <Logo className="size-5 text-carbon" />
             Square
           </p>
           <p className="max-w-xs text-caption text-graphite">

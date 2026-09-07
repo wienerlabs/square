@@ -13,7 +13,6 @@
     "@squaresdk/core": "file:../packages/core",
     "@squaresdk/did-resolver": "file:../packages/did-resolver",
     "@tanstack/react-query": "^5.90.0",
-    "lightweight-charts": "^5.2.1",
     "next": "^15.5.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

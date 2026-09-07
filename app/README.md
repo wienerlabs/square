@@ -1,3 +1,5 @@
+<p><img src="public/logo.svg" alt="" width="56" height="56" /></p>
+
 # Square app
 
 The reference web application for Square, the compliance-gated settlement protocol for autonomous agent work on Arc. It is a static Next.js export that talks to the deployed contracts through `@squaresdk/core` and to the connected wallet through wagmi. Nothing on screen is mocked: every number comes from the chain, from the optional indexer, or is shown as an honest empty state.
@@ -20,14 +22,14 @@ Every chart is computed from the job records the page already reads; nothing is 
 
 | Where | Chart | Data | Library |
 |---|---|---|---|
-| Dashboard | Escrow flow: USDC funded per hour or day as bars, running totals funded and submitted as lines | `fundedAt`, `submittedAt` and `budget` of the most recent job records | TradingView Lightweight Charts |
+| Dashboard | Escrow flow: USDC funded per hour or day as thin rounded bars, running totals funded and submitted as smooth lines | `fundedAt`, `submittedAt` and `budget` of the most recent job records | Recharts |
 | Dashboard | Pipeline by phase: budget held per phase with the job count on top | phase derived from status, challenge window and dispute flag | Recharts |
 | Job | Settlement clock: the job's phases laid out in time with the live one outlined and a marker for now | record timestamps, `challengeEndsAt`, the dispute's `resolveBy` | SVG |
 | Job | Payout split: net payout, client share after a decision, platform and evaluator fees | the fee basis points snapshotted at funding, `netPayout`, `providerBps` | SVG |
 | Network | Keeper windows against the settlement horizon; fee basis points against the combined cap | `currentWindow`, `settlementHorizon`, `platformFeeBP`, `evaluatorFeeBP`, `MAX_TOTAL_FEE_BP` | SVG |
 | Network | Settled on recent jobs: paid to payees, platform fees, evaluator fees, refunded | terminal job records and their snapshotted fees | Recharts |
 
-The bucket of the escrow flow is an hour while the records span three days or less and a day after that. The settlement clock scales to the job's own activity; an expiry far beyond it is written under the clock instead of flattening it. Time-series charts are drawn by [TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts) (Apache-2.0), which is credited in each chart's caption; categorical charts by [Recharts](https://recharts.org) (MIT).
+The bucket of the escrow flow is an hour while the records span three days or less and a day after that. The settlement clock scales to the job's own activity; an expiry far beyond it is written under the clock instead of flattening it. Bars are 10 to 14 px pills on every chart, lines are monotone curves, and colours, type and radii come from the design tokens. Charts are drawn by [Recharts](https://recharts.org) (MIT) on SVG, which is also what the hand-drawn clock and segment bars use, so the whole page shares one rendering model.
 
 ## Environment variables
 

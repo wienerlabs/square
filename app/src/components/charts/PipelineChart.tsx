@@ -50,7 +50,7 @@ export function PipelineChart({ slices, scanned, loading }: { slices: PhaseSlice
                 tick={{ fill: chartColors.ash, fontSize: 12, fontFamily: chartFont }}
               />
               <Tooltip cursor={{ fill: chartColors.mist }} content={<PipelineTooltip />} />
-              <Bar dataKey="budget" radius={[8, 8, 8, 8]} maxBarSize={44} isAnimationActive={false}>
+              <Bar dataKey="budget" radius={[7, 7, 7, 7]} barSize={14} isAnimationActive={false}>
                 {slices.map((slice) => (
                   <Cell key={slice.phase} fill={slice.color} />
                 ))}

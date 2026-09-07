@@ -63,7 +63,7 @@ export function FeeTotalsChart({ totals, scanned, loading }: { totals: FeeTotals
                 tick={{ fill: chartColors.graphite, fontSize: 12, fontFamily: chartFont }}
               />
               <Tooltip cursor={{ fill: chartColors.mist }} content={<FeeTooltip />} />
-              <Bar dataKey="value" radius={[8, 8, 8, 8]} maxBarSize={22} isAnimationActive={false}>
+              <Bar dataKey="value" radius={[7, 7, 7, 7]} barSize={12} isAnimationActive={false}>
                 {rows.map((row) => (
                   <Cell key={row.key} fill={row.color} />
                 ))}
