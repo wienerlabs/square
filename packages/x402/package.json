@@ -1,0 +1,42 @@
+{
+  "name": "@squaresdk/x402",
+  "version": "0.1.0",
+  "description": "x402 v2 payment gateway for agent API access on Arc: in-process facilitator with a durable replay guard, paid Hono routes, and a paying fetch.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:live": "LIVE_X402=1 vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@x402/core": "2.25.0",
+    "@x402/evm": "2.25.0",
+    "@x402/fetch": "2.25.0",
+    "@x402/hono": "2.25.0",
+    "hono": "^4.7.0",
+    "viem": "^2.48.0"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^1.14.0",
+    "@types/node": "^22.20.1",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

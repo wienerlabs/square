@@ -1,0 +1,41 @@
+{
+  "name": "@squaresdk/hardening",
+  "version": "0.1.0",
+  "description": "Chain-agnostic security layer: SSRF-safe fetch, request-hash idempotency, durable rate limiting, RPC failover, and signer-actor bound messages.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "undici": "^7.29.1"
+  },
+  "peerDependencies": {
+    "hono": "^4.0.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "hono": "^4.13.7",
+    "typescript": "^5.6.0",
+    "viem": "^2.21.0",
+    "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

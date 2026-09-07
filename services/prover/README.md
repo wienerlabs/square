@@ -13,7 +13,9 @@ compliance-violation log leak fixed on the way in — see
 
 | | |
 |---|---|
-| `GET /health` | Liveness probe. |
+| `GET /health` | Health with the artifact check, from `@squaresdk/observability`. |
+| `GET /metrics` | Prometheus exposition: proof duration histogram, failures by reason, process metrics. |
+| `GET /version` | Service, version, commit and Node version. |
 | `GET /api-docs.json` | OpenAPI 3.0 spec for the two endpoints below it. |
 | `POST /prove` | Generate a proof for one payment. |
 

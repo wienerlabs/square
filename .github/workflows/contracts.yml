@@ -1,0 +1,119 @@
+name: contracts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - "packages/core/**"
+      - ".github/workflows/contracts.yml"
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "packages/core/**"
+      - ".github/workflows/contracts.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  FOUNDRY_PROFILE: ci
+
+jobs:
+  forge:
+    name: build, test, gas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Build
+        working-directory: contracts
+        run: forge build --sizes
+
+      - name: Test
+        working-directory: contracts
+        run: forge test -vvv
+
+      - name: Gas report
+        working-directory: contracts
+        run: forge test --gas-report > ../gas-report.txt
+
+      - name: Gas report on the pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('gas-report.txt', 'utf8');
+            const rows = report.split('\n').filter(l => /^\| (createJob|fund|submit|complete|reject|claimRefund|withdraw|finalize|finalizeDecided|dispute|vote|lapse|list|buy|cancel|recordExpiry)\b/.test(l));
+            const body = ['## Gas report', '', '| function | min | avg | median | max | calls |', '|---|---|---|---|---|---|', ...rows.map(r => r.replace(/\s+\|\s+/g, ' | '))].join('\n');
+            const marker = '<!-- square-gas-report -->';
+            const {owner, repo} = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.rest.issues.listComments({owner, repo, issue_number});
+            const existing = comments.data.find(c => c.body && c.body.includes(marker));
+            const payload = `${marker}\n${body}`;
+            if (existing) await github.rest.issues.updateComment({owner, repo, comment_id: existing.id, body: payload});
+            else await github.rest.issues.createComment({owner, repo, issue_number, body: payload});
+
+  sdk:
+    name: "@squaresdk/core against anvil"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build contracts
+        working-directory: contracts
+        run: forge build
+
+      - name: Start anvil and deploy the local stack
+        working-directory: contracts
+        run: |
+          anvil --port 8545 --chain-id 31337 --silent &
+          for _ in $(seq 1 30); do cast chain-id --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1 && break; sleep 1; done
+          forge script script/DeployLocal.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
+
+      - name: Build @squaresdk/did-resolver
+        working-directory: packages/did-resolver
+        run: |
+          npm install
+          npm run build
+
+      - name: Install, typecheck, test @squaresdk/core
+        working-directory: packages/core
+        run: |
+          npm install --install-links
+          npm run generate:abi
+          git diff --exit-code -- src/abi
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Five settlement paths end to end (anvil)
+        working-directory: packages/core
+        env:
+          ANVIL: "1"
+          CHAIN_ID: "31337"
+          RPC_URL: http://127.0.0.1:8545
+          LIFECYCLE_REPORT: ${{ runner.temp }}/lifecycle-31337.md
+        run: |
+          npm run lifecycle
+          cat "$LIFECYCLE_REPORT"

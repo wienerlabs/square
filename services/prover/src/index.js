@@ -4,6 +4,9 @@ import helmet from 'helmet';
 import { generateProof } from './prover.js';
 import { logEntriesForProof, proofFailedLogEntry } from './logging.js';
 import { openapiSpec } from './openapi.js';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { createHealth, createMetrics, mountObservability } from '@squaresdk/observability';
 
 const app = express();
 const port = Number(process.env.PROVER_SERVICE_PORT ?? 3003);
@@ -26,20 +29,29 @@ app.get('/api-docs.json', (_req, res) => {
   res.json(openapiSpec);
 });
 
-app.get('/health', (_req, res) => {
-  res.json({
-    status: 'healthy',
-    service: 'square-prover',
-    version: '0.1.0',
-    backend: 'circom+snarkjs',
-  });
+const artifactsDir = process.env.PROVER_ARTIFACTS_DIR
+  ? path.resolve(process.env.PROVER_ARTIFACTS_DIR)
+  : path.resolve('artifacts');
+const metrics = createMetrics({ service: 'square-prover' });
+const health = createHealth({
+  service: 'square-prover',
+  version: '0.1.0',
+  checks: {
+    artifacts: () => {
+      const present = existsSync(path.join(artifactsDir, 'payment.wasm')) && existsSync(path.join(artifactsDir, 'payment.zkey'));
+      return { ok: present, detail: present ? 'payment.wasm and payment.zkey present' : `no circuit artifacts under ${artifactsDir}` };
+    },
+  },
 });
+mountObservability(app, { health, metrics });
 
 app.post('/prove', async (req, res) => {
   const start = Date.now();
+  const timer = metrics.startProof();
   try {
     const result = await generateProof(req.body);
     const elapsedMs = Date.now() - start;
+    timer.success();
 
     // Which entries to write is decided in logging.js, not here. On the
     // violation path that decision is the whole point of #4: the ceilings, the
@@ -71,6 +83,7 @@ app.post('/prove', async (req, res) => {
     });
   } catch (error) {
     const entry = proofFailedLogEntry(error);
+    timer.failure(entry.error);
     console.error(JSON.stringify(entry));
     res.status(500).json({ error: entry.error });
   }

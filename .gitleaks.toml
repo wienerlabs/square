@@ -16,3 +16,13 @@ description = """Redaksiyon testi, redakte edilmis ciktilari dogruladigi icin
 yer tutucu 'REDACTED' degerleri barindiriyor; generic-api-key kurali bunlarin
 entropisine takiliyor. Dosyada gercek bir kimlik bilgisi yok."""
 paths = ['''^services/prover/test/error-redaction\.test\.js$''']
+
+[[allowlists]]
+description = """Anvil'in herkese acik gelistirme mnemonic'inden turetilen anahtarlar.
+Bu iki dosya branch gecmisinde o anahtarlari literal olarak tasidi; simdi
+mnemonic'ten turetiliyor. Anahtarlar Foundry belgelerinde yayinlanmistir ve
+hicbir gercek ag uzerinde deger tutmaz (Arc USDC bu adresleri bloklamistir)."""
+paths = [
+  '''^contracts/script/DeployLocal\.s\.sol$''',
+  '''^packages/core/test/fork\.test\.ts$''',
+]

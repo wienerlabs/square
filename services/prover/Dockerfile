@@ -1,18 +1,19 @@
-FROM node:22-alpine AS base
-WORKDIR /app
+FROM node:22-alpine AS build
+WORKDIR /src
+COPY packages/observability packages/observability
+COPY services/prover services/prover
+RUN cd packages/observability && npm install --ignore-scripts && npm run build && npm prune --omit=dev
+RUN cd services/prover && npm install --omit=dev --install-links
 
-FROM base AS deps
-COPY services/prover/package.json services/prover/package-lock.json* ./
-RUN npm install --omit=dev
-
-FROM base AS runner
+FROM node:22-alpine AS runner
 ENV NODE_ENV=production
 ENV PROVER_SERVICE_PORT=3003
 
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 prover
 
-COPY --from=deps --chown=prover:nodejs /app/node_modules ./node_modules
+WORKDIR /app
+COPY --from=build --chown=prover:nodejs /src/services/prover/node_modules ./node_modules
 COPY --chown=prover:nodejs services/prover/src ./src
 COPY --chown=prover:nodejs services/prover/package.json ./package.json
 

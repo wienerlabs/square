@@ -1,0 +1,264 @@
+// SPDX-License-Identifier: Apache-2.0
+pragma solidity ^0.8.28;
+
+import {BaseTest} from "./Base.t.sol";
+import {ISquareJob} from "../src/interfaces/ISquareJob.sol";
+import {IACPHook} from "../src/interfaces/IACPHook.sol";
+import {IPayoutResolver} from "../src/interfaces/IPayoutResolver.sol";
+import {SquareHook} from "../src/SquareHook.sol";
+import {MockComplianceModule} from "./mocks/MockComplianceModule.sol";
+import {MockReputationRegistry} from "./mocks/MockRegistries.sol";
+
+contract SquareHookTest is BaseTest {
+    uint256 internal constant BUDGET = 1_000 * USDC;
+
+    function test_supportsBothInterfaces() public view {
+        assertTrue(hook.supportsInterface(type(IACPHook).interfaceId));
+        assertTrue(hook.supportsInterface(type(IPayoutResolver).interfaceId));
+    }
+
+    function test_onlyTheKernelMayCallTheCallbacks() public {
+        vm.expectRevert(SquareHook.OnlyKernel.selector);
+        vm.prank(stranger);
+        hook.beforeAction(1, ISquareJob.submit.selector, "");
+        vm.expectRevert(SquareHook.OnlyKernel.selector);
+        vm.prank(stranger);
+        hook.afterAction(1, ISquareJob.complete.selector, "");
+    }
+
+    function test_submit_bindsAnAgentTheProviderOwns() public {
+        uint256 jobId = fundedJob(BUDGET, address(hook));
+        vm.expectEmit(true, true, false, true);
+        emit SquareHook.AgentBound(jobId, AGENT_ID, REQUEST_HASH);
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, abi.encode(AGENT_ID, REQUEST_HASH));
+        assertEq(hook.agentOf(jobId), AGENT_ID);
+        assertEq(hook.validationOf(jobId), REQUEST_HASH);
+    }
+
+    function test_submit_refusesSomeoneElsesAgent() public {
+        identity.setAgent(7, stranger, stranger);
+        uint256 jobId = fundedJob(BUDGET, address(hook));
+        vm.expectRevert(abi.encodeWithSelector(SquareHook.AgentNotOwnedByProvider.selector, 7, provider));
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, abi.encode(uint256(7), bytes32(0)));
+    }
+
+    function test_submit_acceptsAgentWalletOwnership() public {
+        identity.setAgent(8, stranger, provider);
+        uint256 jobId = fundedJob(BUDGET, address(hook));
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, abi.encode(uint256(8), bytes32(0)));
+        assertEq(hook.agentOf(jobId), 8);
+    }
+
+    function test_submit_registryWithoutWalletsFallsBackToOwner() public {
+        identity.setWalletsSupported(false);
+        identity.setAgent(9, stranger, provider);
+        uint256 jobId = fundedJob(BUDGET, address(hook));
+        vm.expectRevert(abi.encodeWithSelector(SquareHook.AgentNotOwnedByProvider.selector, 9, provider));
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, abi.encode(uint256(9), bytes32(0)));
+    }
+
+    function test_submit_withoutOptParamsBindsNothing() public {
+        uint256 jobId = fundedJob(BUDGET, address(hook));
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, "");
+        assertEq(hook.agentOf(jobId), 0);
+        pastWindow(jobId);
+        keeper.finalize(jobId, "");
+        assertEq(reputation.feedbackCount(AGENT_ID), 0, "no agent, no feedback");
+    }
+
+    function test_complete_writesPositiveFeedbackWithTheReasonAsHash() public {
+        uint256 jobId = submittedHookedJob(BUDGET);
+        pastWindow(jobId);
+        bytes32 reason = keeper.finalizeReason(jobId, DELIVERABLE);
+        vm.expectEmit(true, true, false, true);
+        emit SquareHook.ReputationRecorded(jobId, AGENT_ID, 1, 1);
+        keeper.finalize(jobId, "");
+        MockReputationRegistry.Feedback memory f = reputation.feedbackAt(AGENT_ID, 0);
+        assertEq(f.client, address(hook));
+        assertEq(f.value, 1);
+        assertEq(f.valueDecimals, 0);
+        assertEq(f.tag1, "square");
+        assertEq(f.tag2, "completed");
+        assertEq(f.feedbackHash, reason);
+        assertTrue(hook.recorded(jobId));
+    }
+
+    function test_complete_withoutModuleWritesNoValidation() public {
+        uint256 jobId = submittedHookedJob(BUDGET);
+        pastWindow(jobId);
+        vm.expectEmit(true, true, false, true);
+        emit SquareHook.ComplianceChecked(jobId, provider, netOf(BUDGET), false);
+        keeper.finalize(jobId, "");
+        (address validator,,,,,) = validation.getValidationStatus(REQUEST_HASH);
+        assertEq(validator, address(0), "nothing was verified, nothing is claimed");
+    }
+
+    function test_complete_withModuleBindsPayeeAmountTokenClientAndProof() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        uint256 jobId = submittedHookedJob(BUDGET);
+        vm.prank(provider);
+        market.list(jobId, uint64(900 * USDC));
+        vm.prank(buyer);
+        market.buy(jobId);
+        pastWindow(jobId);
+
+        bytes memory proof = hex"deadbeef";
+        vm.expectEmit(true, true, false, true);
+        emit SquareHook.ComplianceChecked(jobId, buyer, netOf(BUDGET), true);
+        vm.expectEmit(true, true, false, true);
+        emit SquareHook.ValidationRecorded(jobId, REQUEST_HASH, 100);
+        keeper.finalize(jobId, proof);
+
+        MockComplianceModule.Check memory c = compliance.lastCheck();
+        assertEq(c.jobId, jobId);
+        assertEq(c.payee, buyer, "bound to the address that is actually paid");
+        assertEq(c.amount, netOf(BUDGET));
+        assertEq(c.token, address(usdc));
+        assertEq(c.client, client);
+        assertEq(c.proof, proof);
+        (address validator,, uint8 response,, string memory tag,) = validation.getValidationStatus(REQUEST_HASH);
+        assertEq(validator, address(hook));
+        assertEq(response, 100);
+        assertEq(tag, "square.compliance");
+    }
+
+    function test_complete_moduleRejectionBlocksTheRelease() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        compliance.setRejectAll(true);
+        uint256 jobId = submittedHookedJob(BUDGET);
+        pastWindow(jobId);
+        vm.expectRevert(
+            abi.encodeWithSelector(MockComplianceModule.ReleaseNotCompliant.selector, jobId, provider, netOf(BUDGET))
+        );
+        keeper.finalize(jobId, "");
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Submitted));
+        assertEq(kernel.withdrawable(provider), 0);
+    }
+
+    function test_complete_splitAmountIsTheProviderShare() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        uint256 jobId = submittedHookedJob(BUDGET);
+        vm.prank(address(keeper));
+        kernel.complete(jobId, bytes32(0), abi.encode(uint16(2_500), bytes("")));
+        assertEq(compliance.lastCheck().amount, (netOf(BUDGET) * 2_500) / FULL_BPS);
+        assertEq(kernel.withdrawable(provider), (netOf(BUDGET) * 2_500) / FULL_BPS);
+    }
+
+    function test_complete_registryFailureDoesNotBlockSettlement() public {
+        reputation.setShouldRevert(true);
+        validation.setShouldRevert(true);
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        uint256 jobId = submittedHookedJob(BUDGET);
+        pastWindow(jobId);
+        vm.expectEmit(true, true, false, false);
+        emit SquareHook.ReputationWriteFailed(jobId, AGENT_ID, "");
+        vm.expectEmit(true, true, false, false);
+        emit SquareHook.ValidationWriteFailed(jobId, REQUEST_HASH, "");
+        keeper.finalize(jobId, "");
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed), "money is settled regardless");
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET));
+        assertTrue(hook.recorded(jobId), "one attempt per job, even a failed one");
+    }
+
+    function test_reject_afterSubmissionWritesNegativeFeedbackAndFailedValidation() public {
+        uint256 jobId = submittedHookedJob(BUDGET);
+        vm.prank(address(keeper));
+        kernel.reject(jobId, keccak256("bad work"), "");
+        MockReputationRegistry.Feedback memory f = reputation.feedbackAt(AGENT_ID, 0);
+        assertEq(f.value, -1);
+        assertEq(f.tag2, "rejected");
+        assertEq(f.feedbackHash, keccak256("bad work"));
+        (,, uint8 response,,,) = validation.getValidationStatus(REQUEST_HASH);
+        assertEq(response, 0);
+    }
+
+    function test_reject_beforeSubmissionWritesNothing() public {
+        uint256 jobId = fundedJob(BUDGET, address(hook));
+        vm.prank(address(keeper));
+        kernel.reject(jobId, bytes32(0), "");
+        assertEq(reputation.feedbackCount(AGENT_ID), 0);
+        uint256 open = createJob(BUDGET, address(hook));
+        vm.prank(client);
+        kernel.reject(open, bytes32(0), "");
+        assertEq(reputation.feedbackCount(AGENT_ID), 0);
+    }
+
+    function test_recordExpiry_neutralOnceAndOnlyWhenExpired() public {
+        uint256 jobId = submittedHookedJob(BUDGET);
+        vm.expectRevert(SquareHook.NotExpired.selector);
+        hook.recordExpiry(jobId);
+        vm.warp(expiry());
+        kernel.claimRefund(jobId);
+        vm.prank(stranger);
+        hook.recordExpiry(jobId);
+        MockReputationRegistry.Feedback memory f = reputation.feedbackAt(AGENT_ID, 0);
+        assertEq(f.value, 0);
+        assertEq(f.tag2, "expired");
+        vm.expectRevert(SquareHook.AlreadyRecorded.selector);
+        hook.recordExpiry(jobId);
+
+        uint256 unbound = fundedJob(BUDGET, address(hook));
+        vm.prank(provider);
+        kernel.submit(unbound, DELIVERABLE, "");
+        vm.warp(expiry());
+        kernel.claimRefund(unbound);
+        vm.expectRevert(SquareHook.NoAgentBound.selector);
+        hook.recordExpiry(unbound);
+    }
+
+    function test_gasLimit_fitsACompliancCheckOfTheExpectedCost() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        compliance.setGasToBurn(400_000);
+        uint256 jobId = submittedHookedJob(BUDGET);
+        pastWindow(jobId);
+        keeper.finalize(jobId, "");
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));
+    }
+
+    function test_gasLimit_boundsARunawayCompliancCheck() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        compliance.setGasToBurn(HOOK_GAS_LIMIT + 100_000);
+        uint256 jobId = submittedHookedJob(BUDGET);
+        pastWindow(jobId);
+        vm.expectRevert(abi.encodeWithSelector(ISquareJob.HookReverted.selector, address(hook)));
+        keeper.finalize{gas: 5_000_000}(jobId, "");
+    }
+
+    function test_gas_hookShareOfComplete() public {
+        uint256 hooked = submittedHookedJob(BUDGET);
+        uint256 bare = submittedJob(BUDGET, address(0));
+        pastWindow(hooked);
+        vm.prank(cranker);
+        uint256 g0 = gasleft();
+        keeper.finalize(hooked, "");
+        uint256 withHook = g0 - gasleft();
+        vm.prank(cranker);
+        g0 = gasleft();
+        keeper.finalize(bare, "");
+        uint256 withoutHook = g0 - gasleft();
+        emit log_named_uint("finalize, hooked", withHook);
+        emit log_named_uint("finalize, no hook", withoutHook);
+        emit log_named_uint("hook share", withHook - withoutHook);
+        assertLt(withHook - withoutHook, HOOK_GAS_LIMIT / 2, "hook share must stay under half the limit");
+    }
+
+    function test_setComplianceModule_ownerOnly() public {
+        vm.expectRevert();
+        vm.prank(stranger);
+        hook.setComplianceModule(address(compliance));
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        assertEq(hook.complianceModule(), address(compliance));
+    }
+}
