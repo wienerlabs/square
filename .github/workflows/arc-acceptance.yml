@@ -1,0 +1,86 @@
+name: arc acceptance
+
+# The one thing in this repository that can spend money.
+#
+# `npm run test:live` is two suites behind one flag. LIVE=1 alone runs reads and
+# an eth_call dry run against Arc Testnet: free, no key. LIVE=1 with
+# SQUARE_PRIVATE_KEY additionally registers a real agent in the ERC-8004
+# IdentityRegistry, which costs real testnet gas and leaves a permanent entry.
+# That second half is #43's "tests that need a secret".
+#
+# It lives in its own workflow, and keeps a path filter, on purpose. The other
+# test workflows dropped their pull_request filters because a required status
+# check that a filter skips never reports and blocks the merge forever. This
+# check is deliberately **not** required — its red is a statement about Arc
+# being reachable and about a funded account, not about the change — so a
+# filter here is safe, and without one every documentation pull request would
+# register an agent on chain and burn gas for nothing.
+#
+# It also does not run on pull requests from forks. A fork's `pull_request` run
+# gets no secrets, so the funded half could never run there; skipping the job
+# outright is better than a red check an outside contributor cannot fix. With
+# the secret absent on a same-repository run the reads still execute and the
+# registration suite skips itself, named on the run summary — so "we have an
+# acceptance test" and "the acceptance test ran" stay distinguishable.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/cli/**"
+      - "packages/did-resolver/**"
+      - ".github/scripts/vitest-summary.mjs"
+      - ".github/workflows/arc-acceptance.yml"
+  pull_request:
+    paths:
+      - "packages/cli/**"
+      - "packages/did-resolver/**"
+      - ".github/scripts/vitest-summary.mjs"
+      - ".github/workflows/arc-acceptance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arc-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live:
+    name: acceptance (Arc Testnet, funded key)
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Build @squaresdk/did-resolver
+        working-directory: packages/did-resolver
+        run: |
+          npm install
+          npm run build
+
+      # test:live drives dist/index.js, not the library: the criterion is about
+      # the command, so the command is what gets exercised.
+      - name: Build @squaresdk/cli
+        working-directory: packages/cli
+        run: |
+          npm install --install-links
+          npm run build
+
+      - name: Reads, dry run, and — with a funded key — a real registration
+        working-directory: packages/cli
+        env:
+          SQUARE_PRIVATE_KEY: ${{ secrets.SQUARE_PRIVATE_KEY }}
+          NO_COLOR: "1"
+        run: npm run test:live -- --reporter=default --reporter=json --outputFile.json=/tmp/live.json
+
+      - name: What ran against the chain
+        if: always()
+        run: node .github/scripts/vitest-summary.mjs /tmp/live.json "cli — Arc Testnet"

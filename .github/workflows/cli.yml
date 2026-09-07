@@ -14,7 +14,6 @@ on:
       - "packages/did-resolver/**"
       - "docs/smoke/**"
       - "docs/agent-card/schema.json"
-      - ".github/scripts/vitest-summary.mjs"
       - ".github/workflows/cli.yml"
   # No path filter on pull_request, deliberately. A required status check that a
   # filter skips never reports, and GitHub blocks the merge waiting for a run
@@ -30,9 +29,9 @@ jobs:
     name: cli
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "20"
 
@@ -107,9 +106,9 @@ jobs:
     name: end-to-end (Arc Testnet)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "20"
 
@@ -128,56 +127,3 @@ jobs:
       - name: Resolve the permanent smoke agents
         working-directory: packages/cli
         run: npm run test:smoke
-
-  # The one job in this repository that can spend money, and the only one that
-  # needs a secret.
-  #
-  # `npm run test:live` is two suites behind one flag. LIVE=1 alone runs reads
-  # and an eth_call dry run against Arc: free, no key. LIVE=1 with
-  # SQUARE_PRIVATE_KEY additionally registers a real agent, which costs real
-  # testnet gas — that is #43's "tests needing a secret" and it cannot run
-  # without a funded Arc address.
-  #
-  # A pull_request from a fork gets a read-only token and no secrets, so the
-  # funded half could never run there; the job is skipped outright rather than
-  # half-running and reporting a red check a contributor cannot act on. With the
-  # secret absent on a same-repository run the reads still execute and the
-  # registration suite skips itself — the summary step names it, so "we have an
-  # acceptance test" and "the acceptance test ran" stay distinguishable.
-  live:
-    name: acceptance (Arc Testnet, funded key)
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Build @squaresdk/did-resolver
-        working-directory: packages/did-resolver
-        run: |
-          npm install
-          npm run build
-
-      # test:live drives dist/index.js, not the library: the criterion is about
-      # the command, so the command is what gets exercised.
-      - name: Build @squaresdk/cli
-        working-directory: packages/cli
-        run: |
-          npm install --install-links
-          npm run build
-
-      - name: Reads, dry run, and — with a funded key — a real registration
-        working-directory: packages/cli
-        env:
-          SQUARE_PRIVATE_KEY: ${{ secrets.SQUARE_PRIVATE_KEY }}
-          NO_COLOR: "1"
-        run: npm run test:live -- --reporter=default --reporter=json --outputFile.json=/tmp/live.json
-
-      - name: What ran against the chain
-        if: always()
-        run: node .github/scripts/vitest-summary.mjs /tmp/live.json "cli — Arc Testnet"

@@ -19,7 +19,9 @@ remappings = [
 
 [profile.ci]
 fuzz = { runs = 512 }
-invariant = { runs = 128, depth = 32 }
+# No invariant setting here until there is an invariant test to configure.
+# `invariant = { runs = 128, depth = 32 }` sat here and ran nothing: there is
+# no invariant_ function under test/. Put it back with the first one.
 
 [fmt]
 line_length = 110

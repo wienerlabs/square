@@ -20,7 +20,7 @@ pull request.
 | `prover (real proving key)` | The prover agrees with the circuit, and its Solidity calldata matches `snarkjs`. |
 | `services/prover (hermetic)` | The rule evaluator and the encoding with no artifacts — a contributor's `npm test`. |
 | `packages/data`, `packages/hardening`, `packages/observability` | Hermetic package suites. |
-| `packages/x402 (anvil)`, `packages/aa (anvil)`, `services/indexer (anvil)`, `services/keeper (anvil)` | Against a local chain. |
+| `packages/x402 (anvil)`, `services/indexer (anvil)`, `services/keeper (anvil)` | Against a local chain the job starts itself: anvil plus `DeployLocal.s.sol`, asserted before the suites run. |
 | `app (static export)` | The reference application still builds. |
 | `a2a` | `@squaresdk/a2a` typechecks and builds, and an agent still cannot pay itself. |
 | `cli` | The resolver and the CLI build; the CLI's exit codes are unchanged. Hermetic. |
@@ -28,14 +28,15 @@ pull request.
 | `did-aip-driver image` | The container answers, and a malformed DID is still a 400 rather than a 500. |
 | `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. |
 
-Two run on every pull request but are **not** required to merge. Each one's red
-is a statement about Arc Testnet being reachable rather than about the change,
+Three are **not** required to merge. Each one's red is a statement about Arc
+Testnet being reachable, or about a funded account, rather than about the change,
 and a young testnet having a bad afternoon should not block unrelated work.
 
 | Check | Why it is not required |
 |---|---|
 | `end-to-end (Arc Testnet)` | Resolves the permanent smoke agents against the live registry. |
-| `acceptance (Arc Testnet, funded key)` | Spends real testnet gas, needs a secret, and does not run on fork pull requests at all. |
+| `packages/aa (anvil)` | Named for a local chain, but `test/globalSetup.ts` calls `startAnvilFork()`, which defaults to `https://rpc.testnet.arc.io` (`scripts/fork.ts:144`) with no override and no fallback, and rethrows on failure. Arc being down would block a documentation pull request. |
+| `acceptance (Arc Testnet, funded key)` | Spends real testnet gas, needs a secret, does not run on fork pull requests, and lives in its own path-filtered workflow. |
 
 `verifies on Arc Testnet` also depends on Arc's RPC, but it is cheap, read-only
 and defends a claim the README makes, so it is required. If it turns out to
@@ -46,31 +47,66 @@ flake, move it to the list above rather than deleting it.
 This is the failure this setup exists to prevent, and it is not hypothetical:
 `covenant` carried 5,952 lines of tests across 33 files that CI never executed.
 
-The shape it takes here is subtler than "no test job". Several suites guard
-themselves with `skipIf`:
+The shape it takes here is subtler than "no test job". Twelve suites guard
+themselves with `skipIf`, and a job that does not satisfy the guard reports green
+having executed nothing. The full inventory, because a partial one is how the
+next instance of this hides:
 
-- `circuits/test/*` skips every constraint test when `build/payment_js/payment.wasm`
-  is absent, which is correct on a machine without `circom`.
-- `services/prover/test/{circuit-agreement,solidity-encoding,prove-route.e2e}.test.js`
-  skip when there is no proving key to prove against.
+| Guard | Suite | Runs inside | Status |
+|---|---|---|---|
+| `!HAVE_WASM`, `!HAVE_ZKEY` | `circuits/test/payment.test.js` | `circuits` | satisfied — the job builds the circuit and a key |
+| `!HAVE_PTAU`, `!HAVE_ZKEY` | `circuits/test/ptau-adoption.test.js` | `circuits` | satisfied — the build fetches and hash-checks the ptau |
+| `!HAVE_BUILD` | `circuits/test/timestamp-soundness.test.js` | `circuits` | satisfied |
+| `!HAVE_CIRCUIT` | `services/prover/test/circuit-agreement.test.js` | `prover (real proving key)` | satisfied |
+| `!hasArtifacts` | `services/prover/test/prove-route.e2e.test.js` | `prover (real proving key)` | satisfied |
+| `!HAVE_ARTIFACTS` | `services/prover/test/solidity-encoding.test.js` | `prover (real proving key)` | satisfied |
+| `!reachable` | `services/indexer/test/{anvil,sync}.test.ts` | `services/indexer (anvil)` | satisfied — the job now starts anvil and deploys |
+| `!reachable` | `services/keeper/test/anvil.test.ts` | `services/keeper (anvil)` | satisfied — same |
+| `!reachable` | `packages/core/test/anvil.test.ts` | `@squaresdk/core against anvil` | satisfied — that job already started one |
+| `!forkUrl` | `packages/core/test/fork.test.ts` | `@squaresdk/core against anvil` | **not satisfied.** `ARC_FORK_RPC_URL` is set by no workflow, so the lifecycle has never been exercised against the real ERC-8004 registries in CI. Named on the run summary so the gap is visible. |
+| `!configured` | `packages/x402/test/live.test.ts` | `packages/x402 (anvil)` | **not satisfied.** Needs `ARC_TESTNET_RPC_URL` and two funded keys. |
+| `!process.env.LIVE` | `packages/did-resolver/test/integration.test.ts` | `cli` | **not satisfied, by design.** `cli` is hermetic; the live reads run in `end-to-end (Arc Testnet)`. |
 
-A runner that installs neither reports green having executed almost nothing.
-Measured on this repository, with the artifacts moved aside:
+Four further guards are *inverse* — `skipIf(HAVE_BUILD)` and the prover's three
+`skipIf(HAVE_*)`. They fire only when the artifact is **absent** and exist to say
+so out loud. Seeing one skipped is the correct state.
+
+Measured, with the artifacts moved aside and the suites unchanged, on a clean
+checkout after `npm ci`:
 
 ```
-circuits   npm test →  8 passed | 41 skipped (49)   exit 0
+circuits   npm test →  4 passed | 45 skipped (49)   exit 0
 prover     npm test → 63 passed |  6 skipped (69)   exit 0
 ```
 
-So:
+And measured on `main` before this branch, where the `(anvil)` jobs were named
+for a chain they never started:
 
-1. `circuits` and `prover (real proving key)` install a pinned `circom`, build
-   the circuit and a development proving key, and **fail the job if the
-   artifacts are not on disk** before vitest starts. With the files present the
-   guards are false and the real tests cannot be skipped.
-2. Every vitest job writes a JSON report and prints, on the run summary, how
-   many tests passed and **the full name of every test that was skipped**. A
-   suite that starts skipping is visible without reading logs.
+```
+services/indexer (anvil)  →  7 passed | 3 skipped (10)   exit 0
+services/keeper  (anvil)  →  9 passed | 1 skipped (10)   exit 0
+```
+
+So, two mechanisms:
+
+1. **The job fails before vitest starts if what the tests need is not there.**
+   `circuits` and `prover (real proving key)` check for the compiled wasm and the
+   proving key; the `(anvil)` jobs check that anvil answers on `127.0.0.1:8545`
+   and that `contracts/deployments/31337.json` exists — both, because
+   `localDeployment()` reads that file and only `--broadcast` writes it. With the
+   preconditions present the guards are false and the tests cannot skip. **This
+   is the gate.**
+2. **Every job that can, prints what ran.** A vitest job writes a JSON report and
+   the run summary names how many tests passed and the full name of every test
+   that was skipped anyway. This is **visibility, not a gate**:
+   `.github/scripts/vitest-summary.mjs` never exits non-zero and every call sits
+   under `if: always()`, deliberately, so it cannot mask the real failure. It is
+   what makes a guard that stops being satisfied — like `!forkUrl` above —
+   visible without reading logs.
+
+   It runs in `circuits`, `prover (real proving key)`, `did-aip-driver (unit)`,
+   `@squaresdk/core against anvil`, the four `(anvil)` matrix jobs, and
+   `acceptance (Arc Testnet, funded key)`. The rest do not have one.
 
 `services/prover (hermetic)` in `packages.yml` is the no-artifacts run and is
 kept: it is the contributor's `npm test` and it should stay green. It is not a
@@ -95,6 +131,19 @@ that file holds the adoption record, so adopting a different powers of tau
 misses the cache instead of reusing the old file. `fetch-ptau.mjs` re-verifies
 the bytes on every run either way, which is what makes caching a downloaded
 trust anchor safe at all.
+
+### Actions are pinned to commits
+
+Every `uses:` in `.github/workflows/` names a 40-character commit SHA with the
+release in a trailing comment, not a moving tag. `actions/checkout@v4` is a
+branch that its owner can repoint at any time; a workflow that trusts it is
+trusting whoever holds that repository, continuously, to a token that in this
+repository can write to GHCR. It is the same argument the circom action makes
+for pinning the compiler, and it applies at least as strongly to the thing that
+runs before the compiler does.
+
+Renewing a pin is deliberate work: read what changed, then move the SHA and the
+comment together.
 
 ## Coverage
 
@@ -138,8 +187,13 @@ skip, and a first-time contributor would see a red check they have no way to
 fix. Everything else — including both read-only Arc checks — runs on forks.
 
 The gas comment in `contracts.yml` is subject to the same limit from the other
-side: a fork's token is read-only whatever the `permissions:` block says, so the
-report goes to the run summary there instead.
+side: a fork's `pull_request` run gets a read-only token whatever the
+`permissions:` block says, and `createComment` would return 403 and fail the
+step — and `build, test, gas` is required, so an outside contributor would face
+a red check they could not fix. The comment step is therefore guarded on the
+head repository, and a separate step writes the same table to
+`$GITHUB_STEP_SUMMARY` on **every** run, so the report exists whether or not the
+comment does.
 
 ## Branch protection
 
@@ -157,7 +211,6 @@ packages/data
 packages/hardening
 packages/observability
 packages/x402 (anvil)
-packages/aa (anvil)
 services/indexer (anvil)
 services/keeper (anvil)
 app (static export)
@@ -169,7 +222,10 @@ secret scan
 forbidden strings
 ```
 
-Applied with:
+**Apply this only after the pull request that introduces these checks has
+merged.** Seven of the contexts below are produced by jobs that do not exist on
+`main` until then, and a required check that never reports blocks every merge —
+recovering from that needs an administrator to undo the protection.
 
 ```bash
 gh api -X PUT repos/wienerlabs/square/branches/main/protection \

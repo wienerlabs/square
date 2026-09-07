@@ -12,8 +12,8 @@ name: circuits
 # jobs therefore build first and then fail if the artifacts are not on disk,
 # and both name every test that was skipped anyway on the run summary.
 #
-# Measured, on this repository, with the artifacts moved aside:
-#   circuits        8 passed | 41 skipped (49), exit 0
+# Measured on a clean checkout after `npm ci`, with nothing built:
+#   circuits         4 passed | 45 skipped (49), exit 0
 #   prover          63 passed |  6 skipped (69), exit 0
 #
 # Hermetic apart from one fetch: the phase-1 powers of tau, hash-checked against
@@ -49,9 +49,9 @@ jobs:
       run:
         working-directory: circuits
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "22"
           cache: npm
@@ -67,7 +67,7 @@ jobs:
       # the old file. fetch-ptau.mjs re-verifies the bytes on every run either
       # way, which is what makes caching a downloaded trust anchor safe at all.
       - name: Cache the phase-1 powers of tau
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: circuits/build/ppot_0080_13.ptau
           key: ptau-${{ hashFiles('circuits/scripts/fetch-ptau.mjs') }}
@@ -114,9 +114,9 @@ jobs:
     name: prover (real proving key)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "22"
 
@@ -124,7 +124,7 @@ jobs:
 
       # Same key as the job above, so the two share one cached download.
       - name: Cache the phase-1 powers of tau
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: circuits/build/ppot_0080_13.ptau
           key: ptau-${{ hashFiles('circuits/scripts/fetch-ptau.mjs') }}

@@ -12,7 +12,6 @@
       "packages/hardening",
       "packages/observability",
       "packages/x402 (anvil)",
-      "packages/aa (anvil)",
       "services/indexer (anvil)",
       "services/keeper (anvil)",
       "app (static export)",

@@ -37,8 +37,8 @@ jobs:
           - packages/hardening
           - packages/observability
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "22"
       - name: Install, typecheck, test, build
@@ -61,18 +61,54 @@ jobs:
           - services/indexer
           - services/keeper
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           submodules: recursive
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09  # v1.9.1
         with:
           version: stable
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "22"
       - name: Build contracts
         working-directory: contracts
         run: forge build
+
+      # The job is called "(anvil)" and until square#43 it did not start one.
+      # services/indexer and services/keeper guard their chain suites with
+      # `describe.skipIf(!reachable)` against 127.0.0.1:8545, so with no node
+      # listening they skipped and the job went green: measured on main,
+      # services/indexer ran 7 of 10 tests and services/keeper 9 of 10.
+      #
+      # Both steps are needed. `localDeployment()` reads
+      # contracts/deployments/31337.json and only `--broadcast` writes it, so
+      # anvil without the deployment leaves the suites pointed at addresses
+      # that hold no code.
+      #
+      # packages/x402 spawns its own anvil on port 8560 and packages/aa forks
+      # onto its own port, so neither collides with this one.
+      - name: Start anvil and deploy the local stack
+        working-directory: contracts
+        run: |
+          anvil --port 8545 --chain-id 31337 --silent &
+          for _ in $(seq 1 30); do cast chain-id --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1 && break; sleep 1; done
+          forge script script/DeployLocal.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
+
+      # The same guard the circuit jobs use, for the same reason: if this is
+      # not true the suites below skip and the job passes having proved
+      # nothing. The failure has to be here rather than in a count nobody reads.
+      - name: The chain the suites refuse to run without
+        run: |
+          set -uo pipefail
+          fail=0
+          if cast chain-id --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1
+          then echo "  ok      anvil answering on 127.0.0.1:8545, chain $(cast chain-id --rpc-url http://127.0.0.1:8545)"
+          else echo "  MISSING anvil is not answering on 127.0.0.1:8545"; fail=1; fi
+          if [ -f contracts/deployments/31337.json ]
+          then echo "  ok      contracts/deployments/31337.json"
+          else echo "  MISSING contracts/deployments/31337.json"; fail=1; fi
+          exit $fail
+
       - name: Build path dependencies
         run: |
           for dep in packages/did-resolver packages/core packages/data packages/observability packages/hardening services/indexer; do
@@ -85,15 +121,19 @@ jobs:
         run: |
           npm install --install-links
           npm run typecheck
-          npm test
+          npm test -- --reporter=default --reporter=json --outputFile.json=/tmp/chain.json
           npm run build
+
+      - name: How many tests ran
+        if: always()
+        run: node .github/scripts/vitest-summary.mjs /tmp/chain.json "${{ matrix.package }} (anvil)"
 
   prover:
     name: services/prover (hermetic)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "22"
       - name: Build @squaresdk/observability
@@ -113,8 +153,8 @@ jobs:
     name: app (static export)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "22"
       - name: Build path dependencies

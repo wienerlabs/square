@@ -25,11 +25,11 @@ jobs:
     name: build, test, gas
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           submodules: recursive
 
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09  # v1.9.1
         with:
           version: stable
 
@@ -63,9 +63,31 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The report goes to the run summary unconditionally, so it exists for
+      # fork pull requests, for pushes to main, and for any run where the
+      # comment below is skipped or fails.
+      - name: Gas report on the run summary
+        run: |
+          {
+            echo '### Contract gas'
+            echo
+            echo '```'
+            sed -n '/^╭/,/^╰/p' gas-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Same-repository pull requests only. A `pull_request` run from a fork
+      # gets a read-only GITHUB_TOKEN whatever the `permissions:` block above
+      # says, so createComment returns 403 and the step — and with it a
+      # required check — fails for an outside contributor who has no way to fix
+      # it. Since square#43 removed the path filter this ran on every pull
+      # request, including ones that touch no contract at all. The report is on
+      # the run summary either way.
       - name: Gas report on the pull request
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7.1.0
         with:
           script: |
             const fs = require('fs');
@@ -85,15 +107,15 @@ jobs:
     name: "@squaresdk/core against anvil"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           submodules: recursive
 
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09  # v1.9.1
         with:
           version: stable
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "22"
 
@@ -121,8 +143,17 @@ jobs:
           npm run generate:abi
           git diff --exit-code -- src/abi
           npm run typecheck
-          npm test
+          npm test -- --reporter=default --reporter=json --outputFile.json=/tmp/core.json
           npm run build
+
+      # test/fork.test.ts is skipIf(!ARC_FORK_RPC_URL), no workflow sets it, and
+      # this job is a required check — so the suite that claims the lifecycle
+      # works against the real ERC-8004 registries has never run here, and until
+      # now the skip was not visible anywhere. Naming it does not make it run;
+      # it stops the absence being silent.
+      - name: How many tests ran
+        if: always()
+        run: node .github/scripts/vitest-summary.mjs /tmp/core.json "@squaresdk/core"
 
       - name: Five settlement paths end to end (anvil)
         working-directory: packages/core
@@ -147,15 +178,15 @@ jobs:
       run:
         working-directory: contracts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           submodules: recursive
 
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09  # v1.9.1
         with:
           version: stable
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "22"
 
