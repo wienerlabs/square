@@ -8,7 +8,7 @@ import { Indexer } from "./sync.js";
 
 async function main(): Promise<void> {
   const config = configFromEnv();
-  const logger = createLogger({ service: "square-indexer", version: config.version });
+  const logger = createLogger({ service: "square-indexer", version: config.version, allowlist: ["applied"] });
   const metrics = createMetrics({ service: "square-indexer" });
   const db = config.databaseUrl ? pgDatabase(config.databaseUrl) : await pgliteDatabase();
   if (!config.databaseUrl) {

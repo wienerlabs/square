@@ -31,6 +31,8 @@ function usdc(amount: bigint): number {
 }
 
 export class Keeper {
+  private readonly journaledSkips = new Set<string>();
+
   constructor(private readonly options: KeeperOptions) {}
 
   private async economics(): Promise<KeeperEconomics> {
@@ -85,7 +87,8 @@ export class Keeper {
       const action = decide(candidate, now, economics);
       if (action.kind === "skip") {
         report.skipped.push({ jobId: candidate.jobId, reason: action.reason });
-        if (action.reason === "unprofitable") {
+        if (action.reason === "unprofitable" && !this.journaledSkips.has(candidate.jobId.toString())) {
+          this.journaledSkips.add(candidate.jobId.toString());
           await keeperActions.append(db, { chainId, jobId: candidate.jobId, action: "skipped", reason: action.reason });
           metrics?.recordKeeperAction("finalize", "skipped");
           logger.info("keeper.skipped", {
