@@ -20,7 +20,8 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "measure": "tsx scripts/measure.ts"
+    "measure": "tsx scripts/measure.ts",
+    "measure:live": "tsx scripts/measure-live.ts"
   },
   "dependencies": {
     "viem": "^2.21.0"

@@ -100,3 +100,18 @@ absolute cost of the 4337 path (under 0.003 USDC per call) does not justify that
 
 **EntryPoint v0.6 or v0.8.** Both exist on Arc, but only v0.7 has the canonical
 SimpleAccount factory deployed and first-class viem support.
+
+## Verified on Arc Testnet
+
+`npm run measure:live` ran on 2026-09-07 against the deployed stack (5042002), from block 60842683, gas price 26.17 gwei. The smart account accepted a real job with `setBudget` and submitted it, both through `EntryPoint.handleOps` sent by the keeper key; every row is a receipt on the chain.
+
+| Call | Path | Gas used | Cost (USDC) | Overhead vs EOA | Transaction |
+|---|---|---:|---:|---:|---|
+| `setBudget` | EOA transaction | 43,969 | 0.00115 | 0 | [0x66ff5df3...](https://testnet.arcscan.app/tx/0x66ff5df384097c5149e799af581ee7c18091c9f511be3980920e7f4709991d27) |
+| `submit` | EOA transaction | 82,538 | 0.00216 | 0 | [0xf29648fc...](https://testnet.arcscan.app/tx/0xf29648fc2c2415319d28d2af40d9be0945ad6011a6a4a948c3b8c86eb9bb0fc1) |
+| `setBudget` | UserOperation, first op deploys the account | 273,054 | 0.00715 | 229,085 | [0x16240302...](https://testnet.arcscan.app/tx/0x16240302620308138e444eac74592c3de8806201d4305d65df278ab4660d4d48) |
+| `submit` | UserOperation, account already deployed | 141,235 | 0.00370 | 58,697 | [0x9d971493...](https://testnet.arcscan.app/tx/0x9d971493ee9f19acb6ea5dfec7af41fc2cbdd50b7febb88cadef354a076756d0) |
+| `setBudget` | UserOperation, account already deployed | 102,630 | 0.00269 | 58,661 | [0x0238ac11...](https://testnet.arcscan.app/tx/0x0238ac1177752c007b12513b82c290dd9093b0070faea603366340b713b3c1f4) |
+| `submit` | UserOperation, first op deploys the account | 311,635 | 0.00816 | 229,097 | [0xa6fe3f12...](https://testnet.arcscan.app/tx/0xa6fe3f12ecc313d357f70574a8bae7c639008ce233612c4d1f1ff5fc9c44fdd2) |
+
+The fork measurement above and the chain agree within a few dozen gas per row. The account deployment premium is 229 085 gas (about 0.006 USDC at this price), the steady-state premium 58 661 to 58 697 gas per operation, and the keeper stayed ahead on every operation.

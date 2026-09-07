@@ -1,0 +1,96 @@
+{
+  "chainId": 5042002,
+  "forkBlock": "60842683",
+  "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+  "factory": "0x91E60e0613810449d098b0b5Ec8b51A0FE8c8985",
+  "gasPriceWei": "26172800000",
+  "rows": [
+    {
+      "operation": "setBudget",
+      "path": "eoa",
+      "txHash": "0x66ff5df384097c5149e799af581ee7c18091c9f511be3980920e7f4709991d27",
+      "gasUsed": "43969",
+      "effectiveGasPrice": "22172800000",
+      "actualGasUsed": null,
+      "actualGasCost": null,
+      "keeperNetWei": null
+    },
+    {
+      "operation": "submit",
+      "path": "eoa",
+      "txHash": "0xf29648fc2c2415319d28d2af40d9be0945ad6011a6a4a948c3b8c86eb9bb0fc1",
+      "gasUsed": "82538",
+      "effectiveGasPrice": "22172800000",
+      "actualGasUsed": null,
+      "actualGasCost": null,
+      "keeperNetWei": null
+    },
+    {
+      "operation": "setBudget",
+      "path": "userop-deploying",
+      "txHash": "0x16240302620308138e444eac74592c3de8806201d4305d65df278ab4660d4d48",
+      "gasUsed": "273054",
+      "effectiveGasPrice": "22172800000",
+      "actualGasUsed": "277876",
+      "actualGasCost": "6161288972800000",
+      "keeperNetWei": "106917241600000"
+    },
+    {
+      "operation": "submit",
+      "path": "userop-deployed",
+      "txHash": "0x9d971493ee9f19acb6ea5dfec7af41fc2cbdd50b7febb88cadef354a076756d0",
+      "gasUsed": "141235",
+      "effectiveGasPrice": "22172800000",
+      "actualGasUsed": "145785",
+      "actualGasCost": "3232461648000000",
+      "keeperNetWei": "100886240000000"
+    },
+    {
+      "operation": "setBudget",
+      "path": "userop-deployed",
+      "txHash": "0x0238ac1177752c007b12513b82c290dd9093b0070faea603366340b713b3c1f4",
+      "gasUsed": "102630",
+      "effectiveGasPrice": "22172800000",
+      "actualGasUsed": "106958",
+      "actualGasCost": "2371558342400000",
+      "keeperNetWei": "95963878400000"
+    },
+    {
+      "operation": "submit",
+      "path": "userop-deploying",
+      "txHash": "0xa6fe3f12ecc313d357f70574a8bae7c639008ce233612c4d1f1ff5fc9c44fdd2",
+      "gasUsed": "311635",
+      "effectiveGasPrice": "22172800000",
+      "actualGasUsed": "316553",
+      "actualGasCost": "7018866358400000",
+      "keeperNetWei": "109045830400000"
+    }
+  ],
+  "overhead": [
+    {
+      "operation": "setBudget",
+      "path": "userop-deployed",
+      "gas": "58661",
+      "usdc": "0.0015353226208"
+    },
+    {
+      "operation": "setBudget",
+      "path": "userop-deploying",
+      "gas": "229085",
+      "usdc": "0.005995795888"
+    },
+    {
+      "operation": "submit",
+      "path": "userop-deployed",
+      "gas": "58697",
+      "usdc": "0.0015362648416"
+    },
+    {
+      "operation": "submit",
+      "path": "userop-deploying",
+      "gas": "229097",
+      "usdc": "0.0059961099616"
+    }
+  ],
+  "measuredAt": "2026-09-07T02:21:53.722Z"
+}
