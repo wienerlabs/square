@@ -71,7 +71,7 @@ is not ported.
 
 ```
 contracts/   Foundry: SquareJob, KeeperEvaluator, Arbitration, ClaimMarket, SquareHook,
-             deploy scripts, 102 tests
+             PolicyRegistry, deploy scripts, 138 tests
 circuits/    Circom payment-compliance circuit + ceremony scripts
 packages/    did-resolver, cli, did-aip-driver, core (SDK, embedded ABIs), data (Postgres
              access layer + migrations), hardening (SSRF, idempotency, rate limit, RPC
