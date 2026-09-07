@@ -1,18 +1,21 @@
 "use client";
 
 import { specDescription } from "@squaresdk/core";
+import canonicalize from "canonicalize";
 import { useEffect, useMemo, useState } from "react";
 import { getAddress, isAddress, type Hex } from "viem";
 import { useAccount } from "wagmi";
 import { AddressLink, TxLink } from "@/components/AddressLink";
 import { AmountUsdc } from "@/components/AmountUsdc";
 import { Field, inputClass } from "@/components/Field";
+import { JsonEditor } from "@/components/JsonEditor";
 import { GhostButton } from "@/components/GhostButton";
 import { PanelCard } from "@/components/PanelCard";
 import { PillToggle } from "@/components/PillToggle";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { SectionHeading } from "@/components/SectionHeading";
 import { Step, type StepState } from "@/components/Step";
+import { ArcNetworkMark, UsdcMark } from "@/components/marks";
 import { WalletButton } from "@/components/WalletButton";
 import { formatBps, formatDuration, formatTimestamp, formatUsdc, fromDatetimeLocal, parseUsdc, shortHash, toDatetimeLocal } from "@/lib/format";
 import { useNetwork, useNow, useSquare } from "@/lib/square";
@@ -122,6 +125,7 @@ export function NewJobView() {
   const [expiryPreset, setExpiryPreset] = useState<string | null>("1w");
   const [spec, setSpec] = useState("");
   const [template, setTemplate] = useState<string | null>(null);
+  const [showCanonical, setShowCanonical] = useState(false);
   const [budget, setBudget] = useState("");
   const [stage, setStage] = useState<"create" | "budget" | null>(null);
   const [created, setCreated] = useState<Created | null>(null);
@@ -134,6 +138,7 @@ export function NewJobView() {
   const minExpiry = horizon === undefined ? null : now + horizon;
 
   const specState = useMemo(() => parseSpec(spec), [spec]);
+  const canonical = useMemo(() => (specState.kind === "ok" ? (canonicalize(specState.value) ?? "") : ""), [specState]);
   const providerValid = isAddress(provider);
   const providerError = provider.length === 0 || providerValid ? null : "Enter a 0x address of 40 hex characters.";
   const expirySeconds = fromDatetimeLocal(expiry);
@@ -410,19 +415,38 @@ export function NewJobView() {
                 )
               }
             >
-              <textarea
+              <JsonEditor
                 id="spec"
-                rows={12}
-                className={`${inputClass} min-h-[240px] resize-y font-mono text-[13px] leading-relaxed`}
                 value={spec}
-                onChange={(event) => {
+                error={specState.kind === "error" ? specState.message : null}
+                onChange={(next) => {
                   setTemplate(null);
-                  setSpec(event.target.value);
+                  setSpec(next);
                 }}
                 placeholder={'{\n  "task": "...",\n  "deliverable": "...",\n  "acceptance": "..."\n}'}
-                spellCheck={false}
               />
             </Field>
+            {specState.kind === "ok" ? (
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-graphite">
+                  <span className="tabular-nums">{spec.split("\n").length} lines</span>
+                  <span className="tabular-nums">{byteLength(spec)} bytes typed</span>
+                  <span className="tabular-nums">{byteLength(canonical)} bytes hashed</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowCanonical((current) => !current)}
+                    className="text-carbon underline decoration-fog underline-offset-4 hover:decoration-carbon"
+                    aria-expanded={showCanonical}
+                  >
+                    {showCanonical ? "Hide the canonical form" : "Show the canonical form"}
+                  </button>
+                </div>
+                {showCanonical ? (
+                  <pre className="overflow-x-auto rounded-lg border border-fog bg-linen px-3.5 py-2.5 font-mono text-[12px] leading-5 text-graphite">{canonical}</pre>
+                ) : null}
+                <p className="text-caption text-ash">Keys are sorted and whitespace dropped before hashing, so two specs that say the same thing hash the same.</p>
+              </div>
+            ) : null}
           </Step>
 
           <Step
@@ -444,7 +468,12 @@ export function NewJobView() {
               </PillToggle>
             </div>
             <Field label="Budget (USDC)" htmlFor="budget-amount" error={budgetError} hint="Up to six decimals. The provider agrees to it before funding.">
-              <input id="budget-amount" inputMode="decimal" className={inputClass} value={budget} onChange={(event) => setBudget(event.target.value)} placeholder="0.00" />
+              <div className="relative">
+                <span className="pointer-events-none absolute inset-y-0 left-3.5 flex items-center">
+                  <UsdcMark className="size-4" />
+                </span>
+                <input id="budget-amount" inputMode="decimal" className={`${inputClass} pl-10`} value={budget} onChange={(event) => setBudget(event.target.value)} placeholder="0.00" />
+              </div>
             </Field>
           </Step>
         </form>
@@ -499,13 +528,15 @@ export function NewJobView() {
                 </div>
                 <div className="flex justify-between gap-4">
                   <dt className="text-graphite">Escrow token</dt>
-                  <dd>
+                  <dd className="inline-flex items-center gap-1.5">
+                    <UsdcMark className="size-3.5" />
                     <AddressLink address={deployment.usdc} label="USDC" />
                   </dd>
                 </div>
                 <div className="flex justify-between gap-4">
                   <dt className="text-graphite">Chain</dt>
-                  <dd className="tabular-nums text-carbon">
+                  <dd className="inline-flex items-center gap-1.5 tabular-nums text-carbon">
+                    {activeChain.id === 5042002 ? <ArcNetworkMark className="size-3.5" /> : null}
                     {activeChain.name} ({activeChain.id})
                   </dd>
                 </div>

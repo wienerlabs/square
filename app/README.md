@@ -116,6 +116,18 @@ Type scale: caption 12, body 16, subheading 18, heading-sm 24, heading 36, headi
 
 Status pill labels are set in carbon on a tinted wash with a coloured dot, because the tone colours themselves do not reach a 4.5:1 contrast ratio as text on the wash.
 
+## Wallets
+
+The wallet button discovers every wallet extension in the browser through EIP-6963 and, when there is more than one, asks which to use. The chosen wallet is remembered by its own identifier, so a person who connects with one wallet stays connected with that wallet on every page and after a reload, even when another extension owns `window.ethereum`. A browser with a single legacy wallet connects to it directly.
+
+## Spec editor
+
+The JSON spec on the new job page is edited in a highlighted editor: keys, strings, numbers and literals are coloured, lines are numbered, the line a parse error points at is marked, Tab inserts two spaces, and the canonical form that is hashed can be shown beside the typed form with both sizes in bytes.
+
+## Brand assets
+
+`public/brand/` holds the marks of the two other parties on screen. The Arc network icon labels references to Arc Testnet, and the full Arc logo appears in the "Built on Arc" lockup at the 50 px minimum the Arc partner guidelines set, with the clear space they ask for; the footer carries the trademark line. The USDC mark labels amounts. Both are used unmodified; their provenance is in `public/brand/README.md`.
+
 ## Font
 
 The interface is set in Open Runde, loaded from `public/fonts` at weights 400, 500, 600 and 700. Open Runde is distributed under the SIL Open Font License 1.1; the licence text is in `public/fonts/LICENSE.txt`.

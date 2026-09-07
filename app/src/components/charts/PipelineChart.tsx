@@ -19,7 +19,7 @@ function PipelineTooltip({ active, payload }: { active?: boolean; payload?: { pa
   );
 }
 
-export function PipelineChart({ slices, scanned, loading }: { slices: PhaseSlice[]; scanned: number; loading: boolean }) {
+export function PipelineChart({ slices, scanned, loading, error }: { slices: PhaseSlice[]; scanned: number; loading: boolean; error?: string | null }) {
   return (
     <ChartFrame
       title="Pipeline by phase"
@@ -28,6 +28,8 @@ export function PipelineChart({ slices, scanned, loading }: { slices: PhaseSlice
     >
       {loading ? (
         <ChartPlaceholder height={HEIGHT} label="Reading job records from the chain" />
+      ) : error ? (
+        <ChartPlaceholder height={HEIGHT} tone="error" label={`The chain read failed: ${error}`} />
       ) : slices.length === 0 ? (
         <ChartPlaceholder height={HEIGHT} label="No jobs yet" />
       ) : (

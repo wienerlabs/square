@@ -9,6 +9,13 @@
 
 <p align="center"><strong>Compliance-gated settlement for autonomous agent work, on <a href="https://arc.io">Arc</a>.</strong></p>
 
+<p align="center">
+  <a href="https://www.arc.io"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="app/public/brand/arc-logo-white.svg">
+    <img src="app/public/brand/arc-logo-black.svg" alt="Built on Arc" height="50">
+  </picture></a>
+</p>
+
 An institution commits a private spending mandate on-chain. Identified agents execute
 against it. Every release out of escrow must first prove, in zero knowledge, that it
 fits the mandate. The receivable created during the challenge window is discountable.
@@ -163,3 +170,5 @@ and `dr-wilson-empty/aip-beta`, both MIT; NOTICE says which parts and carries
 their copyright, as MIT requires.
 
 Nothing here derives from `wienerlabs/covenant`, which is LGPL-2.1.
+
+Arc is a trademark of Circle Internet Group, Inc. and/or its affiliates. Square is built on Arc and is not affiliated with or endorsed by Circle.

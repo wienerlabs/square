@@ -41,7 +41,7 @@ function FlowTooltip({ active, payload, bucket }: { active?: boolean; payload?: 
   );
 }
 
-export function EscrowFlowChart({ series, scanned, loading }: { series: FlowSeries | null; scanned: number; loading: boolean }) {
+export function EscrowFlowChart({ series, scanned, loading, error }: { series: FlowSeries | null; scanned: number; loading: boolean; error?: string | null }) {
   const bucketLabel = series?.bucket === HOUR ? "hour" : "day";
   return (
     <ChartFrame
@@ -56,6 +56,8 @@ export function EscrowFlowChart({ series, scanned, loading }: { series: FlowSeri
     >
       {loading ? (
         <ChartPlaceholder height={HEIGHT} label="Reading job records from the chain" />
+      ) : error ? (
+        <ChartPlaceholder height={HEIGHT} tone="error" label={`The chain read failed: ${error}`} />
       ) : !series || series.points.length === 0 ? (
         <ChartPlaceholder height={HEIGHT} label="No job has been funded yet" />
       ) : (

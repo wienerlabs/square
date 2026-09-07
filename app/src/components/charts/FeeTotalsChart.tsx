@@ -24,7 +24,7 @@ function FeeTooltip({ active, payload }: { active?: boolean; payload?: { payload
   );
 }
 
-export function FeeTotalsChart({ totals, scanned, loading }: { totals: FeeTotals | null; scanned: number; loading: boolean }) {
+export function FeeTotalsChart({ totals, scanned, loading, error }: { totals: FeeTotals | null; scanned: number; loading: boolean; error?: string | null }) {
   const rows: Row[] = totals
     ? [
         { key: "net", label: "Paid to payees", value: totals.netPaid, color: chartColors.lavender },
@@ -46,6 +46,8 @@ export function FeeTotalsChart({ totals, scanned, loading }: { totals: FeeTotals
     >
       {loading ? (
         <ChartPlaceholder height={HEIGHT} label="Reading job records from the chain" />
+      ) : error ? (
+        <ChartPlaceholder height={HEIGHT} tone="error" label={`The chain read failed: ${error}`} />
       ) : nothing ? (
         <ChartPlaceholder height={HEIGHT} label="No job has settled yet" />
       ) : (

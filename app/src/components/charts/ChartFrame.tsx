@@ -53,11 +53,11 @@ export function ChartFrame({
   );
 }
 
-export function ChartPlaceholder({ height = 240, label }: { height?: number; label: string }) {
+export function ChartPlaceholder({ height = 240, label, tone = "muted" }: { height?: number; label: string; tone?: "muted" | "error" }) {
   return (
     <div
       role="status"
-      className="flex items-center justify-center rounded-xl border border-dashed border-fog bg-linen text-caption text-ash"
+      className={`flex items-center justify-center rounded-xl border border-dashed px-6 text-center text-caption ${tone === "error" ? "border-magenta/40 bg-magenta/5 text-magenta" : "border-fog bg-linen text-ash"}`}
       style={{ height }}
     >
       {label}
