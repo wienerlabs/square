@@ -8,6 +8,8 @@ import { isAddressEqual, type Address } from "viem";
 import { useAccount } from "wagmi";
 import { AddressLink } from "@/components/AddressLink";
 import { AmountUsdc } from "@/components/AmountUsdc";
+import { SegmentBar } from "@/components/charts/SegmentBar";
+import { SettlementClock } from "@/components/charts/SettlementClock";
 import { Chip } from "@/components/Chip";
 import { EmptyState } from "@/components/EmptyState";
 import { Field, inputClass } from "@/components/Field";
@@ -15,6 +17,7 @@ import { GhostButton } from "@/components/GhostButton";
 import { PanelCard } from "@/components/PanelCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { StatusPill, listingTone, outcomeTone, phaseTone } from "@/components/StatusPill";
+import { chartColors, formatCompactUsdc, payoutSplit, settlementClock } from "@/lib/charts";
 import { formatBps, formatCountdown, formatDuration, formatTimestamp, formatUsdc, isZeroAddress, parseUsdc, shortHash, statusLabel } from "@/lib/format";
 import {
   countVotes,
@@ -397,6 +400,18 @@ export function JobView() {
     showRecordExpiry;
 
   const feeSnapshot = record.fundedAt > 0 ? `${formatBps(record.platformFeeBP)} platform, ${formatBps(record.evaluatorFeeBP)} evaluator` : "Taken at funding";
+  const clock = settlementClock({
+    createdAt: record.createdAt,
+    fundedAt: record.fundedAt,
+    submittedAt: record.submittedAt,
+    expiredAt: record.expiredAt,
+    challengeEnd: detail.challengeEnd,
+    disputedAt: detail.dispute.disputedAt,
+    resolveBy: detail.dispute.resolveBy,
+    status: record.status,
+    now,
+  });
+  const split = record.fundedAt > 0 ? payoutSplit(record, detail.netPayout) : null;
 
   return (
     <div className="flex flex-col gap-16">
@@ -486,6 +501,31 @@ export function JobView() {
         </PanelCard>
         <PanelCard title="Timeline" description="Built from the record's timestamps and the keeper window.">
           <Timeline detail={detail} now={now} />
+        </PanelCard>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+        <PanelCard title="Settlement clock" description="The job's phases laid out in time: how long each took, which one is running, and where now sits.">
+          <SettlementClock clock={clock} />
+        </PanelCard>
+        <PanelCard title="Payout split" description={split ? "How the escrowed budget divides at settlement, from the fee basis points snapshotted at funding." : "Fees are snapshotted when the job is funded."}>
+          {split ? (
+            <SegmentBar
+              ariaLabel="Payout split of the budget"
+              total={split.budget}
+              segments={[
+                { key: "provider", label: split.providerBps < 10_000 ? "Provider share" : "Net payout", value: split.providerShare, color: chartColors.lavender, display: `${formatCompactUsdc(split.providerShare)} USDC` },
+                ...(split.clientShare > 0 ? [{ key: "client", label: "Returned to client", value: split.clientShare, color: chartColors.sky, display: `${formatCompactUsdc(split.clientShare)} USDC` }] : []),
+                { key: "platform", label: `Platform fee ${formatBps(record.platformFeeBP)}`, value: split.platformFee, color: chartColors.carbon, display: `${formatCompactUsdc(split.platformFee)} USDC` },
+                { key: "evaluator", label: `Evaluator fee ${formatBps(record.evaluatorFeeBP)}`, value: split.evaluatorFee, color: chartColors.amber, display: `${formatCompactUsdc(split.evaluatorFee)} USDC` },
+              ]}
+            />
+          ) : (
+            <p className="text-caption text-ash">No budget has been escrowed for this job yet.</p>
+          )}
+          {split && split.providerBps < 10_000 ? (
+            <p className="mt-4 text-caption text-graphite">The dispute decision awarded {formatBps(split.providerBps)} of the net payout to the provider; the rest goes back to the client.</p>
+          ) : null}
         </PanelCard>
       </div>
 

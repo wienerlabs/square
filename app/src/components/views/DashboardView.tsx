@@ -6,6 +6,8 @@ import { useState } from "react";
 import { useAccount } from "wagmi";
 import { AddressLink } from "@/components/AddressLink";
 import { AmountUsdc } from "@/components/AmountUsdc";
+import { EscrowFlowChart } from "@/components/charts/EscrowFlowChart";
+import { PipelineChart } from "@/components/charts/PipelineChart";
 import { DataTable, type Column } from "@/components/DataTable";
 import { EmptyState } from "@/components/EmptyState";
 import { GhostButton } from "@/components/GhostButton";
@@ -15,6 +17,7 @@ import { PrimaryButton } from "@/components/PrimaryButton";
 import { SectionHeading } from "@/components/SectionHeading";
 import { StatusPill, phaseTone } from "@/components/StatusPill";
 import { TabBar } from "@/components/TabBar";
+import { escrowFlow, phaseBreakdown } from "@/lib/charts";
 import { formatBigint, formatCountdown, formatTimestamp } from "@/lib/format";
 import { indexerUrl, useIndexerOverview } from "@/lib/indexer";
 import { jobPhase, PHASE_LABELS, useJobs, useNow, usePositions, useSquare, type JobPhase, type JobSummary } from "@/lib/square";
@@ -93,6 +96,8 @@ export function DashboardView() {
     disputed: counts.disputed,
   };
   const filtered = withPhase.filter(({ job, phase }) => matchesTab(job, phase, tab));
+  const flow = jobsQuery.data ? escrowFlow(jobs) : null;
+  const slices = jobsQuery.data ? phaseBreakdown(jobs, now, PHASE_LABELS) : [];
 
   const indexerData = indexer.data;
   const caption = indexerUrl
@@ -170,6 +175,11 @@ export function DashboardView() {
           />
         </div>
         <p className="text-caption text-graphite">{caption}</p>
+      </section>
+
+      <section aria-label="Activity" className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
+        <EscrowFlowChart series={flow} scanned={scanned} loading={jobsQuery.isPending} />
+        <PipelineChart slices={slices} scanned={scanned} loading={jobsQuery.isPending} />
       </section>
 
       {address ? (

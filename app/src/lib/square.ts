@@ -52,10 +52,14 @@ export interface JobSummary {
   budget: bigint;
   status: number;
   createdAt: number;
+  fundedAt: number;
   expiredAt: number;
   submittedAt: number;
   challengeEnd: number;
   disputed: boolean;
+  platformFeeBP: number;
+  evaluatorFeeBP: number;
+  providerBps: number;
 }
 
 export interface JobsSnapshot {
@@ -78,10 +82,14 @@ async function readJobSummary(id: bigint): Promise<JobSummary> {
     budget: record.budget,
     status: record.status,
     createdAt: record.createdAt,
+    fundedAt: record.fundedAt,
     expiredAt: record.expiredAt,
     submittedAt: record.submittedAt,
     challengeEnd,
     disputed,
+    platformFeeBP: record.platformFeeBP,
+    evaluatorFeeBP: record.evaluatorFeeBP,
+    providerBps: record.providerBps,
   };
 }
 
