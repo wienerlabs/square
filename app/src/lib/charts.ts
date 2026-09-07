@@ -1,5 +1,6 @@
 import { JobStatus } from "@squaresdk/core";
-import { jobPhase, type JobPhase, type JobSummary } from "./square";
+import { jobPhase, type JobPhase } from "./phase";
+import type { JobSummary } from "./square";
 
 export const chartColors = {
   carbon: "#181925",
@@ -265,7 +266,7 @@ export function clusterMarks(marks: readonly (ClockMark & { x: number })[], minG
 }
 
 export function formatCompactUsdc(value: number): string {
-  const trim = (text: string) => text.replace(/\.?0+$/, "");
+  const trim = (text: string) => (text.includes(".") ? text.replace(/\.?0+$/, "") : text);
   if (value >= 1_000_000) return `${trim((value / 1_000_000).toFixed(2))}M`;
   if (value >= 10_000) return `${trim((value / 1_000).toFixed(1))}k`;
   if (value >= 100) return trim(value.toFixed(0));

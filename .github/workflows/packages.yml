@@ -130,11 +130,12 @@ jobs:
           for dep in packages/did-resolver packages/core; do
             (cd "$dep" && npm install --install-links && npm run build)
           done
-      - name: Install, typecheck, build
+      - name: Install, typecheck, test, build
         working-directory: app
         run: |
           npm install --install-links
           npm run typecheck
+          npm test
           npm run build
       - name: Export is complete
         run: test -f app/out/index.html && test -f app/out/dashboard/index.html
