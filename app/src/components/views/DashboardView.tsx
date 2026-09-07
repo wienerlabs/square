@@ -186,8 +186,8 @@ export function DashboardView() {
       {address ? <ActionInbox jobs={jobs} address={address} now={now} scanned={scanned} /> : null}
 
       <section aria-label="Activity" className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
-        <EscrowFlowChart series={flow} scanned={scanned} loading={jobsQuery.isPending} />
-        <PipelineChart slices={slices} scanned={scanned} loading={jobsQuery.isPending} />
+        <EscrowFlowChart series={flow} scanned={scanned} loading={jobsQuery.isPending} error={jobsQuery.isError ? describeError(jobsQuery.error) : null} />
+        <PipelineChart slices={slices} scanned={scanned} loading={jobsQuery.isPending} error={jobsQuery.isError ? describeError(jobsQuery.error) : null} />
       </section>
 
       {address ? (

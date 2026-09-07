@@ -3,6 +3,7 @@
 import { AddressLink } from "@/components/AddressLink";
 import { AmountUsdc } from "@/components/AmountUsdc";
 import { FeeTotalsChart } from "@/components/charts/FeeTotalsChart";
+import { UsdcMark } from "@/components/marks";
 import { SegmentBar } from "@/components/charts/SegmentBar";
 import { EmptyState } from "@/components/EmptyState";
 import { NetworkStrip } from "@/components/NetworkStrip";
@@ -101,7 +102,7 @@ export function NetworkView() {
           </PanelCard>
 
           <div className="lg:col-span-2">
-            <FeeTotalsChart totals={totals} scanned={scanned} loading={jobs.isPending} />
+            <FeeTotalsChart totals={totals} scanned={scanned} loading={jobs.isPending} error={jobs.isError ? describeError(jobs.error) : null} />
           </div>
 
           <PanelCard title="Arbiters" description="Arbitration.arbiterSet for the current version. Open disputes keep the version they were opened under.">
@@ -135,7 +136,10 @@ export function NetworkView() {
           <PanelCard title="Registries and token" description="Addresses from the SDK deployment table for this chain.">
             <dl>
               <Row label="USDC (ERC-20)">
-                <AddressLink address={deployment.usdc} />
+                <span className="inline-flex items-center gap-2">
+                  <UsdcMark className="size-4" />
+                  <AddressLink address={deployment.usdc} />
+                </span>
               </Row>
               <Row label="ERC-8004 Identity">
                 <AddressLink address={deployment.identityRegistry} />

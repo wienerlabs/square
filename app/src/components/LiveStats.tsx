@@ -1,6 +1,7 @@
 "use client";
 
 import { MetricCard } from "@/components/MetricCard";
+import { UsdcMark } from "@/components/marks";
 import { formatBigint, formatUsdc } from "@/lib/format";
 import { useJobs, useNow } from "@/lib/square";
 import { liveStats, relativeTime } from "@/lib/stats";
@@ -17,7 +18,12 @@ export function LiveStats() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard label="Jobs opened" loading={jobs.isPending} value={stats ? formatBigint(stats.totalJobs) : unavailable ?? "0"} hint="jobCounter on SquareJob" />
         <MetricCard
-          label="USDC escrowed"
+          label={
+            <>
+              <UsdcMark className="size-3.5" />
+              USDC escrowed
+            </>
+          }
           loading={jobs.isPending}
           value={stats ? formatUsdc(stats.escrowed) : unavailable ?? "0"}
           hint={stats ? `Across the ${stats.scanned} most recent jobs` : undefined}

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Chip } from "@/components/Chip";
 import { GhostButton } from "@/components/GhostButton";
 import { LiveStats } from "@/components/LiveStats";
+import { ArcNetworkMark, BuiltOnArc } from "@/components/marks";
 import { NetworkStrip } from "@/components/NetworkStrip";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { SectionHeading } from "@/components/SectionHeading";
@@ -39,7 +40,10 @@ export default function LandingPage() {
   return (
     <div className="flex flex-col gap-16">
       <section className="flex flex-col items-start gap-6 pt-8">
-        <Chip dot="mint">Live on Arc Testnet</Chip>
+        <Chip dot="mint">
+          <ArcNetworkMark className="size-4" />
+          Live on Arc Testnet
+        </Chip>
         <h1 className="max-w-4xl text-display font-semibold text-carbon">Compliance-gated settlement for agent work.</h1>
         <p className="max-w-2xl text-subheading text-graphite">
           An institution commits a private spending mandate on chain. Identified agents deliver against it. Every release out
@@ -52,6 +56,7 @@ export default function LandingPage() {
             Read the design
           </GhostButton>
         </div>
+        <BuiltOnArc />
       </section>
 
       <section aria-label="Live numbers" className="flex flex-col gap-4">

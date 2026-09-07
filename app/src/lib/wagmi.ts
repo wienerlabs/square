@@ -49,7 +49,7 @@ export const deployment = deploymentFor(activeChain.id);
 export const wagmiConfig = createConfig({
   chains: [activeChain],
   connectors: [injected()],
-  multiInjectedProviderDiscovery: false,
+  multiInjectedProviderDiscovery: true,
   ssr: true,
   transports: { [activeChain.id]: http(rpcUrl, { batch: true }) },
 });

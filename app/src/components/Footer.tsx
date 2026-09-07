@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Logo } from "./Logo";
+import { ArcNetworkMark } from "./marks";
 import { activeChain, DOCS_URL, explorerUrl, REPO_URL, rpcUrl } from "@/lib/wagmi";
 
 const columnTitle = "text-caption font-medium text-carbon";
@@ -46,14 +47,17 @@ export function Footer() {
         </div>
         <div className="flex flex-col gap-3">
           <p className={columnTitle}>Network</p>
-          <p className="text-caption text-graphite">{activeChain.name}</p>
+          <p className="flex items-center gap-2 text-caption text-graphite">
+            {activeChain.id === 5042002 ? <ArcNetworkMark className="size-4" /> : null}
+            {activeChain.name}
+          </p>
           <p className="text-caption tabular-nums text-graphite">Chain id {activeChain.id}</p>
           <p className="break-all text-caption text-graphite">{rpcUrl}</p>
         </div>
       </div>
       <div className="border-t border-fog">
         <div className="mx-auto flex w-full max-w-[1200px] flex-wrap items-center justify-between gap-2 px-6 py-4 text-caption text-ash">
-          <span>Apache-2.0. Font: Open Runde, SIL Open Font License 1.1.</span>
+          <span>Apache-2.0. Font: Open Runde, SIL Open Font License 1.1. Arc is a trademark of Circle Internet Group, Inc. and/or its affiliates.</span>
           <span>Wiener Labs</span>
         </div>
       </div>
