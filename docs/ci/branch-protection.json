@@ -15,6 +15,7 @@
       "services/indexer (anvil)",
       "services/keeper (anvil)",
       "app (static export)",
+      "site (static export)",
       "a2a",
       "cli",
       "did-aip-driver (unit)",

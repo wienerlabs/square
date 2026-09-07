@@ -21,7 +21,7 @@ pull request.
 | `services/prover (hermetic)` | The rule evaluator and the encoding with no artifacts — a contributor's `npm test`. |
 | `packages/data`, `packages/hardening`, `packages/observability` | Hermetic package suites. |
 | `packages/x402 (anvil)`, `services/indexer (anvil)`, `services/keeper (anvil)` | Against a local chain the job starts itself: anvil plus `DeployLocal.s.sol`, asserted before the suites run. |
-| `app (static export)` | The reference application still builds. |
+| `app (static export)`, `site (static export)` | The reference application and the site still build. |
 | `a2a` | `@squaresdk/a2a` typechecks and builds, and an agent still cannot pay itself. |
 | `cli` | The resolver and the CLI build; the CLI's exit codes are unchanged. Hermetic. |
 | `did-aip-driver (unit)` | The driver's config parsing and envelope construction. |
@@ -214,6 +214,7 @@ packages/x402 (anvil)
 services/indexer (anvil)
 services/keeper (anvil)
 app (static export)
+site (static export)
 a2a
 cli
 did-aip-driver (unit)
