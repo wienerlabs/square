@@ -28,11 +28,11 @@ jobs:
       VERCEL_ORG_ID: team_wML3WbnwklsgJHt67DPZEEh5
       VERCEL_PROJECT_ID: prj_IRSHYMtewTBdz9TWm38uuU8k7jyx
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: Skip without a Vercel token
         if: env.HAS_TOKEN != 'true'
         run: echo "VERCEL_TOKEN is not set; add it as a repository secret and this job deploys every push to main." >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         if: env.HAS_TOKEN == 'true'
         with:
           node-version: "22"

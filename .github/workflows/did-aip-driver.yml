@@ -1,6 +1,6 @@
-name: did-aip-driver image
+name: did-aip-driver
 
-# Builds, smoke-tests and publishes the did:aip v2 Universal Resolver driver to
+# Runs the driver's own suite, then builds, smoke-tests and publishes the did:aip v2 Universal Resolver driver to
 # GHCR. Carried over from aip-beta with the same two rules that made it useful:
 # the smoke test is hermetic, and :latest is never pushed.
 #
@@ -14,38 +14,85 @@ on:
     paths:
       - "packages/did-aip-driver/**"
       - "packages/did-resolver/**"
+      - ".github/scripts/vitest-summary.mjs"
       - ".github/workflows/did-aip-driver.yml"
+  # No path filter on pull_request, deliberately. A required status check that a
+  # filter skips never reports, and GitHub blocks the merge waiting for a run
+  # that will not happen. The push filter above still keeps main's runs narrow.
   pull_request:
-    paths:
-      - "packages/did-aip-driver/**"
-      - "packages/did-resolver/**"
-      - ".github/workflows/did-aip-driver.yml"
   workflow_dispatch:
 
+# Read-only at the workflow level. `packages: write` is granted only to the job
+# that pushes to GHCR, so the unit job below does not run `npm ci` — which
+# executes package lifecycle scripts — holding a registry write token.
 permissions:
   contents: read
-  packages: write
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/driver-did-aip
 
 jobs:
-  build-test-publish:
+  # The driver's own suite, which CI has never run. This workflow built an image
+  # and smoke-tested the container, which exercises the HTTP surface but not
+  # config parsing or envelope construction — and packages/did-aip-driver has
+  # had `npm test` since it was carried over from aip-beta. square#43.
+  unit:
+    name: did-aip-driver (unit)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/did-aip-driver
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+
+      # Depends on ../did-resolver by path, so the resolver's declarations have
+      # to exist before this typechecks — the same ordering cli.yml needs.
+      - name: Build @squaresdk/did-resolver
+        working-directory: packages/did-resolver
+        run: |
+          npm ci
+          npm run build
+
+      # npm ci, not npm install: install rewrites this package's lockfile
+      # depending on whether ../did-resolver happens to be installed yet, which
+      # would leave every run with a dirty tree for no reason.
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test -- --reporter=default --reporter=json --outputFile.json=/tmp/driver.json
+
+      - name: How many tests ran
+        if: always()
+        run: node ../../.github/scripts/vitest-summary.mjs /tmp/driver.json did-aip-driver
+
+  build-test-publish:
+    name: did-aip-driver image
+    needs: unit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
       - name: Read driver version
         id: ver
         run: echo "version=$(node -p "require('./packages/did-aip-driver/package.json').version")" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
 
       # The build context is packages/, not the driver directory: the driver
       # depends on ../did-resolver by path and Docker cannot reach outside its
       # context.
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: ./packages
           file: ./packages/did-aip-driver/Dockerfile
@@ -86,7 +133,7 @@ jobs:
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
