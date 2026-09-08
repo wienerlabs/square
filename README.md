@@ -99,6 +99,12 @@ site/        The website at https://square-protocol.vercel.app: what Square is, 
 docs/        Specifications, design notes, measurements, disclosure
 ```
 
+Every pull request runs the contract, circuit, prover, package and application
+suites. The circuit and prover jobs build the artifacts their tests refuse to
+run without, because a suite that quietly skips itself is the failure this is
+set up to catch. [docs/ci.md](docs/ci.md) lists the checks, what each proves,
+and which are required to merge.
+
 ## Network
 
 | | |

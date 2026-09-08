@@ -15,13 +15,10 @@ on:
       - "docs/smoke/**"
       - "docs/agent-card/schema.json"
       - ".github/workflows/cli.yml"
+  # No path filter on pull_request, deliberately. A required status check that a
+  # filter skips never reports, and GitHub blocks the merge waiting for a run
+  # that will not happen. The push filter above still keeps main's runs narrow.
   pull_request:
-    paths:
-      - "packages/cli/**"
-      - "packages/did-resolver/**"
-      - "docs/smoke/**"
-      - "docs/agent-card/schema.json"
-      - ".github/workflows/cli.yml"
   workflow_dispatch:
 
 permissions:
@@ -29,11 +26,12 @@ permissions:
 
 jobs:
   test:
+    name: cli
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "20"
 
@@ -108,9 +106,9 @@ jobs:
     name: end-to-end (Arc Testnet)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "20"
 

@@ -13,11 +13,10 @@ on:
       - "packages/a2a/**"
       - "docs/a2a/**"
       - ".github/workflows/a2a.yml"
+  # No path filter on pull_request, deliberately. A required status check that a
+  # filter skips never reports, and GitHub blocks the merge waiting for a run
+  # that will not happen. The push filter above still keeps main's runs narrow.
   pull_request:
-    paths:
-      - "packages/a2a/**"
-      - "docs/a2a/**"
-      - ".github/workflows/a2a.yml"
   workflow_dispatch:
 
 permissions:
@@ -25,14 +24,15 @@ permissions:
 
 jobs:
   test:
+    name: a2a
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: packages/a2a
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "20"
 
