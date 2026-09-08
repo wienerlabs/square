@@ -92,7 +92,7 @@ describe.skipIf(!reachable)("lifecycle on anvil through the SDK", () => {
   }
 
   beforeAll(async () => {
-    expect(await client.settlementHorizon()).toBe(4 * 24 * 3600);
+    expect(await client.settlementHorizon()).toBe(4 * 24 * 3600 + 3600);
   });
 
   it("optimistic path: create, fund, submit, finalize, withdraw", async () => {
