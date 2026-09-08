@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "cd packages/did-resolver && npm install && npm run build && cd ../core && npm install --install-links && npm run build && cd ../../app && npm install --install-links",
+  "installCommand": "cd packages/did-resolver && npm install && npm run build && cd ../core && rm -rf node_modules/@squaresdk && npm install --install-links && npm run build && cd ../../app && rm -rf node_modules/@squaresdk && npm install --install-links",
   "buildCommand": "cd app && npm run build",
   "outputDirectory": "app/out",
   "trailingSlash": true,
