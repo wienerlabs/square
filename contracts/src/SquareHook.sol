@@ -164,6 +164,10 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         return address(_claimMarket);
     }
 
+    function payoutMarket() external view returns (address) {
+        return address(_claimMarket);
+    }
+
     function _decodeComplete(bytes memory optParams) private pure returns (uint16 providerBps, bytes memory proof) {
         if (optParams.length == 0) return (FULL_BPS, "");
         (providerBps, proof) = abi.decode(optParams, (uint16, bytes));

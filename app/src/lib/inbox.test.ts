@@ -37,6 +37,8 @@ describe("classify", () => {
     expect(classify(job({ status: JobStatus.Funded, client: other, provider: me }), me, now)).toBe("submit");
     expect(classify(job({ status: JobStatus.Funded }), me, now)).toBeNull();
     expect(classify(job({ status: JobStatus.Funded, expiredAt: 1_500 }), me, now)).toBe("refund");
+    expect(classify(job({ status: JobStatus.Submitted, expiredAt: 1_500, challengeEnd: 0 }), me, now)).toBe("refund");
+    expect(classify(job({ status: JobStatus.Submitted, expiredAt: 1_500, challengeEnd: 3_000 }), me, now)).toBeNull();
   });
 
   it("follows the challenge window for a submitted job", () => {

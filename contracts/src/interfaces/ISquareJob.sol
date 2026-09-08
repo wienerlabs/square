@@ -98,6 +98,8 @@ interface ISquareJob {
     error InvalidPayee();
     error InvalidSplit();
     error InsufficientBalance();
+    error DescriptionTooLong(uint256 maxLength);
+    error SettledByEvaluator();
 
     function createJob(
         address provider,
@@ -119,6 +121,7 @@ interface ISquareJob {
 
     function getJob(uint256 jobId) external view returns (Job memory);
     function getJobRecord(uint256 jobId) external view returns (JobRecord memory);
+    function providerOf(uint256 jobId) external view returns (address);
     function netPayout(uint256 jobId) external view returns (uint256);
     function withdrawable(address account) external view returns (uint256);
     function totalWithdrawable() external view returns (uint256);

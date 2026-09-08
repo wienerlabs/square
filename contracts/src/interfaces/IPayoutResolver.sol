@@ -8,4 +8,5 @@ interface IPayoutResolver is IERC165 {
         external
         view
         returns (address payee, uint16 providerBps);
+    function payoutMarket() external view returns (address);
 }

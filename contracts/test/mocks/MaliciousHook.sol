@@ -45,6 +45,13 @@ contract MaliciousHook is IACPHook, IPayoutResolver, ERC165 {
             || super.supportsInterface(interfaceId);
     }
 
+    function payoutMarket() external pure returns (address) {
+
+        return address(0);
+
+    }
+
+
     function resolvePayout(uint256 jobId, bytes calldata) external view returns (address, uint16) {
         if (mode == Mode.BadPayee) return (address(0), 10_000);
         if (mode == Mode.BadSplit) return (kernel.getJobRecord(jobId).provider, 10_001);

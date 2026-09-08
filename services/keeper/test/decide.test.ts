@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   decide,
   decideAll,
+  expiryIsNear,
   gasCostInUsdc,
   keeperFee,
   minimumProfitableBudget,
@@ -67,6 +68,18 @@ describe("decide", () => {
   it("never touches a job that is not submitted", () => {
     expect(decide(candidate({ status: 1 }), 1_000n, economics).kind).toBe("skip");
     expect(decide(candidate({ status: 3 }), 1_000n, economics).kind).toBe("skip");
+  });
+
+  it("lapses a dispute nobody decided once resolveBy has passed, and only then", () => {
+    expect(decide(candidate({ disputed: true, decidedOutcome: 0, resolveBy: 2_000n }), 1_999n, economics)).toEqual({ kind: "skip", jobId: 1n, reason: "awaitingDecision" });
+    expect(decide(candidate({ disputed: true, decidedOutcome: 0, resolveBy: 2_000n }), 2_000n, economics)).toEqual({ kind: "lapse", jobId: 1n, resolveBy: 2_000n });
+    expect(decide(candidate({ disputed: true, decidedOutcome: null, resolveBy: null }), 9_000n, economics).kind).toBe("skip");
+  });
+
+  it("flags a job whose expiry is a day away or less", () => {
+    expect(expiryIsNear(candidate({ expiredAt: 87_400n }), 1_000n)).toBe(true);
+    expect(expiryIsNear(candidate({ expiredAt: 87_401n }), 1_000n)).toBe(false);
+    expect(expiryIsNear(candidate({ expiredAt: null }), 1_000n)).toBe(false);
   });
 
   it("handles disputes: waits for a decision, applies a completion, leaves a rejection alone", () => {

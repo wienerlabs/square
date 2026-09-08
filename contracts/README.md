@@ -49,8 +49,13 @@ export IDENTITY_REGISTRY=0x8004A818BFB912233c491871b3d84c89A494BD9e
 export REPUTATION_REGISTRY=0x8004B663056A597Dffe9eCcC1965A193B7388713
 export VALIDATION_REGISTRY=0x8004Cb1BF31DAf7788923b405b754f57acEB4272
 export ARBITERS=<addr>,<addr>,<addr> ARBITER_THRESHOLD=2
+export CHALLENGE_WINDOW=120 DISPUTE_WINDOW=300 FINALIZE_GRACE=600
 forge script script/DeploySettlement.s.sol --rpc-url "$ARC_RPC_URL" --broadcast
 ```
+
+`script/deploy-arc-testnet.sh` does the same with the testnet defaults above,
+reading the deployer and the actor set from `~/.square/*.env`. The redeploy of
+2026-09-08 is recorded in [docs/deploy/redeploy-2026-09-08.md](../docs/deploy/redeploy-2026-09-08.md).
 
 Every parameter is an environment variable with a documented default
 (`script/DeploySettlement.s.sol`); nothing is hard-coded. The script writes
@@ -73,11 +78,11 @@ cd packages/core && ARC_FORK_RPC_URL=http://127.0.0.1:8546 npm test
 | | |
 |---|---|
 | Network | Arc Testnet (`5042002`) |
-| `SquareJob` | [`0x2570a1511a562020c4F20c7ce97229376fe6B500`](https://testnet.arcscan.app/address/0x2570a1511a562020c4F20c7ce97229376fe6B500) |
-| `KeeperEvaluator` | [`0x6c62D57Ba7665ABF29795ac0c6d0245A0Ee8921e`](https://testnet.arcscan.app/address/0x6c62D57Ba7665ABF29795ac0c6d0245A0Ee8921e) |
-| `Arbitration` | [`0xA10C2e9f927BcEb6FB677b446E8ac8a4dd6cea4E`](https://testnet.arcscan.app/address/0xA10C2e9f927BcEb6FB677b446E8ac8a4dd6cea4E) |
-| `ClaimMarket` | [`0xc5495bc52f64C9Fa04c3906ca0d751D7bC3F56f3`](https://testnet.arcscan.app/address/0xc5495bc52f64C9Fa04c3906ca0d751D7bC3F56f3) |
-| `SquareHook` | [`0x92EC31aAdcD98Ba3528cfef67ec0690433c43E57`](https://testnet.arcscan.app/address/0x92EC31aAdcD98Ba3528cfef67ec0690433c43E57) |
+| `SquareJob` | [`0x32E642084dbE5C5673d7A7E5F69b6A8260e4f3da`](https://testnet.arcscan.app/address/0x32E642084dbE5C5673d7A7E5F69b6A8260e4f3da) |
+| `KeeperEvaluator` | [`0xD9f9137fC9B316b92762792Ad64760B4C5dD29C3`](https://testnet.arcscan.app/address/0xD9f9137fC9B316b92762792Ad64760B4C5dD29C3) |
+| `Arbitration` | [`0x0Ad6268d7e420Bd7c2BDBb6e1078b99CDf5c07cC`](https://testnet.arcscan.app/address/0x0Ad6268d7e420Bd7c2BDBb6e1078b99CDf5c07cC) |
+| `ClaimMarket` | [`0x32eD0Ef1AD401DD6E622775283624438716730c0`](https://testnet.arcscan.app/address/0x32eD0Ef1AD401DD6E622775283624438716730c0) |
+| `SquareHook` | [`0xE61f869806Ca6121d33Ed2c9441a5449cF249198`](https://testnet.arcscan.app/address/0xE61f869806Ca6121d33Ed2c9441a5449cF249198) |
 | Parameters | challenge window 120 s, dispute window 300 s, evaluator fee 50 bp, platform fee 100 bp, bond 1000 bp with a 1 USDC floor, 3 arbiters, threshold 2 |
 | Deployment file | `deployments/5042002.json`, embedded in `@squaresdk/core` |
 

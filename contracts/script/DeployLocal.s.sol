@@ -56,7 +56,7 @@ contract DeployLocal is Script {
 
     function _deployStack(address deployer, Mocks memory m) private returns (Stack memory s) {
         s.kernel = new SquareJob(address(m.usdc), deployer, 100, 50, 1_000_000, deployer);
-        s.keeper = new KeeperEvaluator(address(s.kernel), deployer, 1 days, 3 days);
+        s.keeper = new KeeperEvaluator(address(s.kernel), deployer, 1 days, 3 days, 1 hours);
         s.arbitration = new Arbitration(address(s.keeper), deployer, 1_000, 1_000_000);
         s.market = new ClaimMarket(address(s.kernel), address(s.keeper));
         s.hook = new SquareHook(

@@ -21,6 +21,7 @@ abstract contract BaseTest is Test {
     uint256 internal constant HOOK_GAS_LIMIT = 1_000_000;
     uint48 internal constant CHALLENGE_WINDOW = 1 days;
     uint48 internal constant DISPUTE_WINDOW = 3 days;
+    uint48 internal constant FINALIZE_GRACE = 1 hours;
     uint16 internal constant BOND_BPS = 1_000;
     uint64 internal constant MIN_BOND = 1_000_000;
 
@@ -60,7 +61,7 @@ abstract contract BaseTest is Test {
         compliance = new MockComplianceModule();
 
         kernel = new SquareJob(address(usdc), treasury, PLATFORM_FEE_BP, EVALUATOR_FEE_BP, HOOK_GAS_LIMIT, owner);
-        keeper = new KeeperEvaluator(address(kernel), owner, CHALLENGE_WINDOW, DISPUTE_WINDOW);
+        keeper = new KeeperEvaluator(address(kernel), owner, CHALLENGE_WINDOW, DISPUTE_WINDOW, FINALIZE_GRACE);
         arbitration = new Arbitration(address(keeper), owner, BOND_BPS, MIN_BOND);
         market = new ClaimMarket(address(kernel), address(keeper));
         hook = new SquareHook(
@@ -120,6 +121,14 @@ abstract contract BaseTest is Test {
 
     function pastWindow(uint256 jobId) internal {
         vm.warp(keeper.challengeEndsAt(jobId));
+    }
+
+    function text(uint256 length) internal pure returns (string memory) {
+        bytes memory out = new bytes(length);
+        for (uint256 i = 0; i < length; i++) {
+            out[i] = "a";
+        }
+        return string(out);
     }
 
     function netOf(uint256 budget) internal pure returns (uint256) {

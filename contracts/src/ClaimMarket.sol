@@ -6,6 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IClaimMarket} from "./interfaces/IClaimMarket.sol";
 import {IKeeperEvaluator} from "./interfaces/IKeeperEvaluator.sol";
+import {IPayoutResolver} from "./interfaces/IPayoutResolver.sol";
 import {ISquareJob} from "./interfaces/ISquareJob.sol";
 
 contract ClaimMarket is IClaimMarket, ReentrancyGuard {
@@ -63,7 +64,7 @@ contract ClaimMarket is IClaimMarket, ReentrancyGuard {
     function payeeOf(uint256 jobId) external view returns (address) {
         Listing storage listing = _listings[jobId];
         if (listing.status == Status.Sold) return listing.buyer;
-        return _squareJob.getJobRecord(jobId).provider;
+        return _squareJob.providerOf(jobId);
     }
 
     function getListing(uint256 jobId) external view returns (Listing memory) {
@@ -75,5 +76,7 @@ contract ClaimMarket is IClaimMarket, ReentrancyGuard {
         if (job.status != ISquareJob.JobStatus.Submitted) revert NotSubmitted();
         if (job.evaluator != address(_keeperEvaluator)) revert NotOptimisticJob();
         if (_keeperEvaluator.isDisputed(jobId)) revert Disputed();
+        if (!job.hookResolvesPayout) revert PayoutNotRouted();
+        if (IPayoutResolver(job.hook).payoutMarket() != address(this)) revert PayoutNotRouted();
     }
 }

@@ -215,6 +215,37 @@ contract ArbitrationTest is BaseTest {
         arbitration.setArbiters(one, 1);
     }
 
+    function test_settleBond_anyoneMayCallOnceTheStateDecides() public {
+        (uint256 jobId, uint64 bond) = _disputed(BUDGET);
+        vote(arb1, jobId, IArbitration.Outcome.Complete, FULL_BPS);
+        vote(arb2, jobId, IArbitration.Outcome.Complete, FULL_BPS);
+        vm.expectRevert(IArbitration.NothingToSettle.selector);
+        vm.prank(stranger);
+        arbitration.settleBond(jobId);
+        vm.prank(cranker);
+        keeper.finalizeDecided(jobId, "");
+        assertEq(arbitration.withdrawable(provider), bond);
+        vm.expectRevert(IArbitration.NothingToSettle.selector);
+        vm.prank(stranger);
+        arbitration.settleBond(jobId);
+        vm.expectRevert(IArbitration.UnknownDispute.selector);
+        arbitration.settleBond(99);
+    }
+
+    function test_settleBond_returnsTheBondWhenTheJobCanNoLongerComplete() public {
+        (uint256 jobId, uint64 bond) = _disputed(BUDGET);
+        ISquareJob.JobRecord memory job = record(jobId);
+        job.status = ISquareJob.JobStatus.Expired;
+        vm.mockCall(address(kernel), abi.encodeWithSelector(ISquareJob.getJobRecord.selector, jobId), abi.encode(job));
+        vm.prank(stranger);
+        arbitration.settleBond(jobId);
+        assertEq(arbitration.withdrawable(client), bond, "a job that cannot complete gives the disputer the bond back");
+        vm.expectRevert(IArbitration.NothingToSettle.selector);
+        arbitration.settleBond(jobId);
+        vm.clearMockedCalls();
+        assertEq(usdc.balanceOf(address(arbitration)), bond);
+    }
+
     function test_bondWithdraw() public {
         (uint256 jobId, uint64 bond) = _disputed(BUDGET);
         vote(arb1, jobId, IArbitration.Outcome.Reject, 0);

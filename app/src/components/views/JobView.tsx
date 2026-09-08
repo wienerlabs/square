@@ -373,11 +373,14 @@ export function JobView() {
     detail.keeperDispute.disputedAt !== 0 &&
     !detail.keeperDispute.resolved &&
     (detail.dispute.outcome === Outcome.Complete || detail.dispute.outcome === Outcome.Lapsed);
-  const showList = record.status === JobStatus.Submitted && isProvider && listing.status !== 1 && listing.status !== 2 && detail.netPayout > 0n;
-  const showBuy = listing.status === 1 && address !== undefined && !sameAddress(address, listing.seller) && !isProvider && !isClient;
+  const payoutRouted = record.hookResolvesPayout && hookIsSquare;
+  const showList = record.status === JobStatus.Submitted && isProvider && payoutRouted && listing.status !== 1 && listing.status !== 2 && detail.netPayout > 0n;
+  const showBuy = listing.status === 1 && payoutRouted && address !== undefined && !sameAddress(address, listing.seller) && !isProvider && !isClient;
   const showCancel = listing.status === 1 && sameAddress(address, listing.seller);
   const showReject = record.status === JobStatus.Open && isClient;
-  const showClaimRefund = (record.status === JobStatus.Funded || record.status === JobStatus.Submitted) && now >= record.expiredAt;
+  const expired = now >= record.expiredAt;
+  const showClaimRefund = expired && (record.status === JobStatus.Funded || (record.status === JobStatus.Submitted && !keeperEvaluates));
+  const expiryHeldByKeeper = expired && record.status === JobStatus.Submitted && keeperEvaluates;
   const withdrawable = positions.data?.withdrawable ?? 0n;
   const bondWithdrawable = positions.data?.bondWithdrawable ?? 0n;
   const showRecordExpiry = record.status === JobStatus.Expired && detail.agentId !== 0n && !detail.expiryRecorded;
@@ -695,9 +698,18 @@ export function JobView() {
                 title="Claim refund"
                 label="Claim refund"
                 buttonLabel="Claim refund"
-                description="The expiry passed with the budget still in escrow. Anyone may trigger the refund; the client is credited on the ledger."
+                description={
+                  record.status === JobStatus.Submitted
+                    ? "The expiry passed and the evaluator has no settlement horizon, so the submission does not hold the escrow. Anyone may trigger the refund; the client is credited on the ledger."
+                    : "The expiry passed with the budget still in escrow and nothing submitted. Anyone may trigger the refund; the client is credited on the ledger."
+                }
                 send={(client) => client.claimRefund(id)}
               />
+            ) : null}
+            {expiryHeldByKeeper ? (
+              <p className="text-caption text-graphite">
+                The expiry passed after the submission. The keeper evaluator settles this job instead of a refund: finalize once the window closes, or a dispute the arbiters decide or that lapses.
+              </p>
             ) : null}
             {withdrawable > 0n ? (
               <SimpleAction

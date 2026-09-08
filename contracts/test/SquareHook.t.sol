@@ -192,8 +192,19 @@ contract SquareHookTest is BaseTest {
         assertEq(reputation.feedbackCount(AGENT_ID), 0);
     }
 
+    function _hookedJobWithoutAHorizon(bytes memory optParams) internal returns (uint256 jobId) {
+        vm.prank(client);
+        jobId = kernel.createJob(provider, client, expiry(), "spec:0xabc", address(hook));
+        vm.prank(provider);
+        kernel.setBudget(jobId, BUDGET, "");
+        vm.prank(client);
+        kernel.fund(jobId, BUDGET, "");
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, optParams);
+    }
+
     function test_recordExpiry_neutralOnceAndOnlyWhenExpired() public {
-        uint256 jobId = submittedHookedJob(BUDGET);
+        uint256 jobId = _hookedJobWithoutAHorizon(abi.encode(AGENT_ID, REQUEST_HASH));
         vm.expectRevert(SquareHook.NotExpired.selector);
         hook.recordExpiry(jobId);
         vm.warp(expiry());
@@ -206,13 +217,20 @@ contract SquareHookTest is BaseTest {
         vm.expectRevert(SquareHook.AlreadyRecorded.selector);
         hook.recordExpiry(jobId);
 
-        uint256 unbound = fundedJob(BUDGET, address(hook));
-        vm.prank(provider);
-        kernel.submit(unbound, DELIVERABLE, "");
+        uint256 unbound = _hookedJobWithoutAHorizon("");
         vm.warp(expiry());
         kernel.claimRefund(unbound);
         vm.expectRevert(SquareHook.NoAgentBound.selector);
         hook.recordExpiry(unbound);
+    }
+
+    function test_recordExpiry_isUnreachableForAnOptimisticJobOnceSubmitted() public {
+        uint256 jobId = submittedHookedJob(BUDGET);
+        vm.warp(expiry());
+        vm.expectRevert(ISquareJob.SettledByEvaluator.selector);
+        kernel.claimRefund(jobId);
+        vm.expectRevert(SquareHook.NotExpired.selector);
+        hook.recordExpiry(jobId);
     }
 
     function test_gasLimit_fitsACompliancCheckOfTheExpectedCost() public {

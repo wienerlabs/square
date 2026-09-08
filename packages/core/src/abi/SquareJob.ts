@@ -50,6 +50,19 @@ export const squareJobAbi = [
   },
   {
     "type": "function",
+    "name": "MAX_DESCRIPTION",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_TOTAL_FEE_BP",
     "inputs": [],
     "outputs": [
@@ -452,6 +465,25 @@ export const squareJobAbi = [
     "type": "function",
     "name": "platformTreasury",
     "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "providerOf",
+    "inputs": [
+      {
+        "name": "jobId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [
       {
         "name": "",
@@ -1221,6 +1253,17 @@ export const squareJobAbi = [
   },
   {
     "type": "error",
+    "name": "DescriptionTooLong",
+    "inputs": [
+      {
+        "name": "maxLength",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "ExpiryInPast",
     "inputs": []
   },
@@ -1355,6 +1398,11 @@ export const squareJobAbi = [
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "SettledByEvaluator",
+    "inputs": []
   },
   {
     "type": "error",

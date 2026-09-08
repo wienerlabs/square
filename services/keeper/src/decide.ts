@@ -10,7 +10,11 @@ export interface KeeperCandidate {
   evaluatorFeeBP: number | null;
   decidedOutcome?: number | null;
   disputeClosed?: boolean;
+  resolveBy?: bigint | null;
+  expiredAt?: bigint | null;
 }
+
+export const EXPIRY_WARNING_SECONDS = 86_400n;
 
 export interface KeeperEconomics {
   gasPriceWei: bigint;
@@ -22,7 +26,13 @@ export interface KeeperEconomics {
 export type KeeperAction =
   | { kind: "finalize"; jobId: bigint; fee: bigint; gasCost: bigint }
   | { kind: "finalizeDecided"; jobId: bigint; fee: bigint; gasCost: bigint }
+  | { kind: "lapse"; jobId: bigint; resolveBy: bigint }
   | { kind: "skip"; jobId: bigint; reason: "windowOpen" | "disputed" | "unprofitable" | "notSubmitted" | "awaitingDecision" };
+
+export function expiryIsNear(candidate: Pick<KeeperCandidate, "expiredAt">, now: bigint): boolean {
+  const expiredAt = candidate.expiredAt ?? null;
+  return expiredAt !== null && expiredAt - now <= EXPIRY_WARNING_SECONDS;
+}
 
 export function keeperFee(budget: bigint, evaluatorFeeBP: number): bigint {
   return (budget * BigInt(evaluatorFeeBP)) / FULL_BPS;
@@ -50,9 +60,12 @@ export function decide(candidate: KeeperCandidate, now: bigint, economics: Keepe
   const fee = keeperFee(candidate.budget, candidate.evaluatorFeeBP ?? 0);
   if (candidate.disputed) {
     const outcome = candidate.decidedOutcome ?? null;
-    if (outcome === null || outcome === 0 || outcome === 2 || candidate.disputeClosed) {
-      return { kind: "skip", jobId, reason: outcome === null || outcome === 0 ? "awaitingDecision" : "disputed" };
+    if (outcome === null || outcome === 0) {
+      const resolveBy = candidate.resolveBy ?? null;
+      if (resolveBy !== null && now >= resolveBy) return { kind: "lapse", jobId, resolveBy };
+      return { kind: "skip", jobId, reason: "awaitingDecision" };
     }
+    if (outcome === 2 || candidate.disputeClosed) return { kind: "skip", jobId, reason: "disputed" };
     const gasCost = gasCostInUsdc(economics.gasPriceWei, economics.finalizeDecidedGas);
     if (!profitable(fee, gasCost, economics.minimumMarginBps)) return { kind: "skip", jobId, reason: "unprofitable" };
     return { kind: "finalizeDecided", jobId, fee, gasCost };

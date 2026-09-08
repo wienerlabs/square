@@ -13,7 +13,8 @@ contract KeeperEvaluatorTest is BaseTest {
 
     function test_declaresTheSettlementHorizon() public view {
         assertTrue(keeper.supportsInterface(type(ISettlementHorizon).interfaceId));
-        assertEq(keeper.settlementHorizon(), CHALLENGE_WINDOW + DISPUTE_WINDOW);
+        assertEq(keeper.settlementHorizon(), CHALLENGE_WINDOW + DISPUTE_WINDOW + FINALIZE_GRACE);
+        assertEq(keeper.finalizeGrace(), FINALIZE_GRACE);
     }
 
     function test_finalize_revertsWhileTheWindowIsOpen() public {
@@ -69,12 +70,42 @@ contract KeeperEvaluatorTest is BaseTest {
         pastWindow(jobId);
         vm.expectRevert(ISquareJob.NotExpired.selector);
         kernel.claimRefund(jobId);
-        vm.warp(block.timestamp + DISPUTE_WINDOW);
-        vm.expectRevert(ISquareJob.NotExpired.selector);
+        vm.warp(record(jobId).expiredAt + 365 days);
+        vm.expectRevert(ISquareJob.SettledByEvaluator.selector);
+        vm.prank(client);
+        kernel.claimRefund(jobId);
+        vm.prank(provider);
+        keeper.finalize(jobId, "");
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed), "long after expiry the provider still finalizes alone");
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET));
+        assertSolvent();
+    }
+
+    function test_lastSecondDispute_cannotTurnIntoARefund() public {
+        uint256 jobId = fundedJob(BUDGET, address(hook));
+        uint256 horizon = keeper.settlementHorizon();
+        vm.warp(expiry() - horizon);
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, abi.encode(AGENT_ID, REQUEST_HASH));
+        uint48 end = keeper.challengeEndsAt(jobId);
+        vm.warp(end - 1);
+        vm.prank(client);
+        keeper.dispute(jobId, keccak256("evidence"));
+        IArbitration.Dispute memory d = arbitration.disputeOf(jobId);
+        ISquareJob.JobRecord memory job = record(jobId);
+        assertLe(d.resolveBy + FINALIZE_GRACE, job.expiredAt, "the grace sits between the last lapse and the expiry");
+
+        vm.warp(d.resolveBy);
+        arbitration.lapse(jobId);
+        vm.warp(uint256(job.expiredAt) + 1);
+        vm.expectRevert(ISquareJob.SettledByEvaluator.selector);
+        vm.prank(client);
         kernel.claimRefund(jobId);
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
-        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));
+        keeper.finalizeDecided(jobId, "");
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET), "the provider who delivered is paid");
+        assertEq(arbitration.withdrawable(client), d.bond, "a lapse returns the bond");
+        assertSolvent();
     }
 
     function test_expiryInvariant_holdsForTheLatestPossibleSubmission() public {
@@ -84,12 +115,12 @@ contract KeeperEvaluatorTest is BaseTest {
         vm.prank(provider);
         kernel.submit(jobId, DELIVERABLE, abi.encode(AGENT_ID, REQUEST_HASH));
         ISquareJob.JobRecord memory job = record(jobId);
-        assertGe(job.expiredAt, job.submittedAt + CHALLENGE_WINDOW + DISPUTE_WINDOW);
+        assertGe(job.expiredAt, job.submittedAt + CHALLENGE_WINDOW + DISPUTE_WINDOW + FINALIZE_GRACE);
 
         vm.prank(client);
         keeper.dispute(jobId, keccak256("evidence"));
         IArbitration.Dispute memory d = arbitration.disputeOf(jobId);
-        assertLe(d.resolveBy, job.expiredAt, "arbitration always has time before claimRefund opens");
+        assertLe(d.resolveBy + FINALIZE_GRACE, job.expiredAt, "a lapse always leaves a full grace before the expiry");
     }
 
     function test_dispute_onlyClientOnlyInsideTheWindow() public {
@@ -130,7 +161,7 @@ contract KeeperEvaluatorTest is BaseTest {
     }
 
     function test_dispute_requiresArbitrationToBeConfigured() public {
-        KeeperEvaluator bare = new KeeperEvaluator(address(kernel), owner, CHALLENGE_WINDOW, DISPUTE_WINDOW);
+        KeeperEvaluator bare = new KeeperEvaluator(address(kernel), owner, CHALLENGE_WINDOW, DISPUTE_WINDOW, FINALIZE_GRACE);
         vm.prank(client);
         uint256 jobId = kernel.createJob(provider, address(bare), expiry(), "", address(0));
         vm.prank(client);
@@ -168,7 +199,7 @@ contract KeeperEvaluatorTest is BaseTest {
         vm.prank(owner);
         keeper.configureWindows(1 hours, 1 days);
         assertEq(keeper.challengeEndsAt(jobId), originalEnd, "in-flight job keeps its window");
-        assertEq(keeper.settlementHorizon(), 1 hours + 1 days, "new jobs see the new horizon");
+        assertEq(keeper.settlementHorizon(), 1 hours + 1 days + FINALIZE_GRACE, "new jobs see the new horizon");
 
         uint256 later = submittedHookedJob(BUDGET);
         assertEq(keeper.challengeEndsAt(later), block.timestamp + 1 hours);

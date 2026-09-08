@@ -23,6 +23,7 @@ contract DeploySettlement is Script {
         uint256 hookGasLimit;
         uint48 challengeWindow;
         uint48 disputeWindow;
+        uint48 finalizeGrace;
         uint16 bondBps;
         uint64 minBond;
         uint8 threshold;
@@ -59,6 +60,7 @@ contract DeploySettlement is Script {
         p.hookGasLimit = vm.envOr("HOOK_GAS_LIMIT", uint256(1_000_000));
         p.challengeWindow = uint48(vm.envOr("CHALLENGE_WINDOW", uint256(1 days)));
         p.disputeWindow = uint48(vm.envOr("DISPUTE_WINDOW", uint256(3 days)));
+        p.finalizeGrace = uint48(vm.envOr("FINALIZE_GRACE", uint256(1 hours)));
         p.bondBps = uint16(vm.envOr("BOND_BPS", uint256(1_000)));
         p.minBond = uint64(vm.envOr("MIN_BOND", uint256(1_000_000)));
         p.threshold = uint8(vm.envOr("ARBITER_THRESHOLD", uint256(2)));
@@ -68,7 +70,8 @@ contract DeploySettlement is Script {
     function _deploy(Params memory p) private returns (Deployment memory d) {
         SquareJob kernel =
             new SquareJob(p.usdc, p.treasury, p.platformFeeBP, p.evaluatorFeeBP, p.hookGasLimit, p.deployer);
-        KeeperEvaluator keeper = new KeeperEvaluator(address(kernel), p.deployer, p.challengeWindow, p.disputeWindow);
+        KeeperEvaluator keeper =
+            new KeeperEvaluator(address(kernel), p.deployer, p.challengeWindow, p.disputeWindow, p.finalizeGrace);
         Arbitration arbitration = new Arbitration(address(keeper), p.deployer, p.bondBps, p.minBond);
         ClaimMarket market = new ClaimMarket(address(kernel), address(keeper));
         SquareHook hook =

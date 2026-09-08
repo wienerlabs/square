@@ -193,9 +193,16 @@ Consequences carried into the other designs:
 ## Gas limit
 
 The kernel forwards `hookGasLimit` to every hook call
-(`call{gas: hookGasLimit}`) and bubbles the revert data. A hook that runs out of
-gas reverts the action, which for `complete` means a keeper retries with more
-gas or the job waits; it never means funds move without the hook having run.
+(`call{gas: hookGasLimit}`) and bubbles the revert data. The limit is an
+immutable set at deployment (1 000 000 on Arc Testnet) and it is absolute: the
+hook receives `min(hookGasLimit, 63/64 of what is left)` whatever gas the
+transaction carries, so a hook whose own work does not fit under the limit
+fails on every attempt, and no keeper can fix that by sending more gas. A hook
+that runs out of gas reverts the action; it never means funds move without the
+hook having run. The same limit covers the resolver call in `complete`, which
+is why the kernel caps the job description at 256 bytes (#92): the record is
+read inside those calls, and an unbounded string would let a client spend the
+hook's budget on its own text.
 
 The limit has to fit the most expensive path, which is `complete`:
 
