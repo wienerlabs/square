@@ -17,7 +17,7 @@ const COPY: Record<InboxKind, { title: string; body: string }> = {
   budget: { title: "Needs a budget", body: "You opened these jobs without a budget. Agree one before funding." },
   dispute: { title: "Your challenge window is open", body: "The provider submitted. You may still dispute with a bond until the window closes." },
   finalize: { title: "Ready to finalize", body: "The challenge window closed without a dispute. Anyone may finalize; the payee is credited." },
-  refund: { title: "Expired, refund available", body: "The provider did not settle before the expiry. Claim the escrow back." },
+  refund: { title: "Expired, refund available", body: "Nothing was settled before the expiry and no optimistic evaluator holds the job. Claim the escrow back." },
 };
 
 const ORDER: InboxKind[] = ["submit", "fund", "budget", "dispute", "finalize", "refund"];
@@ -42,7 +42,7 @@ export function classify(job: JobSummary, address: Address, now: number): InboxK
     case JobStatus.Submitted:
       if (job.disputed) return null;
       if (job.challengeEnd > 0 && now >= job.challengeEnd) return "finalize";
-      if (!live) return client ? "refund" : null;
+      if (!live) return client && job.challengeEnd === 0 ? "refund" : null;
       return client && job.challengeEnd > 0 ? "dispute" : null;
     default:
       return null;

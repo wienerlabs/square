@@ -2,7 +2,7 @@ import type { Hex } from "viem";
 import { JobStatus, squareHookAbi, type SquareClient } from "@squaresdk/core";
 import { disputes, jobs, keeperActions, type Database } from "@squaresdk/data";
 import type { Logger, Metrics } from "@squaresdk/observability";
-import { decide, gasCostInUsdc, keeperFee, oldestPendingAge, type KeeperCandidate, type KeeperEconomics } from "./decide.js";
+import { decide, expiryIsNear, gasCostInUsdc, keeperFee, oldestPendingAge, type KeeperCandidate, type KeeperEconomics } from "./decide.js";
 
 export interface KeeperOptions {
   db: Database;
@@ -20,8 +20,10 @@ export interface KeeperOptions {
 export interface TickReport {
   finalized: bigint[];
   applied: bigint[];
+  lapsed: bigint[];
   skipped: Array<{ jobId: bigint; reason: string }>;
   expiriesRecorded: bigint[];
+  nearExpiry: bigint[];
   pending: number;
   oldestPendingAgeSeconds: number;
 }
@@ -51,9 +53,11 @@ export class Keeper {
     if (record.status !== JobStatus.Submitted) return null;
     const disputed = await client.isDisputed(jobId);
     let decidedOutcome: number | null = null;
+    let resolveBy: bigint | null = null;
     if (disputed) {
       const dispute = await client.disputeOf(jobId);
       decidedOutcome = dispute.outcome;
+      resolveBy = BigInt(dispute.resolveBy);
     }
     const challengeEnd = await client.challengeEndsAt(jobId);
     return {
@@ -64,12 +68,14 @@ export class Keeper {
       budget: record.budget,
       evaluatorFeeBP: record.evaluatorFeeBP,
       decidedOutcome,
+      resolveBy,
+      expiredAt: BigInt(record.expiredAt),
     };
   }
 
   async tick(now = BigInt(Math.floor(Date.now() / 1000))): Promise<TickReport> {
     const { db, chainId, client, logger, metrics } = this.options;
-    const report: TickReport = { finalized: [], applied: [], skipped: [], expiriesRecorded: [], pending: 0, oldestPendingAgeSeconds: 0 };
+    const report: TickReport = { finalized: [], applied: [], lapsed: [], skipped: [], expiriesRecorded: [], nearExpiry: [], pending: 0, oldestPendingAgeSeconds: 0 };
     const economics = await this.economics();
     const mirrored = [...(await jobs.listFinalizable(db, chainId, now)), ...(await jobs.listDisputedSubmitted(db, chainId))];
     const confirmed: KeeperCandidate[] = [];
@@ -84,7 +90,26 @@ export class Keeper {
     metrics?.setDisputesOpen((await disputes.listOpen(db, chainId)).length);
 
     for (const candidate of confirmed) {
+      if (expiryIsNear(candidate, now)) {
+        report.nearExpiry.push(candidate.jobId);
+        logger.warn("keeper.expiry_near", { jobId: candidate.jobId.toString(), expiredAt: (candidate.expiredAt ?? 0n).toString() });
+      }
       const action = decide(candidate, now, economics);
+      if (action.kind === "lapse") {
+        try {
+          const result = await client.lapse(candidate.jobId);
+          await keeperActions.append(db, { chainId, jobId: candidate.jobId, action: "lapse", txHash: result.hash, gasUsed: result.receipt.gasUsed });
+          metrics?.recordKeeperAction("lapse", "success");
+          report.lapsed.push(candidate.jobId);
+          logger.info("keeper.lapsed", { jobId: candidate.jobId.toString(), txHash: result.hash });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await keeperActions.append(db, { chainId, jobId: candidate.jobId, action: "lapse", reason: message.slice(0, 200) });
+          metrics?.recordKeeperAction("lapse", "failure");
+          logger.error("keeper.lapse_failed", { jobId: candidate.jobId.toString(), error: message });
+        }
+        continue;
+      }
       if (action.kind === "skip") {
         report.skipped.push({ jobId: candidate.jobId, reason: action.reason });
         if (action.reason === "unprofitable" && !this.journaledSkips.has(candidate.jobId.toString())) {

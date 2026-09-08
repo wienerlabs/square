@@ -122,10 +122,15 @@ contract Arbitration is IArbitration, Ownable2Step, ReentrancyGuard {
         emit DecisionReached(jobId, uint8(Outcome.Lapsed), FULL_BPS, d.resolutionHash);
     }
 
-    function settleBond(uint256 jobId) external onlyKeeperEvaluator {
+    function settleBond(uint256 jobId) external nonReentrant {
         Dispute storage d = _disputes[jobId];
-        if (d.outcome != Outcome.Complete && d.outcome != Outcome.Lapsed) revert NothingToSettle();
+        if (d.disputedAt == 0) revert UnknownDispute();
         ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
+        if (job.status == ISquareJob.JobStatus.Expired || job.status == ISquareJob.JobStatus.Rejected) {
+            _settleBond(jobId, d, d.disputer);
+            return;
+        }
+        if (d.outcome != Outcome.Complete && d.outcome != Outcome.Lapsed) revert NothingToSettle();
         if (job.status != ISquareJob.JobStatus.Completed) revert NothingToSettle();
         address to = d.disputer;
         if (d.outcome == Outcome.Complete && d.providerBps == FULL_BPS) to = job.payee;

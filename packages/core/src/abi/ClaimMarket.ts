@@ -257,6 +257,11 @@ export const claimMarketAbi = [
   },
   {
     "type": "error",
+    "name": "PayoutNotRouted",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "ReentrancyGuardReentrantCall",
     "inputs": []
   },

@@ -16,7 +16,7 @@ with a margin.
 3. `decide()` compares the fee (`budget x evaluatorFeeBP / 10 000`, snapshotted
    at funding) with the gas cost at the current gas price plus
    `MINIMUM_MARGIN_BPS`. Unprofitable jobs are skipped and journaled.
-4. `finalize` or `finalizeDecided` is sent; the receipt, gas and fee are
+4. `finalize`, `finalizeDecided` or `lapse` is sent; the receipt, gas and fee are
    written to `keeper_actions` and the metrics.
 
 Transactions are sent one at a time from a single key, so nonces never race.
@@ -55,7 +55,7 @@ Endpoints: `/health`, `/metrics` (Prometheus), `/version`, `/actions` (last
 |---|---|
 | `square_finalize_pending_total` | jobs whose window closed and are not finalized |
 | `square_finalize_oldest_pending_age_seconds` | how long the oldest of them has waited: the one number that says the keeper stopped |
-| `square_keeper_actions_total{action,result}` | finalize / finalizeDecided / recordExpiry outcomes |
+| `square_keeper_actions_total{action,result}` | finalize / finalizeDecided / lapse / recordExpiry outcomes |
 | `square_keeper_fee_earned_usdc` | fees collected |
 | `square_disputes_open_total` | open disputes |
 

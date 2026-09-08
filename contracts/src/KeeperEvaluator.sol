@@ -15,6 +15,7 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
 
     ISquareJob private immutable _squareJob;
     IArbitration private _arbitration;
+    uint48 private _finalizeGrace;
     Window[] private _windows;
     mapping(uint256 jobId => DisputeRef) private _disputes;
 
@@ -23,16 +24,25 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
         _;
     }
 
-    constructor(address squareJob_, address initialOwner, uint48 challengeWindow, uint48 disputeWindow)
-        Ownable(initialOwner)
-    {
+    constructor(
+        address squareJob_,
+        address initialOwner,
+        uint48 challengeWindow,
+        uint48 disputeWindow,
+        uint48 finalizeGrace_
+    ) Ownable(initialOwner) {
         if (squareJob_ == address(0)) revert ZeroAddress();
         _squareJob = ISquareJob(squareJob_);
         _pushWindow(0, challengeWindow, disputeWindow);
+        _setFinalizeGrace(finalizeGrace_);
     }
 
     function configureWindows(uint48 challengeWindow, uint48 disputeWindow) external onlyOwner {
         _pushWindow(uint48(block.timestamp), challengeWindow, disputeWindow);
+    }
+
+    function setFinalizeGrace(uint48 finalizeGrace_) external onlyOwner {
+        _setFinalizeGrace(finalizeGrace_);
     }
 
     function setArbitration(address arbitration_) external onlyOwner {
@@ -93,7 +103,11 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
 
     function settlementHorizon() external view returns (uint48) {
         Window storage window = _windows[_windows.length - 1];
-        return window.challengeWindow + window.disputeWindow;
+        return window.challengeWindow + window.disputeWindow + _finalizeGrace;
+    }
+
+    function finalizeGrace() external view returns (uint48) {
+        return _finalizeGrace;
     }
 
     function supportsInterface(bytes4 interfaceId) public view override(ERC165, IERC165) returns (bool) {
@@ -149,6 +163,12 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
     function _forwardFee() private returns (uint256 fee) {
         fee = _squareJob.withdrawable(address(this));
         if (fee > 0) _squareJob.withdrawTo(msg.sender, fee);
+    }
+
+    function _setFinalizeGrace(uint48 finalizeGrace_) private {
+        if (finalizeGrace_ == 0) revert ZeroWindow();
+        _finalizeGrace = finalizeGrace_;
+        emit FinalizeGraceConfigured(finalizeGrace_);
     }
 
     function _pushWindow(uint48 effectiveFrom, uint48 challengeWindow, uint48 disputeWindow) private {

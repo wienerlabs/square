@@ -31,6 +31,7 @@ interface IClaimMarket {
     error BadPrice();
     error BuyerIsSeller();
     error BuyerIsClient();
+    error PayoutNotRouted();
 
     function list(uint256 jobId, uint64 price) external;
     function buy(uint256 jobId) external;

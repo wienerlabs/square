@@ -17,6 +17,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
 
     uint256 public constant BPS = 10_000;
     uint256 public constant MAX_TOTAL_FEE_BP = 2_000;
+    uint256 public constant MAX_DESCRIPTION = 256;
 
     IERC20 private immutable _paymentToken;
     uint256 private immutable _hookGasLimit;
@@ -76,6 +77,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         if (expiredAt <= block.timestamp) revert ExpiryInPast();
         if (expiredAt > type(uint48).max) revert ExpiryTooLarge();
         if (!_whitelistedHooks[hook]) revert HookNotWhitelisted(hook);
+        if (bytes(description).length > MAX_DESCRIPTION) revert DescriptionTooLong(MAX_DESCRIPTION);
         bool resolvesPayout;
         if (hook != address(0)) {
             if (!hook.supportsInterface(type(IACPHook).interfaceId)) revert InvalidHook(hook);
@@ -232,6 +234,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         JobRecord storage job = _existing(jobId);
         if (job.status != JobStatus.Funded && job.status != JobStatus.Submitted) revert WrongStatus();
         if (block.timestamp < job.expiredAt) revert NotExpired();
+        if (job.status == JobStatus.Submitted && _settlementHorizon(job.evaluator) != 0) revert SettledByEvaluator();
 
         job.status = JobStatus.Expired;
         uint256 amount = job.budget;
@@ -271,6 +274,10 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
 
     function getJobRecord(uint256 jobId) external view returns (JobRecord memory) {
         return _existing(jobId);
+    }
+
+    function providerOf(uint256 jobId) external view returns (address) {
+        return _existing(jobId).provider;
     }
 
     function netPayout(uint256 jobId) public view returns (uint256) {

@@ -6,6 +6,8 @@ import {ISquareJob} from "../src/interfaces/ISquareJob.sol";
 import {IClaimMarket} from "../src/interfaces/IClaimMarket.sol";
 import {IArbitration} from "../src/interfaces/IArbitration.sol";
 import {MockReputationRegistry} from "./mocks/MockRegistries.sol";
+import {ClaimMarket} from "../src/ClaimMarket.sol";
+import {SquareHook} from "../src/SquareHook.sol";
 
 contract ClaimMarketTest is BaseTest {
     uint256 internal constant BUDGET = 1_000 * USDC;
@@ -203,11 +205,55 @@ contract ClaimMarketTest is BaseTest {
         assertEq(arbitration.withdrawable(buyer), bond, "the bond follows the party that carried the risk");
     }
 
-    function test_expiryAfterSale_refundsTheClientNotTheBuyer() public {
+    function test_expiryAfterSale_refundIsClosedAndTheBuyerIsStillPaid() public {
         uint256 jobId = _sold();
         vm.warp(expiry());
+        vm.expectRevert(ISquareJob.SettledByEvaluator.selector);
         kernel.claimRefund(jobId);
-        assertEq(kernel.withdrawable(client), BUDGET);
-        assertEq(kernel.withdrawable(buyer), 0, "claimRefund is not hookable, so nothing routes to the buyer");
+        vm.prank(buyer);
+        keeper.finalize(jobId, "");
+        assertEq(kernel.withdrawable(buyer), netOf(BUDGET), "the buyer cranks it and is paid");
+        assertEq(kernel.withdrawable(client), 0);
+    }
+
+    function test_list_revertsWhenTheHookDoesNotRouteThePayout() public {
+        uint256 jobId = submittedJob(BUDGET, address(0));
+        assertFalse(record(jobId).hookResolvesPayout);
+        vm.expectRevert(IClaimMarket.PayoutNotRouted.selector);
+        vm.prank(provider);
+        market.list(jobId, PRICE);
+        vm.expectRevert(IClaimMarket.NotListed.selector);
+        vm.prank(buyer);
+        market.buy(jobId);
+    }
+
+    function test_list_revertsWhenTheResolverReadsAnotherMarket() public {
+        ClaimMarket other = new ClaimMarket(address(kernel), address(keeper));
+        SquareHook foreign = new SquareHook(
+            address(kernel), address(other), address(identity), address(reputation), address(validation), owner
+        );
+        vm.prank(owner);
+        kernel.setHookWhitelist(address(foreign), true);
+        uint256 jobId = submittedJob(BUDGET, address(foreign));
+        assertTrue(record(jobId).hookResolvesPayout);
+        vm.expectRevert(IClaimMarket.PayoutNotRouted.selector);
+        vm.prank(provider);
+        market.list(jobId, PRICE);
+        vm.prank(provider);
+        other.list(jobId, PRICE);
+        assertEq(uint8(other.getListing(jobId).status), uint8(IClaimMarket.Status.Listed));
+    }
+
+    function test_regression_aSaleWithoutARouterCanNoLongerPayTheSellerTwice() public {
+        uint256 jobId = submittedJob(BUDGET, address(0));
+        uint256 buyerBefore = usdc.balanceOf(buyer);
+        vm.expectRevert(IClaimMarket.PayoutNotRouted.selector);
+        vm.prank(provider);
+        market.list(jobId, PRICE);
+        pastWindow(jobId);
+        keeper.finalize(jobId, "");
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET), "the provider is paid exactly once");
+        assertEq(usdc.balanceOf(buyer), buyerBefore, "nobody could buy a claim the kernel would not honour");
+        assertEq(usdc.balanceOf(provider), 0);
     }
 }

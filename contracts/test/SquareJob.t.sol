@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {BaseTest} from "./Base.t.sol";
 import {ISquareJob} from "../src/interfaces/ISquareJob.sol";
+import {IArbitration} from "../src/interfaces/IArbitration.sol";
 import {IACPHook} from "../src/interfaces/IACPHook.sol";
 import {MaliciousHook} from "./mocks/MaliciousHook.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
@@ -73,7 +74,7 @@ contract SquareJobTest is BaseTest {
 
     function test_createJob_enforcesSettlementHorizonOfEvaluator() public {
         uint256 horizon = keeper.settlementHorizon();
-        assertEq(horizon, CHALLENGE_WINDOW + DISPUTE_WINDOW);
+        assertEq(horizon, CHALLENGE_WINDOW + DISPUTE_WINDOW + FINALIZE_GRACE);
         vm.expectRevert(abi.encodeWithSelector(ISquareJob.ExpiryTooShort.selector, block.timestamp + horizon));
         vm.prank(client);
         kernel.createJob(provider, address(keeper), block.timestamp + horizon - 1, "", address(0));
@@ -310,9 +311,8 @@ contract SquareJobTest is BaseTest {
         kernel.reject(second, bytes32(0), "");
     }
 
-    function test_claimRefund_anyoneAfterExpiryFromFundedOrSubmitted() public {
+    function test_claimRefund_anyoneAfterExpiryFromAFundedJob() public {
         uint256 funded = fundedJob(BUDGET, address(0));
-        uint256 submitted = submittedJob(BUDGET, address(0));
         vm.expectRevert(ISquareJob.NotExpired.selector);
         kernel.claimRefund(funded);
         vm.warp(expiry());
@@ -320,14 +320,94 @@ contract SquareJobTest is BaseTest {
         emit ISquareJob.JobExpired(funded);
         vm.prank(stranger);
         kernel.claimRefund(funded);
-        vm.prank(stranger);
-        kernel.claimRefund(submitted);
-        assertEq(kernel.withdrawable(client), 2 * BUDGET);
+        assertEq(kernel.withdrawable(client), BUDGET);
         assertEq(uint8(status(funded)), uint8(ISquareJob.JobStatus.Expired));
-        assertEq(uint8(status(submitted)), uint8(ISquareJob.JobStatus.Expired));
         vm.expectRevert(ISquareJob.WrongStatus.selector);
         kernel.claimRefund(funded);
         assertSolvent();
+    }
+
+    function test_claimRefund_neverTakesASubmittedJobAwayFromAnOptimisticEvaluator() public {
+        uint256 submitted = submittedJob(BUDGET, address(0));
+        vm.warp(expiry() + 365 days);
+        vm.expectRevert(ISquareJob.SettledByEvaluator.selector);
+        vm.prank(client);
+        kernel.claimRefund(submitted);
+        vm.prank(provider);
+        keeper.finalize(submitted, "");
+        assertEq(uint8(status(submitted)), uint8(ISquareJob.JobStatus.Completed), "the provider cranks it alone");
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET));
+        assertSolvent();
+    }
+
+    function test_claimRefund_stillCoversASubmittedJobWhoseEvaluatorHasNoHorizon() public {
+        vm.prank(client);
+        uint256 jobId = kernel.createJob(provider, client, expiry(), "", address(0));
+        vm.prank(client);
+        kernel.setBudget(jobId, BUDGET, "");
+        vm.prank(client);
+        kernel.fund(jobId, BUDGET, "");
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, "");
+        vm.warp(expiry());
+        vm.prank(stranger);
+        kernel.claimRefund(jobId);
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Expired), "an EOA evaluator that never acts is the case the escape hatch is for");
+        assertEq(kernel.withdrawable(client), BUDGET);
+    }
+
+    function test_createJob_capsTheDescription() public {
+        uint256 max = kernel.MAX_DESCRIPTION();
+        assertEq(max, 256);
+        vm.prank(client);
+        uint256 jobId = kernel.createJob(provider, address(keeper), expiry(), text(max), address(hook));
+        assertEq(bytes(record(jobId).description).length, max);
+        vm.expectRevert(abi.encodeWithSelector(ISquareJob.DescriptionTooLong.selector, max));
+        vm.prank(client);
+        kernel.createJob(provider, address(keeper), expiry(), text(max + 1), address(hook));
+    }
+
+    function test_gasGriefing_aFifteenKilobyteDescriptionIsRefused() public {
+        vm.expectRevert(abi.encodeWithSelector(ISquareJob.DescriptionTooLong.selector, kernel.MAX_DESCRIPTION()));
+        vm.prank(client);
+        kernel.createJob(provider, address(keeper), expiry(), text(15_000), address(hook));
+    }
+
+    function _longestHookedJob() internal returns (uint256 jobId) {
+        string memory longest = text(kernel.MAX_DESCRIPTION());
+        vm.prank(client);
+        jobId = kernel.createJob(provider, address(keeper), expiry(), longest, address(hook));
+        vm.prank(provider);
+        kernel.setBudget(jobId, BUDGET, "");
+        vm.prank(client);
+        kernel.fund(jobId, BUDGET, "");
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, abi.encode(AGENT_ID, REQUEST_HASH));
+    }
+
+    function test_gasGriefing_theLongestDescriptionKeepsCompleteUnderTheHookCap() public {
+        uint256 jobId = _longestHookedJob();
+        pastWindow(jobId);
+        uint256 before = gasleft();
+        vm.prank(cranker);
+        keeper.finalize(jobId, "");
+        uint256 used = before - gasleft();
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));
+        assertLt(used, HOOK_GAS_LIMIT, "the whole finalize, hook included, stays under one hook budget");
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET));
+    }
+
+    function test_gasGriefing_theLongestDescriptionKeepsRejectUnderTheHookCap() public {
+        uint256 jobId = _longestHookedJob();
+        vm.prank(client);
+        keeper.dispute(jobId, keccak256("evidence"));
+        vote(arb1, jobId, IArbitration.Outcome.Reject, 0);
+        uint256 before = gasleft();
+        vote(arb2, jobId, IArbitration.Outcome.Reject, 0);
+        uint256 used = before - gasleft();
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Rejected));
+        assertLt(used, HOOK_GAS_LIMIT, "the deciding vote applies the rejection through the hook under one hook budget");
+        assertEq(kernel.withdrawable(client), BUDGET);
     }
 
     function test_claimRefund_revertsWhileOpen() public {
@@ -446,7 +526,9 @@ contract SquareJobTest is BaseTest {
 
     function test_hook_claimRefundIsNeverHooked() public {
         MaliciousHook rogue = new MaliciousHook(address(kernel));
-        uint256 jobId = _rogueJob(rogue);
+        vm.prank(owner);
+        kernel.setHookWhitelist(address(rogue), true);
+        uint256 jobId = fundedJob(BUDGET, address(rogue));
         rogue.setMode(MaliciousHook.Mode.Revert);
         vm.warp(expiry());
         uint256 callsBefore = rogue.calls();

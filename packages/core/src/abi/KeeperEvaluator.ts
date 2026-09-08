@@ -21,6 +21,11 @@ export const keeperEvaluatorAbi = [
         "name": "disputeWindow",
         "type": "uint48",
         "internalType": "uint48"
+      },
+      {
+        "name": "finalizeGrace_",
+        "type": "uint48",
+        "internalType": "uint48"
       }
     ],
     "stateMutability": "nonpayable"
@@ -222,6 +227,19 @@ export const keeperEvaluatorAbi = [
   },
   {
     "type": "function",
+    "name": "finalizeGrace",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint48",
+        "internalType": "uint48"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "finalizeReason",
     "inputs": [
       {
@@ -304,6 +322,19 @@ export const keeperEvaluatorAbi = [
         "name": "arbitration_",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setFinalizeGrace",
+    "inputs": [
+      {
+        "name": "finalizeGrace_",
+        "type": "uint48",
+        "internalType": "uint48"
       }
     ],
     "outputs": [],
@@ -477,6 +508,19 @@ export const keeperEvaluatorAbi = [
       },
       {
         "name": "challengeEnd",
+        "type": "uint48",
+        "indexed": false,
+        "internalType": "uint48"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "FinalizeGraceConfigured",
+    "inputs": [
+      {
+        "name": "finalizeGrace",
         "type": "uint48",
         "indexed": false,
         "internalType": "uint48"

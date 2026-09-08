@@ -7,4 +7,4 @@ export const EXPLORER_URL = "https://testnet.arcscan.app";
 export const ARC_URL = "https://www.arc.io";
 export const RPC_URL = "https://rpc.testnet.arc.io";
 export const CHAIN_ID = 5042002;
-export const SQUARE_JOB = "0x2570a1511a562020c4F20c7ce97229376fe6B500";
+export const SQUARE_JOB = "0x32E642084dbE5C5673d7A7E5F69b6A8260e4f3da";

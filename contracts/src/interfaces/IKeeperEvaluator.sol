@@ -17,6 +17,7 @@ interface IKeeperEvaluator is ISettlementHorizon {
     }
 
     event WindowsConfigured(uint48 effectiveFrom, uint48 challengeWindow, uint48 disputeWindow);
+    event FinalizeGraceConfigured(uint48 finalizeGrace);
     event ArbitrationSet(address indexed arbitration);
     event Finalized(uint256 indexed jobId, address indexed keeper, uint256 keeperFee);
     event DisputeRaised(uint256 indexed jobId, address indexed disputer, uint48 disputedAt, uint48 challengeEnd);
@@ -49,6 +50,7 @@ interface IKeeperEvaluator is ISettlementHorizon {
     function challengeEndsAt(uint256 jobId) external view returns (uint48);
     function windowFor(uint48 submittedAt) external view returns (Window memory);
     function currentWindow() external view returns (Window memory);
+    function finalizeGrace() external view returns (uint48);
     function disputeOf(uint256 jobId) external view returns (DisputeRef memory);
     function isDisputed(uint256 jobId) external view returns (bool);
     function finalizeReason(uint256 jobId, bytes32 deliverable) external pure returns (bytes32);

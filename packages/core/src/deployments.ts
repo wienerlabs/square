@@ -51,11 +51,11 @@ const arcTestnet: SquareDeployment = {
   identityRegistry: "0x8004A818BFB912233c491871b3d84c89A494BD9e",
   reputationRegistry: "0x8004B663056A597Dffe9eCcC1965A193B7388713",
   validationRegistry: "0x8004Cb1BF31DAf7788923b405b754f57acEB4272",
-  squareJob: "0x2570a1511a562020c4F20c7ce97229376fe6B500",
-  keeperEvaluator: "0x6c62D57Ba7665ABF29795ac0c6d0245A0Ee8921e",
-  arbitration: "0xA10C2e9f927BcEb6FB677b446E8ac8a4dd6cea4E",
-  claimMarket: "0xc5495bc52f64C9Fa04c3906ca0d751D7bC3F56f3",
-  squareHook: "0x92EC31aAdcD98Ba3528cfef67ec0690433c43E57",
+  squareJob: "0x32E642084dbE5C5673d7A7E5F69b6A8260e4f3da",
+  keeperEvaluator: "0xD9f9137fC9B316b92762792Ad64760B4C5dD29C3",
+  arbitration: "0x0Ad6268d7e420Bd7c2BDBb6e1078b99CDf5c07cC",
+  claimMarket: "0x32eD0Ef1AD401DD6E622775283624438716730c0",
+  squareHook: "0xE61f869806Ca6121d33Ed2c9441a5449cF249198",
 };
 
 export const deployments: Readonly<Record<number, SquareDeployment>> = {

@@ -1,7 +1,7 @@
 import type { Database } from "../database.js";
 import { hexToBytes, nullableBigIntParam, nullableBytesToHex, nullableToBigInt, toBigInt, type Hex } from "../codec.js";
 
-export type KeeperAction = "finalize" | "finalizeDecided" | "recordExpiry" | "skipped";
+export type KeeperAction = "finalize" | "finalizeDecided" | "lapse" | "recordExpiry" | "skipped";
 
 export interface KeeperActionInput {
   chainId: number;

@@ -31,7 +31,7 @@ replace. Nothing carries an assurance claim.
 | Layer | State |
 |---|---|
 | Identity: `did:aip` v2, agent card, CLI, Universal Resolver driver | live against ERC-8004 on Arc Testnet ([docs/smoke](docs/smoke/)) |
-| Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | deployed on Arc Testnet, 102 Foundry tests, the five settlement paths run on the testnet with real USDC and the deployed ERC-8004 registries ([docs/deploy/lifecycle-5042002.md](docs/deploy/lifecycle-5042002.md)) |
+| Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | deployed on Arc Testnet, 127 Foundry tests including a bond-solvency invariant suite, the five settlement paths run on the testnet with real USDC and the deployed ERC-8004 registries ([docs/deploy/lifecycle-5042002.md](docs/deploy/lifecycle-5042002.md)) |
 | Services: indexer, keeper, x402 gateway, data layer, observability | implemented and tested against the local stack |
 | Compliance: circuit, prover, Groth16 verifier, `ComplianceHook` | circuit, prover and verifier live (#14, #18, #17); the hook slot is open (#27) |
 | Website (`site/`) | live at [square-protocol.vercel.app](https://square-protocol.vercel.app), adapted from an MIT template with Square's own copy and surfaces, every button leads to the app |
@@ -151,11 +151,11 @@ deployer; a Safe takes over before mainnet.
 
 | Contract | Address |
 |---|---|
-| `SquareJob` | [`0x2570a1511a562020c4F20c7ce97229376fe6B500`](https://testnet.arcscan.app/address/0x2570a1511a562020c4F20c7ce97229376fe6B500) |
-| `KeeperEvaluator` | [`0x6c62D57Ba7665ABF29795ac0c6d0245A0Ee8921e`](https://testnet.arcscan.app/address/0x6c62D57Ba7665ABF29795ac0c6d0245A0Ee8921e) |
-| `Arbitration` | [`0xA10C2e9f927BcEb6FB677b446E8ac8a4dd6cea4E`](https://testnet.arcscan.app/address/0xA10C2e9f927BcEb6FB677b446E8ac8a4dd6cea4E) |
-| `ClaimMarket` | [`0xc5495bc52f64C9Fa04c3906ca0d751D7bC3F56f3`](https://testnet.arcscan.app/address/0xc5495bc52f64C9Fa04c3906ca0d751D7bC3F56f3) |
-| `SquareHook` | [`0x92EC31aAdcD98Ba3528cfef67ec0690433c43E57`](https://testnet.arcscan.app/address/0x92EC31aAdcD98Ba3528cfef67ec0690433c43E57) |
+| `SquareJob` | [`0x32E642084dbE5C5673d7A7E5F69b6A8260e4f3da`](https://testnet.arcscan.app/address/0x32E642084dbE5C5673d7A7E5F69b6A8260e4f3da) |
+| `KeeperEvaluator` | [`0xD9f9137fC9B316b92762792Ad64760B4C5dD29C3`](https://testnet.arcscan.app/address/0xD9f9137fC9B316b92762792Ad64760B4C5dD29C3) |
+| `Arbitration` | [`0x0Ad6268d7e420Bd7c2BDBb6e1078b99CDf5c07cC`](https://testnet.arcscan.app/address/0x0Ad6268d7e420Bd7c2BDBb6e1078b99CDf5c07cC) |
+| `ClaimMarket` | [`0x32eD0Ef1AD401DD6E622775283624438716730c0`](https://testnet.arcscan.app/address/0x32eD0Ef1AD401DD6E622775283624438716730c0) |
+| `SquareHook` | [`0xE61f869806Ca6121d33Ed2c9441a5449cF249198`](https://testnet.arcscan.app/address/0xE61f869806Ca6121d33Ed2c9441a5449cF249198) |
 
 `@squaresdk/core` carries these addresses (`deployments[5042002]`). The five
 settlement paths were run against them with real USDC and a provider registered
