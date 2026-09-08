@@ -31,7 +31,7 @@ replace. Nothing carries an assurance claim.
 | Layer | State |
 |---|---|
 | Identity: `did:aip` v2, agent card, CLI, Universal Resolver driver | live against ERC-8004 on Arc Testnet ([docs/smoke](docs/smoke/)) |
-| Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | deployed on Arc Testnet, 102 Foundry tests, the five settlement paths run on the testnet with real USDC and the deployed ERC-8004 registries ([docs/deploy/lifecycle-5042002.md](docs/deploy/lifecycle-5042002.md)) |
+| Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | deployed on Arc Testnet, 147 Foundry tests, the five settlement paths run on the testnet with real USDC and the deployed ERC-8004 registries ([docs/deploy/lifecycle-5042002.md](docs/deploy/lifecycle-5042002.md)) |
 | Services: indexer, keeper, x402 gateway, data layer, observability | implemented and tested against the local stack |
 | Compliance: circuit, prover, Groth16 verifier, `ComplianceHook` | circuit, prover and verifier live (#14, #18, #17); the hook slot is open (#27) |
 | Website (`site/`) | live at [square-protocol.vercel.app](https://square-protocol.vercel.app), adapted from an MIT template with Square's own copy and surfaces, every button leads to the app |
@@ -69,6 +69,7 @@ Design notes, each the record of a decision:
 - [ERC-20 versus native USDC](docs/decisions/erc20-vs-native-usdc.md)
 - [x402: own facilitator versus Circle Gateway](docs/decisions/x402-facilitator.md)
 - [ERC-4337: is sponsorship needed](docs/decisions/erc4337-sponsorship.md)
+- [The daily ceiling is public, the policy behind it is not](docs/decisions/public-daily-ceiling.md)
 - [Gas, measured](docs/deploy/gas.md)
 
 ## Provenance
@@ -86,7 +87,7 @@ is not ported.
 
 ```
 contracts/   Foundry: SquareJob, KeeperEvaluator, Arbitration, ClaimMarket, SquareHook,
-             deploy scripts, 102 tests
+             PolicyRegistry, deploy scripts, 147 tests
 circuits/    Circom payment-compliance circuit + ceremony scripts
 packages/    did-resolver, cli, did-aip-driver, core (SDK, embedded ABIs), data (Postgres
              access layer + migrations), hardening (SSRF, idempotency, rate limit, RPC
