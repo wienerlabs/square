@@ -34,9 +34,10 @@ than buried:
   passed them would be paid. Recovering an EIP-712 signature from an allowlisted
   attestor is what makes the record mean something (§3).
 - **A missing attestation does not revert.** It makes the release *unattested* and
-  emits why. Reverting would run the job to expiry, and [#90][i90] would hand the
-  client a full refund — turning "the counterparty's rail was down" into "the
-  provider worked for free", with the client as beneficiary (§5.2).
+  emits why. A reverting module would lock the escrow: every settlement path runs
+  through `complete`, and since [#90][i90] closed the expiry refund, the only exit
+  left is an arbitration that rejects delivered work and pays the provider
+  nothing (§5.2).
 
 The circuit does not change, no interface changes, and no viewing key is issued.
 
@@ -268,12 +269,26 @@ Compliance in this architecture is a signal, which is the same thing
 not that they passed, and refusing is a separate decision.
 
 A module that reverts fights that shape, and the consequence is not theoretical.
-`complete` reverting is not innocent here: the job runs to expiry and
-[#90][i90] returns the whole budget to the client. So "the counterparty's rail was
-down" would resolve to "the provider worked for free" — and since §4 deliberately
-leaves the rail open, a rail being down is an ordinary operational event, not an
-exception. Worse, the client is the party who benefits, which turns a compliance
-control into a griefing lever.
+Trace what a permanently reverting `complete` does to a job that has already been
+delivered, against `main` as it stands:
+
+| Path | Result |
+|---|---|
+| `KeeperEvaluator.finalize` | calls `complete` — reverts |
+| `KeeperEvaluator.finalizeDecided` | calls `complete` — reverts |
+| `SquareJob.claimRefund` | **refused.** [#90][i90] closed this: a `Submitted` job whose evaluator reports a non-zero `settlementHorizon()` reverts with `SettledByEvaluator()`, and `KeeperEvaluator`'s horizon is never zero |
+| dispute → arbiters vote *Reject* → `applyRejection` | the only exit. `SquareJob.reject` refunds the client and the provider is paid nothing |
+
+So the escrow is not drained the moment the module reverts — #90 fixed that, and
+this document said otherwise before that landed. What is left is worse in a
+quieter way: **the funds are stuck until arbiters vote to reject delivered work**,
+and the single exit that exists ends with the provider unpaid. The griefing lever
+is narrower than it was, not gone; it now needs an arbitration to agree.
+
+And since §4 deliberately leaves the transport rail open, a rail being down is an
+ordinary operational event rather than an exception. A compliance control whose
+routine failure mode is a locked escrow and an unpaid provider is not a control,
+it is a hazard.
 
 A contract cannot make a VASP transmit a payload. What it can do is record,
 unforgeably and in a block, that one was or was not attested. So:
