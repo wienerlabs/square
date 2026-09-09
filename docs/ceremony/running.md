@@ -102,13 +102,22 @@ node scripts/ceremony.mjs verify-chain
 
 It checks the phase-1 file by hash, the compiled circuit against the hash the
 ceremony started from, the final key against circuit and ptau, the contribution
-count against the transcript, and the beacon two ways: the value drand publishes
-for that round, fetched live rather than read from the transcript, and the
-round's BLS signature against quicknet's group public key. The second is what
-separates "matches what drand told me" from "is what drand produced" — an
-auditor whose DNS or TLS path is compromised gets the right answer anyway. It
-exits non-zero if anything fails, and it reports every failure rather than
-stopping at the first.
+count against the transcript, and the beacon three ways: the value drand
+publishes for that round, fetched live rather than read from the transcript; the
+round's BLS signature against **the group public key pinned in `ceremony.mjs`**;
+and that the round lands after the last contribution. It exits non-zero if
+anything fails, and it reports every failure rather than stopping at the first.
+
+The pinned key is what separates "matches what drand told me" from "is what
+drand produced", so an auditor whose DNS or TLS path to `api.drand.sh` is
+compromised still gets the right answer. Until square#121 the check used the key
+that same host returned from `/info`, which established only that the host was
+self-consistent: a party who could answer for it could serve its own group key
+and a signature valid under that key, and the check passed. The pin is
+self-checking — `assertQuicknet` recomputes drand's chain hash from the
+parameters served and compares it to the announced
+`52db9ba7…e971`, which binds the public key, the genesis time, the period and
+the group seed to one value nobody serving the response controls.
 
 [verifying.md](./verifying.md) walks the same ground with individual `snarkjs`
 commands, for anyone who would rather not run our script to check our ceremony.

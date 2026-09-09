@@ -44,21 +44,90 @@ const R1CS = path.join(BUILD, 'payment.r1cs');
 // quicknet is `bls-unchained-g1-rfc9380`: signatures on G1, group key on G2,
 // and the signed message is sha256 of the round number alone — unchained, so a
 // round does not depend on its predecessor.
-const DRAND = Object.freeze({
+export const DRAND = Object.freeze({
   chainHash: '52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971',
+  // The group public key, pinned here rather than taken from /info. Verifying a
+  // signature against a key the same host supplied proves only that the host is
+  // self-consistent; a party who can answer for api.drand.sh could serve its own
+  // key and a signature valid under it, and the check would pass. quicknet is
+  // bls-unchained-g1-rfc9380: signatures in G1, so the group key is in G2, 96
+  // bytes compressed.
+  publicKey:
+    '83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c'
+    + '8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb'
+    + '5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae8991ef5ece45a',
+  genesisSeed: 'f477d5c89f21a17c863a7f937c6a6d15859414d2be09cd448d4279af331c5d3e',
+  beaconId: 'quicknet',
   genesis: 1692803367,
   period: 3,
   api: 'https://api.drand.sh/v2/beacons/quicknet',
   dst: 'BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_',
 });
 
+// drand's chain hash, recomputed from the parameters a chain reports.
+//
+// This is what makes the pin above self-checking. The hash is a digest over the
+// group parameters, so reproducing it from the fields /info returned binds the
+// public key, the genesis time, the period and the group seed to one 32-byte
+// value that is announced in docs/ceremony/beacon.md. A host cannot substitute a
+// key without also breaking the hash, and comparing the *presented* chain_hash
+// string — which is what this script did before — checks nothing at all, since
+// the same host supplies both sides of that comparison.
+//
+// The construction is drand's own (chain/info.go, Hash): big-endian uint32
+// period, big-endian uint64 genesis, the marshalled public key, the group hash,
+// and the beacon id for every scheme except the original chained one.
+export async function chainHashOf(info) {
+  const { sha256 } = await import('@noble/hashes/sha2');
+  const header = new Uint8Array(12);
+  const view = new DataView(header.buffer);
+  view.setUint32(0, Number(info.period));
+  view.setBigUint64(4, BigInt(info.genesis_time));
+  const hex = (value) => Uint8Array.from(Buffer.from(String(value), 'hex'));
+  return Buffer.from(sha256(Buffer.concat([
+    Buffer.from(header),
+    Buffer.from(hex(info.public_key)),
+    Buffer.from(hex(info.genesis_seed)),
+    Buffer.from(String(info.beacon_id), 'utf8'),
+  ]))).toString('hex');
+}
+
+// Everything that has to be true about the chain before its randomness is worth
+// anything, checked in one place so beacon() and verify-chain cannot drift.
+export async function assertQuicknet(info) {
+  const recomputed = await chainHashOf(info);
+  if (recomputed !== DRAND.chainHash) {
+    throw new Error(
+      `the chain parameters served do not hash to the announced chain.\n`
+      + `  recomputed ${recomputed}\n`
+      + `  announced  ${DRAND.chainHash}\n`
+      + 'Something about this chain differs from the one docs/ceremony/beacon.md names.',
+    );
+  }
+  if (info.public_key !== DRAND.publicKey) {
+    throw new Error(
+      'the served group public key is not the pinned one, though the chain hash\n'
+      + 'recomputed. That should be impossible; treat it as a bug here, not as a\n'
+      + 'reason to proceed.',
+    );
+  }
+  if (info.genesis_time !== DRAND.genesis || info.period !== DRAND.period) {
+    throw new Error(
+      `drand reports genesis ${info.genesis_time} period ${info.period}, `
+      + `expected ${DRAND.genesis} and ${DRAND.period}. `
+      + 'The announced round number would not mean what it says.',
+    );
+  }
+}
+
 // Verify a round's BLS signature against the chain's group public key.
 //
-// Comparing the signature to what api.drand.sh returned proves only that the
-// key matches what that host said. This proves the value is one drand's
-// threshold actually produced, so an auditor whose DNS or TLS path is
-// compromised still gets the right answer.
-async function verifyDrandSignature(round, signature, groupPublicKey) {
+// The key is DRAND.publicKey, pinned above, never the one /info returned. That
+// is the difference between "the host is self-consistent" and "drand's threshold
+// produced this value": an auditor whose DNS or TLS path to api.drand.sh is
+// compromised gets the right answer, because the key the check runs against
+// came from this file and is bound to the announced chain hash.
+export async function verifyDrandSignature(round, signature, groupPublicKey = DRAND.publicKey) {
   const { bls12_381: bls } = await import('@noble/curves/bls12-381');
   const { sha256 } = await import('@noble/hashes/sha2');
   const roundBytes = new Uint8Array(8);
@@ -95,6 +164,37 @@ function sh(cmd, args, options = {}) {
 
 const sha256 = (file) =>
   crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+
+// What compiled the circuit, and what it compiled.
+//
+// The transcript used to identify the circuit by `r1cs_sha256` alone. That is a
+// digest of the compiler's *output*, so an auditor handed it can confirm two
+// r1cs files are identical and nothing else: to reproduce it they have to
+// compile the source, and the transcript did not say which source or which
+// compiler. circom is pinned for CI in .github/actions/circom, but a pin in
+// this repository is not a fact in the published record, and
+// docs/ceremony/verifying.md told auditors circom was optional.
+//
+// circomlib's resolved version comes from the lockfile rather than the range in
+// package.json: `^2.0.5` is not a compiler input, the file it resolves to is.
+function circuitProvenance() {
+  const version = execFileSync('circom', ['--version'], { encoding: 'utf8' }).trim();
+
+  const sources = {};
+  for (const rel of ['payment.circom', 'lib/timestamp.circom']) {
+    sources[rel] = sha256(path.join(ROOT, rel));
+  }
+
+  let circomlib = null;
+  try {
+    const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
+    circomlib = lock.packages?.['node_modules/circomlib']?.version ?? null;
+  } catch {
+    circomlib = null;
+  }
+
+  return { compiler: version, circomlib, sources };
+}
 
 function readTranscript() {
   if (!fs.existsSync(TRANSCRIPT)) throw new Error('no ceremony in progress; run `init` first');
@@ -153,7 +253,12 @@ async function init() {
   sh('snarkjs', ['groth16', 'setup', R1CS, ptau.file, keyPath(0)]);
 
   writeTranscript({
-    circuit: { file: 'payment.circom', r1cs_sha256: sha256(R1CS) },
+    circuit: {
+      file: 'payment.circom',
+      r1cs_sha256: sha256(R1CS),
+      // So a third party can reproduce the r1cs rather than only compare it.
+      ...circuitProvenance(),
+    },
     phase1: {
       ceremony: ADOPTED.ceremony,
       contribution: ADOPTED.contribution,
@@ -251,23 +356,37 @@ async function beacon(roundArg) {
   // number is only meaningful relative to a chain's genesis and period, so all
   // three are checked, not just the hash.
   const info = await fetchChainInfo();
-  const chainHash = info.chain_hash ?? info.hash;
-  if (chainHash !== DRAND.chainHash) {
+  await assertQuicknet(info);
+
+  // The round has to land after the last contribution closed. A beacon that
+  // already existed while contributions were open constrains nobody: whoever
+  // contributed last could have ground their entropy against a value they
+  // already knew. The transcript records when each contribution was made, so
+  // this needs no new data — it was simply never checked, and
+  // docs/ceremony/verifying.md calls it "the one people forget".
+  const landsAt = new Date(timeOfRound(round) * 1000).toISOString();
+  const previous = transcript.contributions[transcript.contributions.length - 1];
+  if (Date.parse(landsAt) <= Date.parse(previous.at)) {
     throw new Error(
-      `drand chain hash is ${chainHash}, expected ${DRAND.chainHash}.\n`
-      + 'That is a different chain than docs/ceremony/beacon.md announces.',
-    );
-  }
-  if (info.genesis_time !== DRAND.genesis || info.period !== DRAND.period) {
-    throw new Error(
-      `drand reports genesis ${info.genesis_time} period ${info.period}, `
-      + `expected ${DRAND.genesis} and ${DRAND.period}. `
-      + 'The announced round number would not mean what it says.',
+      `round ${round} lands at ${landsAt}, which is not after the last\n`
+      + `contribution at ${previous.at}. A beacon that existed while\n`
+      + 'contributions were open constrains nobody. Announce a later round.',
     );
   }
 
   const beaconValue = await fetchRound(round);
-  const landsAt = new Date(timeOfRound(round) * 1000).toISOString();
+
+  // Before the irreversible step, not after it. verify-chain checks this too,
+  // but by then the value is already in the key and the only remedy is running
+  // the ceremony again.
+  if (!await verifyDrandSignature(round, beaconValue.signature)) {
+    throw new Error(
+      `round ${round}'s signature does not verify against quicknet's pinned\n`
+      + 'group public key. Refusing to write it into the final key.',
+    );
+  }
+  process.stdout.write(`round ${round} verifies against the pinned quicknet group key\n`);
+
   const index = transcript.contributions.length;
 
   // The randomness is the round's BLS signature: unpredictable before the round
@@ -335,7 +454,44 @@ async function verifyChain() {
   if (fs.existsSync(R1CS) && sha256(R1CS) === transcript.circuit.r1cs_sha256) {
     ok('the compiled circuit matches the one the ceremony started from');
   } else {
-    bad('the compiled circuit does NOT match the one the ceremony started from');
+    bad(
+      'the compiled circuit does NOT match the one the ceremony started from '
+      + '(a different source, or a different compiler — see below)',
+    );
+  }
+
+  // Why the r1cs might differ, when it does. A digest of the compiler's output
+  // says two files differ; it does not say which input moved. An auditor who
+  // installed a different circom sees a red line about the circuit and has no
+  // way to tell that from a substituted source.
+  if (transcript.circuit.compiler) {
+    const here = circuitProvenance();
+    if (here.compiler === transcript.circuit.compiler) {
+      ok(`compiled with ${here.compiler}, as the ceremony was`);
+    } else {
+      bad(
+        `this machine has ${here.compiler}, the ceremony used `
+        + `${transcript.circuit.compiler}; compile with that one before reading `
+        + 'anything above as a mismatch in the source',
+      );
+    }
+    if (here.circomlib === transcript.circuit.circomlib) {
+      ok(`circomlib ${here.circomlib}, as the ceremony had`);
+    } else {
+      bad(`circomlib is ${here.circomlib}, the ceremony had ${transcript.circuit.circomlib}`);
+    }
+    for (const [file, digest] of Object.entries(transcript.circuit.sources ?? {})) {
+      if (here.sources[file] === digest) {
+        ok(`${file} is byte-identical to the ceremony's`);
+      } else {
+        bad(`${file} differs from the ceremony's (${here.sources[file] ?? 'missing'})`);
+      }
+    }
+  } else {
+    bad(
+      'the transcript records no compiler or source hashes, so the circuit can '
+      + 'only be compared, not reproduced — it predates square#121',
+    );
   }
 
   process.stdout.write('\nchain\n');
@@ -393,22 +549,37 @@ async function verifyChain() {
       if (live) {
         try {
           const info = await fetchChainInfo();
-          const chainHash = info.chain_hash ?? info.hash;
-          if (chainHash !== DRAND.chainHash) {
-            bad(`drand served chain ${chainHash}, not the announced ${DRAND.chainHash}`);
-          } else if (await verifyDrandSignature(announced.round, live.signature, info.public_key)) {
-            ok(`the round's BLS signature verifies against quicknet's group key`);
+          await assertQuicknet(info);
+          if (await verifyDrandSignature(announced.round, live.signature)) {
+            ok("the round's BLS signature verifies against quicknet's pinned group key");
           } else {
-            bad("the round's BLS signature does not verify against quicknet's group key");
+            bad("the round's BLS signature does not verify against quicknet's pinned group key");
           }
         } catch (error) {
           bad(`could not check the round's signature: ${error.message}`);
         }
       }
+
+      // Arithmetic, not evidence: lands_at is derived from the round by
+      // beacon(), and roundAt is timeOfRound's inverse, so this holds for every
+      // transcript this script writes. It catches a hand-edited file and
+      // nothing else. The old wording, "round N corresponds to <time>", read
+      // like a timing check that had passed.
       if (roundAt(Date.parse(announced.lands_at) / 1000) === announced.round) {
-        ok(`round ${announced.round} corresponds to ${announced.lands_at}`);
+        ok('the recorded round and time are consistent (arithmetic, not a timing check)');
       } else {
-        bad('the recorded round and time disagree');
+        bad('the recorded round and time disagree, so the transcript was edited by hand');
+      }
+
+      // The timing check that does mean something.
+      const lastOf = transcript.contributions[transcript.contributions.length - 1];
+      if (lastOf && Date.parse(announced.lands_at) > Date.parse(lastOf.at)) {
+        ok(`the beacon round lands after the last contribution (${lastOf.at})`);
+      } else if (lastOf) {
+        bad(
+          `the beacon round lands at ${announced.lands_at}, not after the last `
+          + `contribution at ${lastOf.at}; it constrains nobody`,
+        );
       }
     }
 

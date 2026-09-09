@@ -15,8 +15,37 @@ git clone https://github.com/wienerlabs/square.git
 cd square/circuits && npm install
 ```
 
-`circom` is only needed if you want to rebuild the circuit and confirm the
-constraint system independently, which the last section covers.
+**You also need `circom`, and it has to be the one the ceremony used.** The
+load-bearing check in step 2 takes `payment.r1cs` as an argument, and the r1cs
+is not published — so you have to compile it, and a different compiler can
+produce a different constraint system from the same source. The transcript
+records which one:
+
+```console
+$ jq .circuit build/ceremony/transcript.json
+{
+  "file": "payment.circom",
+  "r1cs_sha256": "…",
+  "compiler": "circom compiler 2.2.3",
+  "circomlib": "2.0.5",
+  "sources": {
+    "payment.circom": "…",
+    "lib/timestamp.circom": "…"
+  }
+}
+```
+
+Install that version from [the iden3 releases][circom-releases], compile, and
+confirm your `payment.r1cs` hashes to `r1cs_sha256` before going further. If it
+does not, nothing below means anything — you would be verifying a different
+circuit's key.
+
+[circom-releases]: https://github.com/iden3/circom/releases
+
+```bash
+circom payment.circom --r1cs --wasm --sym -l node_modules -o build
+sha256sum build/payment.r1cs      # must equal transcript.circuit.r1cs_sha256
+```
 
 ---
 

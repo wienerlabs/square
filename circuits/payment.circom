@@ -8,6 +8,17 @@ include "../lib/timestamp.circom";
 // PaymentCompliance proves that an agent payment satisfies all six rules of its
 // operator's policy, and binds the proof to a specific transfer.
 //
+// FIVE of the six bind. Rule 5 does not, and it is not a defect that can be
+// fixed here. `payment_category` is a private input, it is not one of the eight
+// public signals, and it is not one of the eight inputs to policy_data_hash —
+// so unlike every other rule's key it is visible to nothing outside this
+// circuit. An honest prover fails rule 5 on a disallowed category; a prover
+// building a witness by hand is not constrained by it, because no party can
+// contradict a value only they ever saw. Exposing it as a ninth signal was
+// considered under square#121 and declined: there is nothing in the system to
+// compare it against, and the ceremony in square#16 freezes this layout either
+// way. circuits/README.md carries the full reasoning.
+//
 // Ported from aperture's Solana circuit under square#14. Everything below had
 // to land in the same regenerated zkey, because the ceremony that follows
 // freezes the circuit and a later change would invalidate the proving key:
