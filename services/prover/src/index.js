@@ -37,9 +37,12 @@ const health = createHealth({
   service: 'square-prover',
   version: '0.1.0',
   checks: {
-    artifacts: () => {
-      const present = existsSync(path.join(artifactsDir, 'payment.wasm')) && existsSync(path.join(artifactsDir, 'payment.zkey'));
-      return { ok: present, detail: present ? 'payment.wasm and payment.zkey present' : `no circuit artifacts under ${artifactsDir}` };
+    artifacts: {
+      check: () => {
+        const present = existsSync(path.join(artifactsDir, 'payment.wasm')) && existsSync(path.join(artifactsDir, 'payment.zkey'));
+        return { ok: present, detail: present ? 'payment.wasm and payment.zkey present' : `no circuit artifacts under ${artifactsDir}` };
+      },
+      critical: true,
     },
   },
 });

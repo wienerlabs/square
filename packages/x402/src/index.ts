@@ -31,13 +31,7 @@ export type {
   SquareFacilitator,
   SquareFacilitatorOptions,
 } from "./facilitator.js";
-export {
-  REPLAY_STATUS_CODE,
-  X402_PAYMENTS_DDL,
-  memoryReplayStore,
-  postgresReplayStore,
-  replayKeyString,
-} from "./replay-store.js";
+export { REPLAY_STATUS_CODE, memoryReplayStore, postgresReplayStore, replayKeyString } from "./replay-store.js";
 export type {
   MemoryReplayStore,
   ReplayEntry,
@@ -45,9 +39,16 @@ export type {
   ReplayRecord,
   ReplayStatus,
   ReplayStore,
-  SqlDatabase,
+  UnsettledPayment,
 } from "./replay-store.js";
-export { createGatewayApp, createPaidRoutes, parseRoutePattern } from "./server.js";
+export { RECONCILE_REASON, receiptStatusFromClient, reconcileSettlements } from "./reconcile.js";
+export type {
+  ReconcileOptions,
+  ReconcileReport,
+  SettlementReceiptLookup,
+  SettlementReceiptStatus,
+} from "./reconcile.js";
+export { BEFORE_HANDLER_UNSUPPORTED, createGatewayApp, createPaidRoutes, parseRoutePattern } from "./server.js";
 export type {
   GatewayAppOptions,
   GatewayHandler,

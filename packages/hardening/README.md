@@ -10,6 +10,9 @@ Chain-agnostic security layer for Square services. Five independent modules, one
 | `rpcFailover` | Single-provider RPC outages, retry storms against a dead endpoint, invisible failovers |
 | `signedMessages` | Signatures reused for another actor, replayed messages, stale or premature messages, cross-chain replay |
 
+Tables live in `@squaresdk/data`, not here: `idempotency_keys` and `rate_limits` are created by `square-data migrate up`
+and swept by `square-data sweep`. This package ships no DDL.
+
 Everything here was written from a requirements brief and public specifications (RFC 1918, RFC 4193, RFC 6890,
 RFC 8785, EIP-712, the IETF RateLimit header draft). Nothing was copied from another repository, and no code in
 this package derives from any other codebase. License: Apache-2.0.
@@ -95,18 +98,31 @@ the cap is crossed. `timeoutMs` (default 10 s) covers connect, headers and body.
 ## Idempotency
 
 ```ts
-import { hashRequest, idempotencyMiddleware, postgresIdempotencyStore, withIdempotency } from "@squaresdk/hardening";
+import { hashRequest, idempotencyMiddleware, idempotencyScope, postgresIdempotencyStore, withIdempotency } from "@squaresdk/hardening";
 
 const store = postgresIdempotencyStore(pool);
 
 app.use("/orders", idempotencyMiddleware(store, { scope: "orders", required: true, actorOf: (c) => c.get("actor") }));
 
-const execute = withIdempotency(store, "payouts", async ({ payout }) => runPayout(payout), { ttlMs: 86_400_000 });
-const outcome = await execute({ key, requestHash: hashRequest({ method, path, body, actor }), payout });
+const execute = withIdempotency(store, async ({ payout }) => runPayout(payout), { ttlMs: 86_400_000 });
+const outcome = await execute({
+  scope: idempotencyScope("payouts", actor),
+  key,
+  requestHash: hashRequest({ method, path, body, actor }),
+  payout,
+});
 ```
 
 `hashRequest` hashes a canonical serialisation of method, path, body and actor (sorted keys, no whitespace), so
 `{a:1,b:2}` and `{b:2,a:1}` are the same request and the same key sent by a different actor is not.
+
+**The key space belongs to one caller, never to all of them.** The store is keyed by `(scope, key)`, and the scope the
+middleware writes is `idempotencyScope(options.scope, actor)`, so two tenants sending the same `Idempotency-Key` never
+see each other's response and never make each other's key conflict. `actorOf` is required for that reason: it has no
+default, because a default would have to be "everyone is the same caller". A keyed request whose actor `actorOf` cannot
+name is refused with `{ status: 400, body: { error: "idempotency_actor_unknown" } }`; a service with genuinely
+anonymous routes has to choose the identity it wants to share, rather than inherit one. `withIdempotency` takes the
+scope per call, in `input.scope`, so the same executor serves every caller.
 
 `withIdempotency` returns a function that:
 
@@ -120,11 +136,15 @@ and then replay. Across processes the store decides: `putIfAbsent` is atomic, th
 caller receives the first writer's response. A handler that is not safe to run twice concurrently across processes
 should additionally take a per-key lock; the store interface deliberately does not hide that.
 
-The Postgres store expects the table in `IDEMPOTENCY_TABLE_SQL`
-(`idempotency_keys(scope, key, request_hash bytea, status, response jsonb, created_at, expires_at)`). The claim is a
-single `insert ... on conflict do update ... where expires_at <= now()`, so an expired row is reclaimed in place and a
-live row is never overwritten. `db` is duck-typed: anything with `query(text, params) => Promise<{ rows }>` works,
-which covers `pg` pools and clients directly.
+The Postgres store expects `idempotency_keys(scope, key, request_hash bytea, status, response jsonb, created_at,
+expires_at)`. That table is created by `@squaresdk/data` migration `0002_hardening`, and the migration runner is the
+only thing that creates it: run `square-data migrate up` with `DATABASE_URL` set before the service starts. This
+package ships no `create table` of its own on purpose, because a second definition of the same table is how a schema
+drifts. The claim is a single `insert ... on conflict do update ... where expires_at <= now()`, so an expired row is
+reclaimed in place and a live row is never overwritten. `db` is duck-typed: anything with
+`query(text, params) => Promise<{ rows }>` works, which covers `pg` pools and clients directly.
+
+Expired rows are removed by `square-data sweep`, not by this package.
 
 The Hono middleware reads `Idempotency-Key` (configurable), applies to `POST`, `PUT`, `PATCH` and `DELETE`, hashes the
 parsed JSON body (or the raw text), marks replays with `Idempotent-Replayed: true`, and returns 400 when `required` is
@@ -150,8 +170,15 @@ the price of a single upsert per request and no coordination.
 Durability lives in the store, not in the limiter. `memoryRateLimitStore` forgets on restart and is per process.
 `postgresRateLimitStore` uses `rate_limits(bucket, window_start, count)` with
 `insert ... on conflict (bucket, window_start) do update set count = rate_limits.count + 1 returning count`, so every
-instance sees the same counters and a restart changes nothing. Call `prune(olderThanMs)` from a periodic job to drop
-finished windows.
+instance sees the same counters and a restart changes nothing. The table comes from `@squaresdk/data` migration
+`0002_hardening`, created by `square-data migrate up` and by nothing else; finished windows are removed by
+`square-data sweep`.
+
+Both stores expose `prune(olderThanMs)`, which drops every window that started before that instant. The memory store
+is also bounded: it holds at most `maxEntries` buckets (default `MEMORY_RATE_LIMIT_MAX_ENTRIES`, 10 000) and evicts the
+least recently used one beyond that, so a caller who can choose the bucket key cannot grow the process without limit.
+Eviction resets the evicted bucket's counter, which is the honest cost of a bounded map: when the key space is
+attacker-chosen, use `postgresRateLimitStore`, where the counters are rows and the cap is disk.
 
 The middleware sets `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` (seconds) on every response and
 answers 429 with `Retry-After` when the limit is exceeded. `keyOf` is required on purpose: keying on
@@ -187,7 +214,20 @@ snapshot per endpoint: healthy flag, consecutive failures, cooldown deadline, la
 `transportFactory` swaps `http(url)` for anything else, which is how the tests use `custom()` transports.
 
 `withRpcRetry(fn, options)` retries any async call with equal-jitter exponential backoff (`baseDelayMs`, `maxDelayMs`)
-for `attempts` tries; `isRetryable` decides which errors are worth another attempt and `signal` stops the loop.
+for `attempts` tries.
+
+`signal` stops the loop at three points: before the first call, where an already-aborted signal means `fn` never runs
+and the signal's abort reason is thrown; after a failed attempt, where an aborted signal rethrows that attempt's error
+instead of retrying; and during the backoff sleep, which races the signal, so an abort ends the wait immediately rather
+than after up to `maxDelayMs`. Once the loop is entered, the error the caller sees is always the one the last attempt
+produced.
+
+`isRetryable` decides which errors are worth another attempt. The default retries transient failures and refuses two
+classes: an `AbortError`, and a permanent JSON-RPC error, meaning code `-32600`, `-32601`, `-32602` or `-32603`, or a
+message containing `execution reverted`. The code is read from the error and from its `cause` chain, so a wrapped viem
+error is classified the same way. Everything else, `-32000` server errors and socket failures included, is retried:
+a deterministic client error costs one call, not `attempts` calls with backoff between them. `isPermanentRpcError` is
+exported so the same rule can be reused or extended in a custom predicate.
 
 ## Signed messages
 
@@ -207,10 +247,18 @@ The EIP-712 type is `SquareAction { actor, action, resource, nonce, issuedAt, ex
 talking to. It then checks `issuedAt <= now < expiresAt` (unix seconds) and consumes the nonce from the `NonceStore`,
 which happens last so a rejected message never burns a nonce. It never throws for a bad signature: every failure is a
 `{ ok: false, reason }` with one of `invalid_signature`, `actor_mismatch`, `unexpected_actor`, `not_yet_valid`,
-`expired`, `nonce_reused`, `chain_mismatch`, `malformed_message`.
+`expired`, `nonce_reused`, `chain_mismatch`, `missing_expected_chain_id`, `malformed_message`.
+
+`expectedChainId` is required. A `SquareAction` carries its own `chainId` and the domain is built from it, so a
+signature made for one chain recovers correctly on any verifier that does not say which chain it is: the check exists
+only if the caller asks for it, so the caller is not allowed to leave it out. A call that reaches `verifyAction`
+without one is refused with `missing_expected_chain_id` before the signature is recovered and without burning a nonce.
 
 `memoryNonceStore` is per process; back the interface with your database for anything that runs on more than one
-instance. `canonicalJson(value)` is the RFC 8785-style serialiser used by `hashRequest`, exported for reuse: sorted
+instance. It holds one entry per actor and one nonce per entry, expires both lazily, and prunes the whole map every
+`pruneEvery` calls (default `MEMORY_NONCE_PRUNE_EVERY`, 64), dropping actors whose nonces have all expired so an actor
+that never returns is not carried for the life of the process. `prune()` runs that pass on demand and returns the
+number of actors it dropped; `size()` reports how many actors are held. `canonicalJson(value)` is the RFC 8785-style serialiser used by `hashRequest`, exported for reuse: sorted
 keys, no whitespace, numbers exactly as JSON prints them, `toJSON` honoured, and it refuses `NaN`, `Infinity`, bigint
 and top-level `undefined` rather than producing a form that could collide.
 

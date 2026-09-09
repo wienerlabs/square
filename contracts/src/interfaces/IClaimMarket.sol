@@ -32,9 +32,10 @@ interface IClaimMarket {
     error BuyerIsSeller();
     error BuyerIsClient();
     error PayoutNotRouted();
+    error PriceMismatch(uint64 expected, uint64 listed);
 
     function list(uint256 jobId, uint64 price) external;
-    function buy(uint256 jobId) external;
+    function buy(uint256 jobId, uint64 expectedPrice) external;
     function cancel(uint256 jobId) external;
 
     function payeeOf(uint256 jobId) external view returns (address);

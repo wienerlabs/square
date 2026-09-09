@@ -1,7 +1,16 @@
 import { serve } from "@hono/node-server";
 import { createPublicClient, http } from "viem";
 import { migrate, MIGRATIONS_DIR, pgDatabase, pgliteDatabase } from "@squaresdk/data";
-import { createHealth, createLogger, createMetrics } from "@squaresdk/observability";
+import {
+  createAlerting,
+  createHealth,
+  createLogger,
+  createMetrics,
+  hookWriteFailures,
+  indexerLagging,
+  logNotifier,
+  webhookNotifier,
+} from "@squaresdk/observability";
 import { createApi } from "./api.js";
 import { configFromEnv } from "./config.js";
 import { Indexer } from "./sync.js";
@@ -25,6 +34,7 @@ async function main(): Promise<void> {
     batchBlocks: config.batchBlocks,
     logger,
     metrics,
+    onDeploymentChange: config.onDeploymentChange,
   });
   await indexer.start();
 
@@ -34,12 +44,37 @@ async function main(): Promise<void> {
     checks: {
       database: { check: async () => ({ ok: (await db.query("select 1")).rowCount === 1 }), critical: true },
       rpc: { check: async () => ({ ok: (await publicClient.getChainId()) === config.chainId }), critical: true },
-      lag: () => {
-        const lag = indexer.chainHead - (indexer.lastIndexedBlock ?? 0n);
-        return { ok: lag < 100n, detail: `${lag} blocks behind` };
+      lag: {
+        check: () => {
+          const lag = indexer.chainHead - (indexer.lastIndexedBlock ?? 0n);
+          return { ok: lag <= config.maxLagBlocks, detail: `${lag} blocks behind, limit ${config.maxLagBlocks}` };
+        },
+        critical: true,
+      },
+      quarantine: () => {
+        const count = indexer.quarantinedEvents.length;
+        return { ok: count === 0, detail: count === 0 ? "no event set aside" : `${count} events set aside, see /quarantine` };
       },
     },
   });
+
+  const alerting = createAlerting({
+    service: "square-indexer",
+    rules: [indexerLagging({ maxLagBlocks: Number(config.maxLagBlocks) }), hookWriteFailures()],
+    notify: config.alertWebhookUrl ? webhookNotifier(config.alertWebhookUrl) : logNotifier(logger),
+  });
+  const evaluateAlerts = async (): Promise<void> => {
+    const result = await alerting.evaluate({ ...metrics.snapshot() });
+    for (const failure of result.errors) {
+      metrics.recordAlertDispatchFailure(failure.rule, failure.stage);
+      logger.error("indexer.alert_dispatch_failed", { reason: `${failure.rule} failed at the ${failure.stage} stage: ${failure.error}` });
+    }
+  };
+  const alertTimer = setInterval(() => {
+    void evaluateAlerts().catch((error: unknown) => {
+      logger.error("indexer.alert_cycle_failed", { error: error instanceof Error ? error.message : String(error) });
+    });
+  }, config.alertIntervalMs);
 
   const app = createApi({ db, chainId: config.chainId, indexer, health, metrics });
   const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
@@ -49,6 +84,7 @@ async function main(): Promise<void> {
   const controller = new AbortController();
   const stop = (): void => {
     controller.abort();
+    clearInterval(alertTimer);
     server.close();
     void db.close();
   };

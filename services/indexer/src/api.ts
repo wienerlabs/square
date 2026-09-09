@@ -38,8 +38,13 @@ export function createApi(options: ApiOptions): Hono {
       lastIndexedBlock: indexer.lastIndexedBlock === null ? null : indexer.lastIndexedBlock.toString(),
       chainHead: indexer.chainHead.toString(),
       jobs: indexer.state.jobs.size,
+      windows: indexer.state.windows.length,
+      missingWindowEvents: indexer.missingWindowEvents,
+      quarantined: indexer.quarantinedEvents.length,
     }),
   );
+
+  app.get("/quarantine", (c) => c.json(serialize(indexer.quarantinedEvents)));
 
   app.get("/jobs/open", async (c) => c.json(serialize(await jobs.listOpen(db, chainId))));
   app.get("/jobs/in-window", async (c) => c.json(serialize(await jobs.listInChallengeWindow(db, chainId, now()))));

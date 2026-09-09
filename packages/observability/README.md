@@ -138,17 +138,38 @@ returns a private `prom-client` registry plus typed helpers. Every metric carrie
 | `square_indexer_lag_blocks` | gauge | | derived | Chain head minus indexer head. |
 | `square_indexer_head_block` | gauge | | `setIndexerHead(block)` | Last block the indexer applied. |
 | `square_chain_head_block` | gauge | | `setChainHead(block)` | Latest block from the RPC in use. |
-| `square_rpc_failover_total` | counter | `from`, `to` | `recordRpcFailover(from, to)` | RPC endpoint switches. |
+| `square_rpc_failover_total` | counter | `from`, `to` | `recordRpcFailover(from, to)` | RPC endpoint switches. Both labels are reduced to the endpoint host. |
 | `square_disputes_open_total` | gauge | | `setDisputesOpen(count)` | Disputes raised and not yet decided or expired. |
 | `square_dispute_resolution_seconds` | histogram | | `observeDisputeResolution(seconds)` | Dispute opened to decision or expiry. |
 | `square_keeper_actions_total` | counter | `action`, `result` | `recordKeeperAction(action, result)` | Keeper transactions; `result` is `success`, `failure` or `skipped`. |
 | `square_keeper_fee_earned_usdc` | counter | | `addKeeperFeeUsdc(amount)` | Evaluator fees collected, in whole USDC. |
+| `square_keeper_last_tick_timestamp_seconds` | gauge | | `recordKeeperTick(at?)` | Unix time of the last keeper tick that completed. This is the dead man's switch `keeperStalled` reads. |
+| `square_finalize_gas_used` | gauge | `action` | `recordFinalizeGas(action, assumed, used)` | Gas the last settlement receipt reported. |
+| `square_finalize_gas_gap` | gauge | `action` | `recordFinalizeGas(action, assumed, used)` | Configured gas assumption minus the receipt. Negative means the assumption is too low. |
+| `square_hook_write_failures_total` | counter | `kind` | `recordHookWriteFailure(kind)` | `ReputationWriteFailed` and `ValidationWriteFailed` the indexer decoded. `kind` is `reputation` or `validation`. |
+| `square_alert_dispatch_failures_total` | counter | `rule`, `stage` | `recordAlertDispatchFailure(rule, stage)` | Alert evaluations or deliveries that failed. `stage` is `evaluate` or `notify`. |
+| `square_indexer_quarantined_events_total` | counter | `contract`, `event` | `recordQuarantinedEvent(contract, event)` | Chain events the indexer could not journal or reduce and set aside. |
 
 `startProof()` returns a timer with `success()` and `failure(reason)`; both observe the
 duration, and `failure` also counts the failure, so attempts and failures stay consistent.
-Label values are free strings: pass bounded classifications (`"witness"`, `"timeout"`), never
-an error message, or the series count grows without limit. Non-finite values are ignored
-rather than written.
+Non-finite values are ignored rather than written.
+
+Label hygiene is not uniform across the helpers, so read this before adding a call site.
+`label()` only truncates to 128 characters: it does not classify, sanitise or drop anything,
+so any helper that passes a caller string straight through it will store that string as a
+series. Two helpers do not rely on it:
+
+- `recordProofFailure(reason)` and `startProof().failure(reason)` map the message onto the
+  fixed set in `PROOF_FAILURE_REASONS` (`timeout`, `out_of_memory`, `artifacts_missing`,
+  `circuit_mismatch`, `witness_failed`, `missing_field`, `invalid_field`, `unknown`) with
+  `classifyProofFailure(reason)`, so a raw error message can be passed and the label set
+  stays bounded.
+- `recordRpcFailover(from, to)` reduces each endpoint to its host with `endpointLabel(url)`,
+  and anything that does not parse as a URL becomes `UNPARSABLE_ENDPOINT_LABEL`. Endpoint
+  URLs carry API keys in the path or the query string, and a value that reaches a metric
+  cannot be taken back: the series is retained, so the key has to be rotated instead.
+
+Everywhere else, pass a bounded classification, never an error message or a URL.
 
 `snapshot()` returns the current values as a plain object (`finalizePending`,
 `oldestPendingAgeSeconds`, `proofAttempts`, `proofFailures`, `indexerLagBlocks`,
@@ -198,8 +219,14 @@ strings of health checks are meant for operators.
 An alert fires once when its condition has held for at least `forSeconds`, and a single
 `resolved` notification follows when it clears. Ticks in between produce nothing. If the
 notifier rejects, the notification stays queued and is retried on the next tick in order,
-so a webhook outage delays alerts but never duplicates or reorders them. A rule that
-throws is reported in the returned `errors` and does not stop the others.
+so a webhook outage delays alerts without reordering them. A rule that throws is reported in
+the returned `errors` and does not stop the others.
+
+`evaluate` holds a reentrancy lock for the whole call. A second call that arrives while one
+is still running returns `{ notified: [], errors: [], skipped: true }` immediately and sends
+nothing, which is what keeps a queued notification from going out twice when a slow notifier
+lets two ticks overlap. Callers that fire `evaluate` from a timer without awaiting it get
+that overlap by construction, so read `skipped` if you need to know a tick was dropped.
 
 Notifications have the shape
 `{ kind: "firing" | "resolved", rule, severity, at, since, heldForSeconds, service?, detail? }`.
@@ -208,15 +235,25 @@ Notifications have the shape
 
 | Rule | Condition | Snapshot keys | Defaults | Severity |
 |---|---|---|---|---|
-| `keeperStalled({ maxPendingAgeSeconds, forSeconds })` | oldest finalizable job older than `maxPendingAgeSeconds` | `oldestPendingAgeSeconds` | 600 s (2 x 300 s keeper slack), `forSeconds` 60 | `page` |
+| `keeperStalled({ maxPendingAgeSeconds, maxTickAgeSeconds, forSeconds })` | oldest finalizable job older than `maxPendingAgeSeconds`, or no tick completed for `maxTickAgeSeconds` | `oldestPendingAgeSeconds`, `lastKeeperTickAt` | 600 s pending age (2 x 300 s keeper slack), 300 s tick age, `forSeconds` 60 | `page` |
 | `indexerLagging({ maxLagBlocks, forSeconds })` | lag above `maxLagBlocks` | `indexerLagBlocks` | 100 blocks, `forSeconds` 120 | `warn` |
 | `proofFailureRate({ maxFailureRatio, windowSeconds, minAttempts, forSeconds })` | failures / attempts over the sliding window above `maxFailureRatio` | `proofAttempts`, `proofFailures` (cumulative) | 0.2 over 300 s, at least 5 attempts, `forSeconds` 0 | `warn` |
 | `disputesPilingUp({ maxOpenDisputes, forSeconds })` | open disputes above `maxOpenDisputes` | `disputesOpen` | 10, `forSeconds` 0 | `warn` |
+| `hookWriteFailures({ maxFailures, forSeconds })` | any ERC-8004 registry write the hook could not land | `hookWriteFailures` | 0, `forSeconds` 0 | `warn` |
 
-`keeperStalled` is the alert this package exists for. Size `maxPendingAgeSeconds` at twice
-the slack you give the keeper after a window closes: a keeper polling every 5 minutes
-should page at 10 minutes. A missing or non-numeric snapshot key never fires; absence of
-telemetry is a separate condition for the scrape side (`absent()` in Prometheus).
+`keeperStalled` is the alert this package exists for, and it has two arms. The pending-age
+arm catches a keeper that is running but not finalizing. The tick-age arm is the dead man's
+switch: `oldestPendingAgeSeconds` is written after several awaits that can throw, so a keeper
+whose RPC, database or gas ran out never updates it and holds its last value, or zero on a
+fresh process. `lastKeeperTickAt` is stamped by `recordKeeperTick()` at the end of a tick
+that completed, and it starts at process start, so a keeper that never completes a tick fires
+after `maxTickAgeSeconds`. A missing or non-numeric snapshot key never fires either arm;
+absence of telemetry is a separate condition for the scrape side (`absent()` in Prometheus).
+
+`hookWriteFailures` fires on the first failure rather than on a rate, because
+`ReputationWriteFailed` and `ValidationWriteFailed` are a class of event that should never be
+emitted: the hook chose not to revert settlement for them, and that choice is only defensible
+while something reads them. The indexer counts them as it decodes them.
 
 `proofFailureRate` keeps its own ring of cumulative counter samples and measures the ratio
 over the last `windowSeconds`, so a prover that starts failing after ten thousand

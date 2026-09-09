@@ -15,8 +15,8 @@ The reference web application for Square, the compliance-gated settlement protoc
 |---|---|
 | `/` | Landing page with live numbers (jobs opened, USDC escrowed, settled, last activity), the three settlement layers, the lifecycle and a live network strip. |
 | `/dashboard` | Metric tiles, the escrow flow and pipeline charts, a jobs table with phase filters, a search by id or address and a button that reads 50 older jobs at a time, and, with a wallet connected, the pull-payment balances with Withdraw buttons plus an inbox of the jobs waiting on that wallet: deliverable to submit, escrow to fund, budget to agree, challenge window open, ready to finalize, refund available. |
-| `/job?id=N` | The full job record, a timeline built from the record's timestamps, listing and dispute details, and every lifecycle action the connected wallet may take: set budget, fund (with automatic USDC approval), submit, finalize, dispute, vote, apply a decision, lapse, list, buy or cancel a claim, reject, claim refund, withdraw, record expiry. |
-| `/new` | Create a job: provider, expiry (at least the settlement horizon away), a JSON spec hashed to `spec:0x...`, and an optional budget set right after creation. |
+| `/job?id=N` | The full job record, a timeline built from the record's timestamps, listing and dispute details, and every lifecycle action the connected wallet may take: set provider, set budget, fund (with automatic USDC approval), submit, finalize, dispute, vote, apply a decision, lapse, list, buy or cancel a claim, reject, claim refund, withdraw, record expiry. |
+| `/new` | Create a job: provider, expiry (at least twice the settlement horizon away, so the job is still submittable after it is funded), a JSON spec hashed to `spec:0x...`, and an optional budget set right after creation. |
 | `/network` | Keeper windows, fees and treasury, the arbiter set and threshold, bond parameters, registry addresses, the read path and links to the design notes. |
 
 Static export means there are no dynamic route segments, so the job page reads its id from the query string. All data is fetched on the client with React Query and refreshed every ten seconds.
@@ -48,14 +48,19 @@ The variables are inlined at build time. Copy `.env.example` to `.env.local` and
 
 ## Running
 
-Install with links so the two workspace packages are copied into `node_modules` and share one copy of viem:
+`@squaresdk/core` and `@squaresdk/did-resolver` are `file:` dependencies and are consumed from their `dist/`, which is not committed, so on a clean checkout they have to be built before the app is installed. From the repository root:
 
 ```console
+$ (cd packages/did-resolver && npm install --install-links && npm run build)
+$ (cd packages/core && npm install --install-links && npm run build)
+$ cd app
 $ npm install --install-links
 $ npm run typecheck
 $ npm test
 $ npm run build
 ```
+
+`--install-links` copies the two workspace packages into `node_modules` instead of symlinking them, so the app and the SDK share one copy of viem. The order is the same one `.github/workflows/packages.yml` uses in its `app (static export)` job; skipping the first two steps leaves `@squaresdk/core` and `@squaresdk/did-resolver` without a build output and every import of them unresolved.
 
 `npm test` runs the unit tests with Vitest: the phase derivation, the formatters, the chart aggregation, the wallet inbox and the live statistics are pure modules under `src/lib` and are tested without a chain.
 
@@ -90,6 +95,7 @@ src/components/     Design system components (PrimaryButton, GhostButton, Chip, 
                     EmptyState, WalletButton) and the page views under views/
 src/lib/wagmi.ts    Chain definitions, wagmi config, the read-only public client
 src/lib/square.ts   useSquare() and every chain read hook
+src/lib/actions.ts  The gates the kernel enforces, shared by the job page, the inbox and the form
 src/lib/indexer.ts  Optional indexer read API client
 src/lib/format.ts   USDC, address, timestamp and duration formatting
 src/lib/tx.tsx      Transaction runner and toast state
@@ -130,4 +136,4 @@ The JSON spec on the new job page is edited in a highlighted editor: keys, strin
 
 ## Font
 
-The interface is set in Open Runde, loaded from `public/fonts` at weights 400, 500, 600 and 700. Open Runde is distributed under the SIL Open Font License 1.1; the licence text is in `public/fonts/LICENSE.txt`.
+The interface is set in Open Runde, loaded from `public/fonts` at weights 400, 500, 600 and 700. Open Runde is Copyright 2023 Laurids Kern (https://github.com/lauridskern/open-runde), a rounded derivative of Inter, and is distributed under the SIL Open Font License 1.1. The licence text carrying both copyright lines is in `public/fonts/LICENSE.txt`, and the root [NOTICE](../NOTICE) lists the font with the rest of what the tree redistributes.

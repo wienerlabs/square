@@ -1,9 +1,10 @@
 "use client";
 
-import type { TransactionResult } from "@squaresdk/core";
+import { TransactionRevertedError, type TransactionResult } from "@squaresdk/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { BaseError, ContractFunctionRevertedError, type Hex } from "viem";
+import { shortHash } from "./format";
 
 export type TxState =
   | { status: "idle" }
@@ -22,6 +23,9 @@ interface TxContextValue {
 const TxContext = createContext<TxContextValue | null>(null);
 
 export function describeError(error: unknown): string {
+  if (error instanceof TransactionRevertedError) {
+    return `Reverted on chain: transaction ${shortHash(error.hash)} was mined and applied nothing.`;
+  }
   if (error instanceof BaseError) {
     if (error.name === "ProviderNotFoundError") return "No injected wallet was found in this browser.";
     const reverted = error.walk((cause) => cause instanceof ContractFunctionRevertedError);

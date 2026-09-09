@@ -27,6 +27,7 @@ contract DeploySettlement is Script {
         uint16 bondBps;
         uint64 minBond;
         uint8 threshold;
+        uint64 minReputationBudget;
         address[] arbiters;
     }
 
@@ -64,6 +65,7 @@ contract DeploySettlement is Script {
         p.bondBps = uint16(vm.envOr("BOND_BPS", uint256(1_000)));
         p.minBond = uint64(vm.envOr("MIN_BOND", uint256(1_000_000)));
         p.threshold = uint8(vm.envOr("ARBITER_THRESHOLD", uint256(2)));
+        p.minReputationBudget = uint64(vm.envOr("MIN_REPUTATION_BUDGET", uint256(1_000_000)));
         p.arbiters = vm.envOr("ARBITERS", ",", new address[](0));
     }
 
@@ -74,8 +76,16 @@ contract DeploySettlement is Script {
             new KeeperEvaluator(address(kernel), p.deployer, p.challengeWindow, p.disputeWindow, p.finalizeGrace);
         Arbitration arbitration = new Arbitration(address(keeper), p.deployer, p.bondBps, p.minBond);
         ClaimMarket market = new ClaimMarket(address(kernel), address(keeper));
-        SquareHook hook =
-            new SquareHook(address(kernel), address(market), p.identity, p.reputation, p.validation, p.deployer);
+        SquareHook hook = new SquareHook(
+            address(kernel),
+            address(market),
+            p.identity,
+            p.reputation,
+            p.validation,
+            p.deployer,
+            address(keeper),
+            p.minReputationBudget
+        );
 
         keeper.setArbitration(address(arbitration));
         kernel.setHookWhitelist(address(hook), true);
@@ -85,6 +95,9 @@ contract DeploySettlement is Script {
             keeper.transferOwnership(p.owner);
             arbitration.transferOwnership(p.owner);
             hook.transferOwnership(p.owner);
+            console2.log("ownership offered to", p.owner);
+            console2.log("it passes only when that account calls acceptOwnership() on each of");
+            console2.log("SquareJob, KeeperEvaluator, Arbitration and SquareHook; until then the deployer owns them");
         }
         d = Deployment(address(kernel), address(keeper), address(arbitration), address(market), address(hook));
     }

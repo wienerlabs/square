@@ -92,6 +92,7 @@ describe.skipIf(!configured)("Arc testnet, real USDC", () => {
     const payingFetch = createPayingFetch({
       account: privateKeyToAccount(payerKey as Hex),
       network: ARC_TESTNET_NETWORK,
+      maxAmountPerPayment: "1.00",
       fetch: (input, init) => {
         const request = new Request(input, init);
         captured = request.headers.get(PAYMENT_SIGNATURE_HEADER) ?? captured;

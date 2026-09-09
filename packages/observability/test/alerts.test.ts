@@ -5,6 +5,7 @@ import {
   indexerLagging,
   proofFailureRate,
   disputesPilingUp,
+  hookWriteFailures,
   webhookNotifier,
   logNotifier,
   type Alert,
@@ -295,5 +296,94 @@ describe("notifiers", () => {
     ]);
     expect(parsed[0]).toMatchObject({ rule: "keeperStalled", age: 120, reason: alert.detail });
     expect(parsed[0]).not.toHaveProperty("dropped_fields");
+  });
+});
+
+describe("overlapping evaluations", () => {
+  it("never sends the same queued alert twice when two evaluate() calls overlap", async () => {
+    let now = 0;
+    let down = true;
+    const delivered: Alert[] = [];
+    const release: Array<() => void> = [];
+    const alerting = createAlerting({
+      rules: [disputesPilingUp({ maxOpenDisputes: 1, forSeconds: 0 })],
+      clock: () => now,
+      notify: async (alert) => {
+        if (down) throw new Error("webhook down");
+        await new Promise<void>((resolve) => release.push(resolve));
+        delivered.push(alert);
+      },
+    });
+
+    await alerting.evaluate({ disputesOpen: 5 });
+    now += 30_000;
+    await alerting.evaluate({ disputesOpen: 0 });
+    expect(alerting.state()[0]?.undelivered).toBe(2);
+
+    down = false;
+    now += 30_000;
+    const first = alerting.evaluate({ disputesOpen: 0 });
+    const second = alerting.evaluate({ disputesOpen: 0 });
+    while (release.length < 1) await Promise.resolve();
+    for (let i = 0; i < 10 && release.length > 0; i += 1) {
+      const next = release.shift();
+      next?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(new Set(delivered.map((a) => `${a.rule}:${a.kind}`)).size).toBe(delivered.length);
+    expect(delivered.map((a) => a.kind)).toEqual(["firing", "resolved"]);
+    expect(secondResult.skipped).toBe(true);
+    expect(secondResult.notified).toHaveLength(0);
+    expect(firstResult.skipped).toBe(false);
+    expect(alerting.state()[0]?.undelivered).toBe(0);
+  });
+});
+
+describe("a keeper that never ticks", () => {
+  it("fires on the absence of progress, not on a reported failure", async () => {
+    const h = harness([keeperStalled({ maxPendingAgeSeconds: 600, maxTickAgeSeconds: 300, forSeconds: 0 })], "keeper");
+    const startedAt = h.now();
+
+    await h.alerting.evaluate({ oldestPendingAgeSeconds: 0, lastKeeperTickAt: startedAt });
+    expect(h.notified).toHaveLength(0);
+
+    h.advance(299);
+    await h.alerting.evaluate({ oldestPendingAgeSeconds: 0, lastKeeperTickAt: startedAt });
+    expect(h.notified).toHaveLength(0);
+
+    h.advance(2);
+    await h.alerting.evaluate({ oldestPendingAgeSeconds: 0, lastKeeperTickAt: startedAt });
+    expect(h.notified).toHaveLength(1);
+    expect(h.notified[0]).toMatchObject({ kind: "firing", rule: "keeperStalled", severity: "page" });
+    expect(h.notified[0]?.detail).toContain("no keeper tick completed");
+
+    h.advance(60);
+    await h.alerting.evaluate({ oldestPendingAgeSeconds: 0, lastKeeperTickAt: h.now() });
+    expect(h.notified).toHaveLength(2);
+    expect(h.notified[1]?.kind).toBe("resolved");
+  });
+
+  it("stays silent when the snapshot carries no tick timestamp", async () => {
+    const h = harness([keeperStalled({ maxPendingAgeSeconds: 600, maxTickAgeSeconds: 300, forSeconds: 0 })]);
+    h.advance(10_000);
+    await h.alerting.evaluate({ oldestPendingAgeSeconds: 0 });
+    expect(h.notified).toHaveLength(0);
+  });
+});
+
+describe("hook write failures", () => {
+  it("fires on the first failed registry write and stays silent at zero", async () => {
+    const h = harness([hookWriteFailures()], "indexer");
+    await h.alerting.evaluate({ hookWriteFailures: 0 });
+    expect(h.notified).toHaveLength(0);
+    await h.alerting.evaluate({});
+    expect(h.notified).toHaveLength(0);
+    await h.alerting.evaluate({ hookWriteFailures: 1 });
+    expect(h.notified).toHaveLength(1);
+    expect(h.notified[0]).toMatchObject({ rule: "hookWriteFailures", kind: "firing", severity: "warn" });
+    expect(h.notified[0]?.detail).toContain("should never fire");
   });
 });

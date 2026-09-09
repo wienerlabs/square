@@ -68,6 +68,7 @@ export type Measurement = {
   entryPoint: Address;
   factory: Address;
   gasPriceWei: bigint;
+  maxFeePerGasWei?: bigint | undefined;
   rows: MeasurementRow[];
   overhead: MeasurementOverhead[];
   measuredAt: string;

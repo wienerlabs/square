@@ -27,18 +27,15 @@ import type {
 import { toFacilitatorEvmSigner, type FacilitatorEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
 import { chainIdOf } from "./network.js";
+import { silentLogger, type GatewayLogger } from "./logger.js";
 import type { ReplayEntry, ReplayKey, ReplayStore } from "./replay-store.js";
+
+export type { GatewayLogger } from "./logger.js";
 
 export interface PaymentAllowlistEntry {
   payTo: Address;
   asset: Address;
   network: Network;
-}
-
-export interface GatewayLogger {
-  info(message: string, context?: Record<string, unknown>): void;
-  warn(message: string, context?: Record<string, unknown>): void;
-  error(message: string, context?: Record<string, unknown>): void;
 }
 
 export interface SquareFacilitatorOptions {
@@ -88,12 +85,11 @@ export const REJECTION = {
 
 const SETTLEMENT_PENDING = "settlement_pending";
 const INTEGER = /^\d+$/;
+const TRANSACTION_HASH = /^0x[0-9a-fA-F]{64}$/;
 
-const silentLogger: GatewayLogger = {
-  info() {},
-  warn() {},
-  error() {},
-};
+function transactionHash(value: unknown): Hex | undefined {
+  return typeof value === "string" && TRANSACTION_HASH.test(value) ? (value as Hex) : undefined;
+}
 
 function sameAddress(a: string, b: string): boolean {
   return isAddress(a) && isAddress(b) && getAddress(a) === getAddress(b);
@@ -311,16 +307,34 @@ export function createSquareFacilitator(options: SquareFacilitatorOptions): Squa
       return;
     }
     const key = replayEntry(paymentPayload, requirements, eip3009);
+    const transaction = transactionHash(result.transaction);
     if (result.success) {
-      await replayStore.markSettled(key, result.transaction as Hex);
-      logger.info("x402 payment settled", { payer: key.payer, nonce: key.nonce, transaction: result.transaction });
+      if (transaction === undefined) {
+        logger.error("x402 settle reported success without a transaction hash", { payer: key.payer, nonce: key.nonce });
+        return;
+      }
+      const held = await replayStore.markSettled(key, transaction);
+      logger.info("x402 payment settled", { payer: key.payer, nonce: key.nonce, transaction });
+      if (!held) {
+        logger.error("x402 ledger refused the settled transition", { payer: key.payer, nonce: key.nonce, transaction });
+      }
       return;
     }
     if (result.errorReason === SETTLEMENT_PENDING) {
-      logger.warn("x402 settlement pending", { payer: key.payer, nonce: key.nonce, transaction: result.transaction });
+      if (transaction === undefined) {
+        logger.error("x402 settlement pending without a transaction hash", { payer: key.payer, nonce: key.nonce });
+        return;
+      }
+      const recorded = await replayStore.markPending(key, transaction);
+      logger.warn("x402 settlement pending, left to reconciliation", {
+        payer: key.payer,
+        nonce: key.nonce,
+        transaction,
+        recorded,
+      });
       return;
     }
-    await replayStore.markFailed(key, result.errorReason ?? "settle_failed");
+    await markFailed(key, result.errorReason ?? "settle_failed");
     logger.error("x402 settlement failed", { payer: key.payer, nonce: key.nonce, reason: result.errorReason });
   });
 
@@ -330,9 +344,16 @@ export function createSquareFacilitator(options: SquareFacilitatorOptions): Squa
       return;
     }
     const key = replayEntry(paymentPayload, requirements, eip3009);
-    await replayStore.markFailed(key, error.message);
+    await markFailed(key, error.message);
     logger.error("x402 settlement threw", { payer: key.payer, nonce: key.nonce, error: error.message });
   });
+
+  async function markFailed(key: ReplayKey, reason: string): Promise<void> {
+    const held = await replayStore.markFailed(key, reason);
+    if (!held) {
+      logger.error("x402 ledger refused the failed transition", { payer: key.payer, nonce: key.nonce, reason });
+    }
+  }
 
   return {
     facilitator,

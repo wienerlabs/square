@@ -158,9 +158,17 @@ create table arbiter_sets (
 ```
 
 `job_events` is what makes restart safe: the primary key is the log's chain
-position, so replaying a block twice inserts nothing and the reducer is
-idempotent per event. `indexer_checkpoints.last_block` advances only after every
-log of that block is in `job_events` and reduced, inside one transaction.
+position, so replaying a block twice inserts nothing and the reducer never sees
+the same log twice. The reducer itself is not idempotent per event, `credit` adds
+and `WindowsConfigured` appends, so the guard is the journal and not the reducer:
+the indexer applies a batch to a copy of its in-memory state and adopts that copy
+only after the transaction commits, so a rolled-back batch leaves nothing behind
+to be applied a second time on the retry. `indexer_checkpoints.last_block`
+advances only after every log of that block is in `job_events` and reduced,
+inside one transaction. A single log that cannot be journalled or reduced is
+rolled back to its own savepoint, counted in
+`square_indexer_quarantined_events_total` and listed on the indexer's
+`/quarantine`, and the rest of the batch still commits.
 
 ### Security layer (#44)
 
@@ -262,10 +270,15 @@ create table keeper_actions (
 |---|---|---|
 | `job_events` | forever | it is the audit trail and the replay source |
 | `jobs`, `disputes`, `claim_listings`, `ledger_balances`, `arbiter_sets` | forever, rebuildable | mirror |
-| `idempotency_keys` | 24 h after `expires_at`, swept hourly | a client retrying after a day is a new request |
-| `rate_limits` | 2 windows, swept hourly | |
+| `idempotency_keys` | 24 h after `expires_at` | a client retrying after a day is a new request |
+| `rate_limits` | 2 windows | |
 | `x402_payments` | `valid_before` + 30 days | after `validBefore` the authorization cannot be settled on chain anyway; 30 days covers reconciliation |
 | `keeper_actions` | 90 days | operational, feeds the metrics in #50 |
+
+All four are removed by `square-data sweep`, which runs every sweep once and prints
+what each removed. Nothing sweeps on its own: the operator schedules that command
+hourly, from cron or a systemd timer, on the host that already holds `DATABASE_URL`
+for the migration step. `packages/data/README.md` carries both schedule examples.
 
 ## Access layer
 

@@ -1,5 +1,6 @@
 import { JobStatus } from "@squaresdk/core";
 import { isAddressEqual, zeroAddress, type Address } from "viem";
+import { keeperEvaluates, refundAvailable } from "./actions";
 import type { JobSummary } from "./square";
 
 export type InboxKind = "submit" | "fund" | "budget" | "dispute" | "finalize" | "refund";
@@ -26,10 +27,11 @@ function same(a: Address, b: Address): boolean {
   return isAddressEqual(a, b);
 }
 
-export function classify(job: JobSummary, address: Address, now: number): InboxKind | null {
+export function classify(job: JobSummary, address: Address, keeperEvaluator: Address, now: number): InboxKind | null {
   const client = same(job.client, address);
   const provider = same(job.provider, address);
   if (!client && !provider) return null;
+  if (client && refundAvailable(job, keeperEvaluator, now)) return "refund";
   const live = now < job.expiredAt;
   switch (job.status) {
     case JobStatus.Open:
@@ -37,23 +39,27 @@ export function classify(job: JobSummary, address: Address, now: number): InboxK
       if (job.budget === 0n) return "budget";
       return same(job.provider, zeroAddress) ? null : "fund";
     case JobStatus.Funded:
-      if (!live) return client ? "refund" : null;
-      return provider ? "submit" : null;
+      return provider && live ? "submit" : null;
     case JobStatus.Submitted:
       if (job.disputed) return null;
+      if (!keeperEvaluates(job, keeperEvaluator)) return null;
       if (job.challengeEnd > 0 && now >= job.challengeEnd) return "finalize";
-      if (!live) return client && job.challengeEnd === 0 ? "refund" : null;
-      return client && job.challengeEnd > 0 ? "dispute" : null;
+      return client && live && job.challengeEnd > 0 ? "dispute" : null;
     default:
       return null;
   }
 }
 
-export function walletInbox(jobs: readonly JobSummary[], address: Address | undefined, now: number): InboxGroup[] {
+export function walletInbox(
+  jobs: readonly JobSummary[],
+  address: Address | undefined,
+  keeperEvaluator: Address,
+  now: number,
+): InboxGroup[] {
   if (!address) return [];
   const buckets = new Map<InboxKind, JobSummary[]>();
   for (const job of jobs) {
-    const kind = classify(job, address, now);
+    const kind = classify(job, address, keeperEvaluator, now);
     if (!kind) continue;
     const list = buckets.get(kind) ?? [];
     list.push(job);

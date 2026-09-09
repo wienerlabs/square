@@ -17,12 +17,39 @@ export interface MigrationStatus {
 }
 
 const MIGRATION_NAME = /^\d{4}_[a-z0-9_]+$/;
+const DUPLICATE_OBJECT_CODES = new Set(["42P06", "42P07", "42701", "42710"]);
 const UP_SUFFIX = ".up.sql";
 const DOWN_SUFFIX = ".down.sql";
 
 const ENSURE_SCHEMA_MIGRATIONS =
   "create table if not exists schema_migrations (name text primary key, applied_at timestamptz not null default now())";
 const LOCK_SCHEMA_MIGRATIONS = "lock table schema_migrations in access exclusive mode";
+
+export class MigrationConflictError extends Error {
+  readonly migration: string;
+
+  constructor(migration: string, cause: unknown) {
+    super(
+      `migration ${migration} stopped because an object it creates already exists: ${detailOf(cause)}. ` +
+        `The migration runner is the only thing that may create these tables, so a table created by hand or by a package DDL snippet ` +
+        `breaks the chain here and leaves every later migration unapplied. Either drop that object and run "square-data migrate up" again, ` +
+        `or, when the existing object is already the one this migration would create, record the migration as applied with ` +
+        `insert into schema_migrations (name) values ('${migration}'); and run "square-data migrate up" again.`,
+      { cause },
+    );
+    this.name = "MigrationConflictError";
+    this.migration = migration;
+  }
+}
+
+function detailOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+function isDuplicateObject(error: unknown): boolean {
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && DUPLICATE_OBJECT_CODES.has(code);
+}
 
 export async function migrationStatus(db: Database, dir: string): Promise<MigrationStatus> {
   const available = await availableMigrations(dir);
@@ -44,11 +71,16 @@ async function migrateUp(db: Database, dir: string, steps: number | undefined): 
   const scripts = await readScripts(dir, selected, UP_SUFFIX);
   const applied: string[] = [];
   for (const { name, sql } of scripts) {
-    await db.transaction(async (tx) => {
-      await tx.query(LOCK_SCHEMA_MIGRATIONS);
-      await tx.query(sql);
-      await tx.query("insert into schema_migrations (name) values ($1)", [name]);
-    });
+    try {
+      await db.transaction(async (tx) => {
+        await tx.query(LOCK_SCHEMA_MIGRATIONS);
+        await tx.query(sql);
+        await tx.query("insert into schema_migrations (name) values ($1)", [name]);
+      });
+    } catch (error) {
+      if (isDuplicateObject(error)) throw new MigrationConflictError(name, error);
+      throw error;
+    }
     applied.push(name);
   }
   return { applied };

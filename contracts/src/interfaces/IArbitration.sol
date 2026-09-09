@@ -59,6 +59,7 @@ interface IArbitration {
     error NotLapsed(uint48 resolveBy);
     error NothingToSettle();
     error InsufficientBalance();
+    error SplitNeedsAPayoutResolver();
 
     function open(
         uint256 jobId,
