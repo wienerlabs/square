@@ -36,7 +36,7 @@ their entropy is enough to make the setup sound — which is why the number of
 contributors matters less than their independence from each other and from us.
 
 ```
-payment.r1cs + ppot_0080_13.ptau
+payment.r1cs + ppot_0080_14.ptau
         │
         ▼
   payment_0.zkey  ── contributor 1 ──▶ payment_1.zkey ── … ──▶ payment_N.zkey

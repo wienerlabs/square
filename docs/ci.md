@@ -126,7 +126,7 @@ the iden3 release binary — and checks it, because an unverified download means
 whoever can answer for github.com chooses the compiler that produces this
 project's proving key.
 
-The 9.5 MB phase-1 powers of tau is cached, keyed on `fetch-ptau.mjs` because
+The 19 MB phase-1 powers of tau is cached, keyed on `fetch-ptau.mjs` because
 that file holds the adoption record, so adopting a different powers of tau
 misses the cache instead of reusing the old file. `fetch-ptau.mjs` re-verifies
 the bytes on every run either way, which is what makes caching a downloaded

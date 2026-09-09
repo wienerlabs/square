@@ -124,52 +124,47 @@ the behaviour so it cannot change by accident.
 
 The claim above — that the per-transaction ceiling, the whitelist, the blocked
 addresses, the categories and the time window are only ever proved and never
-published — rests on the policy commitment hiding them. It is weaker than it
-sounds, and publishing `dailyLimit` is part of why.
+published — rests on the policy commitment hiding them.
 
-The commitment is `Poseidon(8)` over eight fields and **carries no nonce**
-(`circuits/payment.circom:395-404`):
-
-```
-policy_data_hash = Poseidon(8)(
-    max_daily, max_per_tx, operator_id_field, policy_id_field,
-    cat_list_hash, blocked_list_hash, tokens_list_hash, time_field
-)
-```
-
-A commitment without a nonce hides its preimage only as far as the preimage is
-hard to guess. Taking the eight in turn:
+**It did not, until [#45][i45].** The commitment was `Poseidon(8)` over eight
+policy values with no nonce, and a commitment without a nonce hides its preimage
+only as far as the preimage is hard to guess. Taking the eight in turn as they
+stood:
 
 | Input | Guessability |
 |---|---|
 | `max_daily` | **Free.** It is `dailyLimit`, published by this registry. |
-| `time_field` | `time_active * time_when_active.out` — at most `2 × 128 × 24 × 24 = 147,456` values. |
-| `cat_list_hash`, `blocked_list_hash`, `tokens_list_hash` | Empty and single-entry lists have a small set of well-known Poseidon images. |
-| `max_per_tx` | A round USDC figure, in practice. |
-| `operator_id_field`, `policy_id_field` | Everything else rests here. |
+| `time_field` | at most `2 × 128 × 24 × 24 = 147,456` values |
+| the three list hashes | empty and single-entry lists have a small set of well-known images |
+| `max_per_tx` | a round USDC figure, in practice |
+| `operator_id_field`, `policy_id_field` | everything else rested here |
 
-So the secrecy of the whole policy reduces to the entropy of two identifiers.
-Checked rather than assumed: the prover derives them with `hashUuid`
-(`services/prover/src/hash.js`), which copies the UUID's sixteen bytes into the
-high half of a 32-byte buffer and Poseidon-hashes the two halves, preserving all
-128 bits. A random UUIDv4 carries 122 bits, which is ample.
+So the secrecy of the whole policy reduced to the entropy of two identifiers —
+adequate if they were random UUIDv4s, which was a requirement nobody had
+written down. That was [#98][i98].
 
-**That makes it a requirement rather than a property.** If an operator derives
-these identifiers from anything predictable — a sequence number, a customer id, a
-name — the commitment becomes brute-forceable and the privacy claim fails, with
-no on-chain signal that it has. Two consequences, both deliberate:
+**It holds now.** Each field sits behind its own salt:
 
-- Operators **must** use random identifiers. It is a documented obligation now,
-  which it was not before.
-- The right fix is a nonce in the commitment, and that is a circuit change: it
-  alters the constraint system and invalidates the proving key, so it can only
-  be done inside [#16][i16]'s ceremony window and not before. It is the same
-  32-byte salt, for the same reason, as
-  [docs/design/travel-rule.md](../design/travel-rule.md) specifies for the Travel
-  Rule commitment — where it could be added freely because nothing was frozen.
+```
+leaf[i] = Poseidon(3)(i, salt[i], value[i])
+root    = Poseidon(8)(leaf[0] … leaf[7])
+```
 
-[i16]: https://github.com/wienerlabs/square/issues/16
+The root is still one `Poseidon(8)`, so this registry, the verifier and the
+public signal layout are unchanged — `commitment` holds the same kind of value
+it always did. What changed is that guessing a field no longer opens it: the
+salts carry 254 bits, and `services/prover/test/disclosure.test.js` shows the
+difference by searching two thousand plausible ceilings, finding the unsalted
+leaf and not the salted one.
 
-Until then, this document does not claim the policy is hidden. It claims the
-policy is hidden **from anyone who cannot guess two UUIDs**, which is true, and
-which is a different sentence.
+Publishing `dailyLimit` is therefore no longer a crack in the commitment. It is
+what it was meant to be: one integer, disclosed on purpose, next to a commitment
+that discloses nothing else.
+
+The same construction is what makes selective disclosure possible at all —
+`open()` proves one field against the commitment this registry holds — which is
+[#45][i45]'s subject and is documented in
+[circuits/README.md](../../circuits/README.md#the-policy-commitment).
+
+[i45]: https://github.com/wienerlabs/square/issues/45
+[i98]: https://github.com/wienerlabs/square/issues/98

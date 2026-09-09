@@ -10,6 +10,7 @@ import {
   hashUuid,
   daysToBitmask,
 } from './hash.js';
+import { deriveSalts, POLICY_FIELDS } from './commitment.js';
 import { toFieldString, toIdentifier } from './normalize.js';
 import { evaluateRules } from './rules.js';
 import { encodeForSolidity } from './convert.js';
@@ -65,6 +66,11 @@ function validateRequest(req) {
     'payment_endpoint_category',
     'daily_spent_before',
     'current_unix_timestamp',
+    // square#45: the secret the eight leaf salts are derived from. Required,
+    // not generated here — a policy has to produce the same commitment every
+    // time it is proved, and a salt this service invented would change the
+    // commitment on every call and never match the one on chain.
+    'policy_salt',
     // stripe_receipt_hash is OPTIONAL and defaults to '0'.
   ];
   const missing = required.filter((k) => req[k] === undefined || req[k] === null);
@@ -184,6 +190,12 @@ export async function buildCircuitInput(request) {
     ),
     operator_id_field: addressToField(request.operator_id, 'operator_id'),
     policy_id_field: await hashUuid(request.policy_id, 'policy_id'),
+
+    // One per committed field, in the order the circuit hashes them. See
+    // commitment.js — the same construction, and the only two places it exists.
+    policy_salts: (await deriveSalts(
+      toFieldString(request.policy_salt, 'policy_salt'),
+    )).map(String),
     time_active: timeActive,
     time_days_bitmask: timeDaysBitmask,
     time_start_hour_utc: timeStartHourUtc,

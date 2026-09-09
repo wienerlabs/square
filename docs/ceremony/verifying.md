@@ -57,7 +57,7 @@ The file handed to you must be the chain so far, not something else.
 
 ```bash
 # 1. The previous contributor's published hash must match what you received.
-snarkjs zkey verify payment.r1cs ppot_0080_13.ptau payment_<N-1>.zkey
+snarkjs zkey verify payment.r1cs ppot_0080_14.ptau payment_<N-1>.zkey
 ```
 
 That command re-derives the whole chain from the circuit and the powers of tau
@@ -91,7 +91,7 @@ your contribution and not a substitute.
 ### After the ceremony closes
 
 ```bash
-snarkjs zkey verify payment.r1cs ppot_0080_13.ptau payment_final.zkey
+snarkjs zkey verify payment.r1cs ppot_0080_14.ptau payment_final.zkey
 ```
 
 Then find your contribution hash in the transcript and confirm it is the one you
@@ -120,7 +120,7 @@ why both exist.
 
 ```bash
 node scripts/fetch-ptau.mjs --verify        # bytes are the adopted file
-snarkjs powersoftau verify ppot_0080_13.ptau  # the contribution chain is sound
+snarkjs powersoftau verify ppot_0080_14.ptau  # the contribution chain is sound
 ```
 
 The first is content-addressed, so it does not matter where you got the file.
@@ -131,7 +131,7 @@ Provenance and the reason for this particular file are in
 ### 2. The final key descends from that phase 1, and from the published contributions
 
 ```bash
-snarkjs zkey verify payment.r1cs ppot_0080_13.ptau payment_final.zkey
+snarkjs zkey verify payment.r1cs ppot_0080_14.ptau payment_final.zkey
 ```
 
 This is the load-bearing check. It re-derives the entire setup and confirms the

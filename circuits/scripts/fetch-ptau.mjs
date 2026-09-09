@@ -29,23 +29,31 @@ const BUILD = path.join(ROOT, 'build');
 
 // The adopted phase-1 file.
 //
-// Power 13 is the smallest that fits payment.circom: the circuit's domain size
-// is 8192 = 2^13. Taking the smallest sufficient truncation keeps the download
-// at 9.5 MB instead of 19, and a larger one buys nothing — the excess powers are
-// never touched.
+// Power 14 is the smallest that fits payment.circom. snarkjs sizes the domain
+// from the total constraint count, not the non-linear count, and square#45's
+// salted commitment took that from 6,586 to 11,426 — past 2^13 = 8,192 and into
+// 2^14 = 16,384. `groth16 setup` says so plainly rather than degrading:
+//
+//   circuit too big for this power of tau ceremony. 11426*2 > 2**13
+//
+// The download doubles, from 9.5 MB to 19. That is the whole cost: it is the
+// same ceremony and the same contribution 80, one truncation larger, so nothing
+// about the provenance changes — only how many powers of tau come with it. A
+// larger truncation still buys nothing beyond headroom, which is why this moved
+// by exactly one step rather than to something comfortable.
 export const ADOPTED = Object.freeze({
   ceremony: 'Perpetual Powers of Tau',
   contribution: 80,
-  file: 'ppot_0080_13.ptau',
-  power: 13,
-  bytes: 9530514,
-  sha256: 'ccee28086e4b81d81a6e16fdee054d1dbd5276362e2662d4205d31de45cb930f',
+  file: 'ppot_0080_14.ptau',
+  power: 14,
+  bytes: 18967698,
+  sha256: '3ca1149e9349b22b0ee0649399cfb787677129b7b1189d1899fc0d615d9583db',
   blake2b:
-    'bf0c2d498f1197ad04ec0dbfcdda6df6348cbd793759f1f986e5cdf1a4100842'
-    + '293dfad6b8961f64b7ba35c162b5c821c4c097a52f3a639b55b0e765ec311b44',
+    'a91842802f01b33fd42f5f69c3e49879ae03f0ae1f448b0c151244c9957024bd'
+    + '30bf5e3cc999ff2aeb02ebb959124a3a6a3cc20691cb4843a1234a02232072f3',
   // Published by the ceremony's own repository,
   // github.com/privacy-ethereum/perpetualpowersoftau.
-  url: 'https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_13.ptau',
+  url: 'https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_14.ptau',
 });
 
 export const ptauPath = () => path.join(BUILD, ADOPTED.file);

@@ -106,6 +106,7 @@ export const openapiSpec = {
         type: 'object',
         required: [
           'policy_id',
+          'policy_salt',
           'operator_id',
           'max_daily_spend',
           'max_per_transaction',
@@ -121,6 +122,17 @@ export const openapiSpec = {
         ],
         properties: {
           policy_id: { type: 'string', format: 'uuid' },
+          policy_salt: {
+            type: 'string',
+            description:
+              'The secret the eight leaf salts derive from, as a decimal field element. '
+              + 'Kept with the policy and reused on every proof of it: a different salt is '
+              + 'a different commitment, and the registry holds one. Generate with '
+              + 'randomPolicySalt() from src/commitment.js. It is the operator\'s secret — '
+              + 'disclosing one leaf salt discloses that leaf and no other, but disclosing '
+              + 'this one discloses all eight.',
+            example: '7777777777777777777777777777777777777777777777777777777777777',
+          },
           operator_id: { type: 'string', description: '20-byte EVM address, 0x-prefixed.' },
           max_daily_spend: {
             type: 'string',
