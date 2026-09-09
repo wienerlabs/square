@@ -66,6 +66,7 @@ Design notes, each the record of a decision:
 - [SquareHook: one hook, selector routing, shared optParams](docs/design/square-hook.md)
 - [Data layer: one Postgres, chain is the source of truth](docs/design/data-layer.md)
 - [Keeper economics: why the crank is paid](docs/design/keeper-economics.md)
+- [Travel Rule: the commitment goes on chain, the personal data never does](docs/design/travel-rule.md)
 - [ERC-20 versus native USDC](docs/decisions/erc20-vs-native-usdc.md)
 - [x402: own facilitator versus Circle Gateway](docs/decisions/x402-facilitator.md)
 - [ERC-4337: is sponsorship needed](docs/decisions/erc4337-sponsorship.md)
