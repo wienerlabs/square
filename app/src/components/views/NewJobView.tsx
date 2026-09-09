@@ -14,6 +14,7 @@ import { PanelCard } from "@/components/PanelCard";
 import { PillToggle } from "@/components/PillToggle";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { SectionHeading } from "@/components/SectionHeading";
+import { SpecActions } from "@/components/SpecActions";
 import { Step, type StepState } from "@/components/Step";
 import { ArcNetworkMark, UsdcMark } from "@/components/marks";
 import { WalletButton } from "@/components/WalletButton";
@@ -93,6 +94,8 @@ interface Created {
   budgetHash?: Hex;
   budgetFailed: boolean;
   budget: bigint | null;
+  spec: string;
+  specHash: string;
 }
 
 function Row({ label, children, muted = false }: { label: string; children: React.ReactNode; muted?: boolean }) {
@@ -219,7 +222,7 @@ export function NewJobView() {
       else budgetFailed = true;
     }
     setStage(null);
-    setCreated({ jobId: result.jobId, createHash: result.hash, budgetHash, budgetFailed, budget: budgetAmount });
+    setCreated({ jobId: result.jobId, createHash: result.hash, budgetHash, budgetFailed, budget: budgetAmount, spec, specHash: specState.hash });
   }
 
   const ctaLabel =
@@ -263,7 +266,7 @@ export function NewJobView() {
               <ol className="flex flex-col gap-3">
                 {[
                   { title: "Fund the escrow", body: created.budget ? "Approve USDC and fund from the job page. The fee basis points are snapshotted at that moment." : "Set a budget on the job page, then approve USDC and fund it." },
-                  { title: "Hand the job to the provider", body: "Share the job link. The provider submits the deliverable hash before the expiry, optionally bound to an ERC-8004 agent." },
+                  { title: "Hand the job to the provider", body: "Share the job link and the spec text below. The provider submits the deliverable hash before the expiry, optionally bound to an ERC-8004 agent." },
                   { title: "Watch the challenge window", body: `After submission you have ${network.data ? formatDuration(network.data.window.challengeWindow) : "the challenge window"} to dispute; otherwise anyone finalizes and the payee is credited.` },
                 ].map((step, index) => (
                   <li key={step.title} className="flex gap-3">
@@ -282,6 +285,23 @@ export function NewJobView() {
                 <GhostButton onClick={reset}>Create another</GhostButton>
               </div>
             </div>
+          </div>
+          <div className="mt-8 flex flex-col gap-3 border-t border-fog pt-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-caption font-medium text-carbon">The spec this job was hashed from</p>
+                <p className="mt-1 max-w-xl text-caption text-graphite">
+                  Only spec:{shortHash(created.specHash)} is on chain. Keep this text and send it to the provider over
+                  your own channel; the job page checks a pasted spec against the hash. Create another clears it.
+                </p>
+              </div>
+              <span className="flex items-center gap-2">
+                <SpecActions spec={created.spec} hash={created.specHash} />
+              </span>
+            </div>
+            <pre className="max-h-72 overflow-auto rounded-lg border border-fog bg-linen px-3.5 py-2.5 font-mono text-[12px] leading-5 text-graphite">
+              {created.spec}
+            </pre>
           </div>
         </PanelCard>
       </div>
@@ -390,6 +410,7 @@ export function NewJobView() {
                 </PillToggle>
               ))}
               <span className="ml-auto flex items-center gap-2">
+                <SpecActions spec={spec} hash={specState.kind === "ok" ? specState.hash : ""} />
                 <GhostButton size="sm" onClick={formatSpec} disabled={specState.kind !== "ok"}>
                   Format
                 </GhostButton>

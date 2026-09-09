@@ -14,6 +14,7 @@ import { Chip } from "@/components/Chip";
 import { EmptyState } from "@/components/EmptyState";
 import { Field, inputClass } from "@/components/Field";
 import { GhostButton } from "@/components/GhostButton";
+import { JsonEditor } from "@/components/JsonEditor";
 import { PanelCard } from "@/components/PanelCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { StatusPill, listingTone, outcomeTone, phaseTone } from "@/components/StatusPill";
@@ -33,6 +34,7 @@ import {
   useSquare,
   type JobDetail,
 } from "@/lib/square";
+import { checkSpec } from "@/lib/spec";
 import { describeError, useTx } from "@/lib/tx";
 import { activeChain, deployment } from "@/lib/wagmi";
 
@@ -287,6 +289,45 @@ function ListClaimAction({ ctx, detail }: { ctx: ActionContext; detail: JobDetai
   );
 }
 
+function SpecCheck({ description }: { description: string }) {
+  const [text, setText] = useState("");
+  const result = useMemo(() => checkSpec(text, description), [text, description]);
+  return (
+    <PanelCard
+      title="Check the spec"
+      description="The chain carries the hash, not the words. Paste the spec text you were sent and this page canonicalizes and hashes it the same way the form did, so you can see whether it is the text this job was opened with."
+    >
+      <Field
+        label="Spec (JSON)"
+        htmlFor="spec-check"
+        error={result.kind === "invalid" ? result.message : null}
+        hint={<span className="break-all font-mono text-[12px]">On chain: {description}</span>}
+      >
+        <JsonEditor
+          id="spec-check"
+          value={text}
+          onChange={setText}
+          error={result.kind === "invalid" ? result.message : null}
+          placeholder={'{\n  "task": "...",\n  "deliverable": "...",\n  "acceptance": "..."\n}'}
+          minHeight={180}
+        />
+      </Field>
+      {result.kind === "match" ? (
+        <p className="mt-4 flex items-center gap-2 text-caption text-carbon" role="status">
+          <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-mint" />
+          This text hashes to the description on chain, so it is the spec this job was opened with.
+        </p>
+      ) : null}
+      {result.kind === "mismatch" ? (
+        <p className="mt-4 flex flex-wrap items-center gap-2 text-caption text-magenta" role="status">
+          <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-magenta" />
+          <span className="break-all">This text hashes to spec:{result.hash}, which is not the description on chain. Ask for the exact text that was hashed.</span>
+        </p>
+      ) : null}
+    </PanelCard>
+  );
+}
+
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
@@ -534,6 +575,11 @@ export function JobView() {
                   {specHash ? `spec:${shortHash(specHash)}` : record.description}
                 </span>
               )}
+              {specHash ? (
+                <span className="mt-1 block text-caption text-graphite">
+                  Only this hash is on chain. The client hands the spec text to the provider off chain, over whatever channel they already use; paste it under Check the spec below to prove it is the text this hash was made from.
+                </span>
+              ) : null}
             </Row>
             <Row label="Agent">{detail.agentId !== 0n ? <span className="tabular-nums">ERC-8004 agent #{detail.agentId.toString()}</span> : <span className="text-ash">Not bound</span>}</Row>
             <Row label="Created">{formatTimestamp(record.createdAt)}</Row>
@@ -572,6 +618,8 @@ export function JobView() {
           ) : null}
         </PanelCard>
       </div>
+
+      {specHash ? <SpecCheck description={record.description} /> : null}
 
       {listing.status !== 0 || detail.dispute.disputedAt !== 0 ? (
         <div className={`grid gap-4 ${listing.status !== 0 && detail.dispute.disputedAt !== 0 ? "lg:grid-cols-2" : ""}`}>
