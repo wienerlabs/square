@@ -22,6 +22,9 @@ describe("x402Payments", () => {
       expect(await x402Payments.insertAccepted(db, { ...payment, nonce: hash32(0x43) })).toBe(true);
       expect(await x402Payments.insertAccepted(db, { ...payment, chainId: 1 })).toBe(true);
 
+      expect(await x402Payments.exists(db, payment)).toBe(true);
+      expect(await x402Payments.exists(db, { ...payment, nonce: hash32(0x99) })).toBe(false);
+
       const accepted = await x402Payments.get(db, payment);
       expect(accepted?.status).toBe(x402Payments.X402_STATUS.accepted);
       expect(accepted?.amount).toBe(1_000_000n);
@@ -90,6 +93,9 @@ describe("x402Payments", () => {
       await x402Payments.insertAccepted(db, settledLater);
 
       expect(await x402Payments.recordSettlementAttempt(db, payment, hash32(0x7a))).toBe(true);
+      expect(await x402Payments.exists(db, payment)).toBe(true);
+      expect(await x402Payments.exists(db, { ...payment, nonce: hash32(0x99) })).toBe(false);
+
       const accepted = await x402Payments.get(db, payment);
       expect(accepted?.status).toBe(x402Payments.X402_STATUS.accepted);
       expect(accepted?.txHash).toBe(hash32(0x7a));

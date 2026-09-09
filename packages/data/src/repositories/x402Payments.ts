@@ -121,6 +121,11 @@ export async function listAccepted(db: Database, limit = 100): Promise<AcceptedS
   }));
 }
 
+export async function exists(db: Database, identity: PaymentIdentity): Promise<boolean> {
+  const { rows } = await db.query(`select 1 from x402_payments where ${IDENTITY_MATCH} limit 1`, identityParams(identity));
+  return rows.length > 0;
+}
+
 export async function get(db: Database, identity: PaymentIdentity): Promise<X402PaymentRecord | null> {
   const { rows } = await db.query<X402PaymentRow>(`select ${COLUMNS} from x402_payments where ${IDENTITY_MATCH}`, identityParams(identity));
   const row = rows[0];

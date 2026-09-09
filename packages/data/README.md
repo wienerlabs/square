@@ -50,7 +50,7 @@ service never imports `pg` directly:
 | `arbiterSets` | `upsert`, `get`, `latest` |
 | `idempotencyKeys` | `get`, `putIfAbsent` (returns `stored`, `replay` or `conflict`), `sweepExpired` |
 | `rateLimits` | `increment(db, bucket, windowStart)` (returns the new count), `sweep(db, windowMs)` |
-| `x402Payments` | `insertAccepted` (false on replay), `markSettled`, `markFailed`, `recordSettlementAttempt`, `listAccepted`, `get`, `sweep` |
+| `x402Payments` | `insertAccepted` (false on replay), `markSettled`, `markFailed`, `recordSettlementAttempt`, `listAccepted`, `exists`, `get`, `sweep` |
 | `keeperActions` | `append`, `recent`, `sweep` |
 | `hostedAgents` | `upsert`, `get` |
 

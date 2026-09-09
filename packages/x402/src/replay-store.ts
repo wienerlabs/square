@@ -130,8 +130,8 @@ export function postgresReplayStore(db: Database): ReplayStore {
     markFailed(key, reason) {
       return x402Payments.markFailed(db, key, { reason });
     },
-    async has(key) {
-      return (await x402Payments.get(db, key)) !== null;
+    has(key) {
+      return x402Payments.exists(db, key);
     },
     async listUnsettled(limit = 100) {
       const rows = await x402Payments.listAccepted(db, limit);
