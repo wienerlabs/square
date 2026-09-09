@@ -17,6 +17,7 @@ import {
   usdcAsset,
 } from "../src/network.js";
 import { REJECTION, createSquareFacilitator, replayKeyFromPayload, type SquareFacilitator } from "../src/facilitator.js";
+import type { GatewayLogger } from "../src/logger.js";
 import { memoryReplayStore, type MemoryReplayStore } from "../src/replay-store.js";
 import { createGatewayApp } from "../src/server.js";
 import { createPayingClient, createPayingFetch } from "../src/client.js";
@@ -33,6 +34,19 @@ let baseUrl: string;
 let replayStore: MemoryReplayStore;
 let facilitator: SquareFacilitator;
 let capturedSignature: string | undefined;
+
+interface LogEntry {
+  level: "info" | "warn" | "error";
+  message: string;
+  context: Record<string, unknown> | undefined;
+}
+
+const logs: LogEntry[] = [];
+const recordingLogger: GatewayLogger = {
+  info: (message, context) => void logs.push({ level: "info", message, context }),
+  warn: (message, context) => void logs.push({ level: "warn", message, context }),
+  error: (message, context) => void logs.push({ level: "error", message, context }),
+};
 
 async function balanceOf(address: Address): Promise<bigint> {
   return local.publicClient.readContract({
@@ -70,6 +84,7 @@ beforeAll(async () => {
     network: ARC_TESTNET_NETWORK,
     replayStore,
     allowlist: [{ payTo: PAYEE_ADDRESS, asset: local.usdc, network: ARC_TESTNET_NETWORK }],
+    logger: recordingLogger,
   });
   const app = createGatewayApp({
     payTo: PAYEE_ADDRESS,
@@ -127,6 +142,7 @@ describe("gateway on local anvil", () => {
       account: payer,
       network: ARC_TESTNET_NETWORK,
       asset: local.usdc,
+      maxAmountPerPayment: "1.00",
       fetch: capturingFetch,
     });
     const res = await payingFetch(`${baseUrl}/quote`);
@@ -174,11 +190,13 @@ describe("gateway on local anvil", () => {
   it("refuses a direct settle of the already settled authorization without changing the record", async () => {
     const payload = decodePaymentSignatureHeader(capturedSignature ?? "");
     const payeeBefore = await balanceOf(PAYEE_ADDRESS);
+    logs.length = 0;
     const result = await facilitator.settle(payload, payload.accepted);
     expect(result.success).toBe(false);
     expect(await balanceOf(PAYEE_ADDRESS)).toBe(payeeBefore);
     const key = replayKeyFromPayload(payload);
     expect(replayStore.get(key!)?.status).toBe("settled");
+    expect(logs.filter((entry) => entry.message === "x402 ledger refused the failed transition")).toHaveLength(1);
   });
 });
 
@@ -198,7 +216,12 @@ describe("verifier", () => {
   }
 
   async function signedPayload(requirements: PaymentRequirements): Promise<PaymentPayload> {
-    const client = createPayingClient({ account: payer, network: ARC_TESTNET_NETWORK, asset: requirements.asset as Address });
+    const client = createPayingClient({
+      account: payer,
+      network: ARC_TESTNET_NETWORK,
+      asset: requirements.asset as Address,
+      maxAmountPerPayment: "1.00",
+    });
     return client.createPaymentPayload({
       x402Version: 2,
       resource: { url: `${baseUrl}/quote` },

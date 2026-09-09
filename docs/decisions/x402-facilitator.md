@@ -89,6 +89,52 @@ Both sit behind the same `paymentMiddleware` and the same headers.
 - Prices below 0.01 USDC per request are a design smell under this model; they
   should be batched into a larger unit or wait for the Nanopayments client.
 
+## The ledger has one implementation and one transition rule
+
+`x402_payments` is defined once, in the `@squaresdk/data` migrations, and written by
+one implementation, that package's `x402Payments` repository.
+`postgresReplayStore` in `packages/x402` is an adapter over it and holds no SQL.
+There were two of each for a while, with different transition rules and a diverging
+`amount` type; the repository is the one that stayed, because it reports whether an
+update held, and the exported DDL was dropped because a second `create table` for a
+migrated table breaks the migration chain the first time an operator follows it.
+
+The rule the surviving implementation carries:
+
+- `accepted` is the only state a row can leave. `settled` and `failed` are terminal.
+  A settled row is never re-settled with another hash and never downgraded to failed;
+  a failed row is never promoted.
+- `markSettled` and `markFailed` return whether the update held, so the facilitator
+  logs a refused transition instead of passing over a zero-row update in silence.
+- `markFailed` stores its reason in the `reason` column, so the authoritative ledger
+  says why a payment failed and reconciliation does not depend on log retention.
+- `has()` is status-blind on purpose. It answers whether the authorization identity
+  was ever presented, which is the question replay protection asks.
+
+## Settlement outcomes that need a second look
+
+One settlement outcome cannot be resolved during the request: the transaction was
+broadcast but its receipt was not seen, which the library reports as
+`settlement_pending`. The facilitator records the transaction hash on the still
+`accepted` row and stops, because the payment may still land and writing `failed`
+would make the authoritative ledger wrong.
+
+`reconcileSettlements` is the operator-scheduled pass that closes those rows: a
+successful receipt settles the row, a reverted receipt fails it with
+`settlement_reverted`, an unknown receipt is left alone while the authorization is
+still valid, and once `validBefore` has passed, when the token contract can no longer
+accept it, the row fails with `authorization_expired`. Without it a pending settlement
+sat at `accepted` forever while `has()` kept refusing the authorization, which is safe
+but leaves a payment nobody can account for.
+
+`settlement: "before-handler"` is not supported and is rejected when routes are
+configured. The upfront flow makes the resource server accept the payload without
+calling the facilitator's `verify`, and every replay-ledger operation lives in the
+verify hooks, so the mode would run payments past the ledger entirely: no replay check
+before, no row after, not even for successful payments. Supporting it would mean
+duplicating the ledger into the settle path, which is the same mistake as having two
+implementations of the table.
+
 ## What was considered and rejected
 
 **Circle Gateway alone (no Nanopayments).** Gateway moves deposited USDC between
