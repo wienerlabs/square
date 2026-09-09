@@ -20,7 +20,7 @@ import { WalletButton } from "@/components/WalletButton";
 import { formatBps, formatDuration, formatTimestamp, formatUsdc, fromDatetimeLocal, parseUsdc, shortHash, toDatetimeLocal } from "@/lib/format";
 import { useNetwork, useNow, useSquare } from "@/lib/square";
 import { describeError, useTx } from "@/lib/tx";
-import { activeChain, deployment } from "@/lib/wagmi";
+import { activeChain, deployment, isArcNetwork } from "@/lib/wagmi";
 
 const DAY = 86_400;
 
@@ -536,7 +536,7 @@ export function NewJobView() {
                 <div className="flex justify-between gap-4">
                   <dt className="text-graphite">Chain</dt>
                   <dd className="inline-flex items-center gap-1.5 tabular-nums text-carbon">
-                    {activeChain.id === 5042002 ? <ArcNetworkMark className="size-3.5" /> : null}
+                    {isArcNetwork ? <ArcNetworkMark className="size-3.5" /> : null}
                     {activeChain.name} ({activeChain.id})
                   </dd>
                 </div>

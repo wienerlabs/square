@@ -18,6 +18,67 @@ export const ANVIL_CHAIN_ID = 31337;
 
 export const ARC_TESTNET_RPC_URL = "https://rpc.testnet.arc.io";
 
+/**
+ * Everything about a chain that is not a contract address.
+ *
+ * The addresses come out of `contracts/deployments/<chainId>.json`, which a
+ * forge script writes; these do not, so they live here. Both halves are keyed
+ * by chain id and both are read through this module, because the alternative
+ * is what this repository had until #49: the chain id declared in four
+ * packages, USDC in two, and the registry in two with different casing.
+ */
+export interface NetworkProfile {
+  chainId: number;
+  name: string;
+  rpcUrl: string;
+  /** Undefined when the chain has no block explorer, as a local node does not. */
+  explorerUrl: string | undefined;
+  /**
+   * Arc settles gas in USDC and the native interface reports 18 decimals,
+   * while the ERC-20 at `usdc` reports 6. This is the native one, because it
+   * is what an `eth_getBalance` result is denominated in.
+   * See docs/decisions/erc20-vs-native-usdc.md.
+   */
+  nativeCurrency: { name: string; symbol: string; decimals: number };
+}
+
+export class UnknownNetworkError extends Error {
+  constructor(public readonly chainId: number) {
+    super(`No network profile is known for chain ${chainId}`);
+    this.name = "UnknownNetworkError";
+  }
+}
+
+export const ANVIL_RPC_URL = "http://127.0.0.1:8545";
+export const ARC_TESTNET_EXPLORER_URL = "https://testnet.arcscan.app";
+
+const arcTestnetNetwork: NetworkProfile = {
+  chainId: ARC_TESTNET_CHAIN_ID,
+  name: "Arc Testnet",
+  rpcUrl: ARC_TESTNET_RPC_URL,
+  explorerUrl: ARC_TESTNET_EXPLORER_URL,
+  nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+};
+
+const anvilNetwork: NetworkProfile = {
+  chainId: ANVIL_CHAIN_ID,
+  name: "Anvil",
+  rpcUrl: ANVIL_RPC_URL,
+  explorerUrl: undefined,
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+};
+
+export const networks: Readonly<Record<number, NetworkProfile>> = {
+  [ANVIL_CHAIN_ID]: anvilNetwork,
+  [ARC_TESTNET_CHAIN_ID]: arcTestnetNetwork,
+};
+
+export function networkFor(chainId: number): NetworkProfile {
+  const found = networks[chainId];
+  if (!found) throw new UnknownNetworkError(chainId);
+  return found;
+}
+
 export class UnknownDeploymentError extends Error {
   constructor(public readonly chainId: number) {
     super(`No Square deployment is known for chain ${chainId}`);

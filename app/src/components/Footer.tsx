@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Logo } from "./Logo";
 import { ArcNetworkMark } from "./marks";
-import { activeChain, DOCS_URL, explorerUrl, REPO_URL, rpcUrl, SITE_URL } from "@/lib/wagmi";
+import { activeChain, DOCS_URL, explorerUrl, isArcNetwork, REPO_URL, rpcUrl, SITE_URL } from "@/lib/wagmi";
 
 const columnTitle = "text-caption font-medium text-carbon";
 const item = "text-caption text-graphite transition-colors hover:text-carbon";
@@ -51,7 +51,7 @@ export function Footer() {
         <div className="flex flex-col gap-3">
           <p className={columnTitle}>Network</p>
           <p className="flex items-center gap-2 text-caption text-graphite">
-            {activeChain.id === 5042002 ? <ArcNetworkMark className="size-4" /> : null}
+            {isArcNetwork ? <ArcNetworkMark className="size-4" /> : null}
             {activeChain.name}
           </p>
           <p className="text-caption tabular-nums text-graphite">Chain id {activeChain.id}</p>

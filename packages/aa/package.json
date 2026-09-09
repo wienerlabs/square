@@ -24,6 +24,7 @@
     "measure:live": "tsx scripts/measure-live.ts"
   },
   "dependencies": {
+    "@squaresdk/core": "file:../core",
     "viem": "^2.21.0"
   },
   "devDependencies": {

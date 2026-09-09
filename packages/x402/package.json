@@ -23,6 +23,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@squaresdk/core": "file:../core",
     "@x402/core": "2.25.0",
     "@x402/evm": "2.25.0",
     "@x402/fetch": "2.25.0",
