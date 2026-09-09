@@ -59,8 +59,30 @@ reading the deployer and the actor set from `~/.square/*.env`. The redeploy of
 
 Every parameter is an environment variable with a documented default
 (`script/DeploySettlement.s.sol`); nothing is hard-coded. The script writes
-`deployments/<chainId>.json`, which `@squaresdk/core` embeds. Ownership passes
-to `OWNER` (a Safe) when it differs from the deployer; the deployer keeps nothing.
+`deployments/<chainId>.json`, which `@squaresdk/core` embeds.
+`MIN_REPUTATION_BUDGET` (default 1 USDC) is the smallest budget for which the
+hook writes positive ERC-8004 feedback; the trusted evaluator for that feedback
+is the `KeeperEvaluator` the script deploys.
+
+Ownership is offered, not passed. When `OWNER` differs from the deployer the
+script calls `transferOwnership(OWNER)` on `SquareJob`, `KeeperEvaluator`,
+`Arbitration` and `SquareHook`, and all four are `Ownable2Step`: the deployer
+stays the owner until `OWNER` calls `acceptOwnership()` on each of them. Until
+that second step the deployer can still whitelist hooks, move the fee treasury
+and install a compliance module, so the accept calls belong in the same
+runbook as the deploy, and the deploy log prints the reminder.
+
+## Superseding a deployment
+
+A redeploy leaves the previous contracts on chain with their balances. Before
+the old addresses are dropped from the SDK and the docs:
+
+1. Finalize or reject every job still `Submitted` on the old `KeeperEvaluator`
+   (`finalize` is permissionless), so no escrow stays in the old kernel.
+2. Have every account with `withdrawable(account) > 0` on the old `SquareJob`
+   and the old `Arbitration` call `withdraw()`; the deploy record lists the
+   accounts that did and the balances that remain claimable.
+3. Record the transactions in `docs/deploy/redeploy-<date>.md`.
 
 A dry run against a fork of the testnet with the real ERC-8004 registries is
 `packages/core/test/fork.test.ts`. It escrows an EIP-3009 mock instead of the

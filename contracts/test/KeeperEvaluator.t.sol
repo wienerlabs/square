@@ -230,4 +230,46 @@ contract KeeperEvaluatorTest is BaseTest {
         emit log_named_uint("finalize gas (hooked, reputation + validation written)", used);
         assertLt(used, 600_000);
     }
+
+    function test_challengeEndsAt_isZeroForAJobItDoesNotEvaluate() public {
+        vm.prank(client);
+        uint256 jobId = kernel.createJob(provider, stranger, expiry(), "", address(0));
+        vm.prank(provider);
+        kernel.setBudget(jobId, BUDGET, "");
+        vm.prank(client);
+        kernel.fund(jobId, BUDGET, "");
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, "");
+        assertEq(keeper.challengeEndsAt(jobId), 0, "no window for a job another evaluator settles");
+    }
+
+    function test_setFinalizeGrace_versionsTheGraceWithTheWindows() public {
+        uint48 before = uint48(block.timestamp);
+        vm.warp(block.timestamp + 1 hours);
+        vm.prank(owner);
+        keeper.setFinalizeGrace(2 hours);
+        assertEq(keeper.finalizeGrace(), 2 hours);
+        assertEq(keeper.currentWindow().finalizeGrace, 2 hours);
+        assertEq(keeper.currentWindow().challengeWindow, CHALLENGE_WINDOW, "the windows carry over");
+        assertEq(keeper.windowFor(before).finalizeGrace, FINALIZE_GRACE, "earlier jobs keep their grace");
+        assertEq(keeper.settlementHorizon(), CHALLENGE_WINDOW + DISPUTE_WINDOW + 2 hours);
+        vm.expectRevert(IKeeperEvaluator.ZeroWindow.selector);
+        vm.prank(owner);
+        keeper.setFinalizeGrace(0);
+    }
+
+    function test_finalizeDecided_refusesASplitItCannotRoute() public {
+        uint256 jobId = submittedJob(BUDGET, address(0));
+        vm.prank(client);
+        keeper.dispute(jobId, bytes32(0));
+        bytes32 hash = arbitration.resolutionHash(jobId, IArbitration.Outcome.Complete, 4_000);
+        vm.mockCall(
+            address(arbitration),
+            abi.encodeWithSelector(IArbitration.decision.selector, jobId),
+            abi.encode(IArbitration.Outcome.Complete, uint16(4_000), hash)
+        );
+        vm.expectRevert(IKeeperEvaluator.SplitNeedsAPayoutResolver.selector);
+        keeper.finalizeDecided(jobId, "");
+        vm.clearMockedCalls();
+    }
 }

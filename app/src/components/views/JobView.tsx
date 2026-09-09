@@ -668,8 +668,8 @@ export function JobView() {
                 title="Buy the receivable"
                 label="Buy claim"
                 buttonLabel={`Buy for ${formatUsdc(listing.price)} USDC`}
-                description={`Pays the seller ${formatUsdc(listing.price)} USDC for a face value of ${formatUsdc(listing.faceValue)} USDC. An approval is sent first if the allowance is short.`}
-                send={(client) => client.buyClaim(id)}
+                description={`Pays the seller ${formatUsdc(listing.price)} USDC for a face value of ${formatUsdc(listing.faceValue)} USDC. The transaction is bound to this price and reverts if the seller relists at another one. An approval is sent first if the allowance is short.`}
+                send={(client) => client.buyClaim(id, { expectedPrice: listing.price })}
               />
             ) : null}
             {showCancel ? (

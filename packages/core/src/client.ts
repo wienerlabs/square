@@ -439,12 +439,16 @@ export class SquareClient {
     });
   }
 
-  async buyClaim(jobId: bigint, options: { autoApprove?: boolean } = {}): Promise<TransactionResult> {
-    if (options.autoApprove ?? true) {
-      const listing = await this.listing(jobId);
-      await this.ensureAllowance(this.deployment.claimMarket, listing.price);
-    }
-    return this.write({ abi: claimMarketAbi, address: this.deployment.claimMarket, functionName: "buy", args: [jobId] });
+  async buyClaim(jobId: bigint, options: { autoApprove?: boolean; expectedPrice?: bigint } = {}): Promise<TransactionResult> {
+    const listing = await this.listing(jobId);
+    const expectedPrice = options.expectedPrice ?? listing.price;
+    if (options.autoApprove ?? true) await this.ensureAllowance(this.deployment.claimMarket, expectedPrice);
+    return this.write({
+      abi: claimMarketAbi,
+      address: this.deployment.claimMarket,
+      functionName: "buy",
+      args: [jobId, expectedPrice],
+    });
   }
 
   async cancelClaim(jobId: bigint): Promise<TransactionResult> {

@@ -7,6 +7,7 @@ import {IClaimMarket} from "../src/interfaces/IClaimMarket.sol";
 import {IArbitration} from "../src/interfaces/IArbitration.sol";
 import {MockReputationRegistry} from "./mocks/MockRegistries.sol";
 import {ClaimMarket} from "../src/ClaimMarket.sol";
+import {MaliciousHook} from "./mocks/MaliciousHook.sol";
 import {SquareHook} from "../src/SquareHook.sol";
 
 contract ClaimMarketTest is BaseTest {
@@ -22,7 +23,7 @@ contract ClaimMarketTest is BaseTest {
     function _sold() internal returns (uint256 jobId) {
         jobId = _listed();
         vm.prank(buyer);
-        market.buy(jobId);
+        market.buy(jobId, PRICE);
     }
 
     function test_list_onlyProviderOnlySubmittedOnlyOptimistic() public {
@@ -95,7 +96,7 @@ contract ClaimMarketTest is BaseTest {
         vm.expectEmit(true, true, true, true);
         emit IClaimMarket.ClaimBought(jobId, buyer, provider, PRICE);
         vm.prank(buyer);
-        market.buy(jobId);
+        market.buy(jobId, PRICE);
         assertEq(usdc.balanceOf(provider), sellerBefore + PRICE, "the agent has its money now");
         assertEq(usdc.balanceOf(buyer), buyerBefore - PRICE);
         assertEq(market.payeeOf(jobId), buyer);
@@ -104,17 +105,17 @@ contract ClaimMarketTest is BaseTest {
         market.cancel(jobId);
         vm.expectRevert(IClaimMarket.NotListed.selector);
         vm.prank(stranger);
-        market.buy(jobId);
+        market.buy(jobId, PRICE);
     }
 
     function test_buy_buyerCannotBeSellerOrClient() public {
         uint256 jobId = _listed();
         vm.expectRevert(IClaimMarket.BuyerIsSeller.selector);
         vm.prank(provider);
-        market.buy(jobId);
+        market.buy(jobId, PRICE);
         vm.expectRevert(IClaimMarket.BuyerIsClient.selector);
         vm.prank(client);
-        market.buy(jobId);
+        market.buy(jobId, PRICE);
     }
 
     function test_buy_blockedWhileDisputed() public {
@@ -123,7 +124,7 @@ contract ClaimMarketTest is BaseTest {
         keeper.dispute(jobId, bytes32(0));
         vm.expectRevert(IClaimMarket.Disputed.selector);
         vm.prank(buyer);
-        market.buy(jobId);
+        market.buy(jobId, PRICE);
     }
 
     function test_cancel_onlySellerOnlyListed() public {
@@ -224,13 +225,20 @@ contract ClaimMarketTest is BaseTest {
         market.list(jobId, PRICE);
         vm.expectRevert(IClaimMarket.NotListed.selector);
         vm.prank(buyer);
-        market.buy(jobId);
+        market.buy(jobId, PRICE);
     }
 
     function test_list_revertsWhenTheResolverReadsAnotherMarket() public {
         ClaimMarket other = new ClaimMarket(address(kernel), address(keeper));
         SquareHook foreign = new SquareHook(
-            address(kernel), address(other), address(identity), address(reputation), address(validation), owner
+            address(kernel),
+            address(other),
+            address(identity),
+            address(reputation),
+            address(validation),
+            owner,
+            address(keeper),
+            MIN_REPUTATION_BUDGET
         );
         vm.prank(owner);
         kernel.setHookWhitelist(address(foreign), true);
@@ -255,5 +263,36 @@ contract ClaimMarketTest is BaseTest {
         assertEq(kernel.withdrawable(provider), netOf(BUDGET), "the provider is paid exactly once");
         assertEq(usdc.balanceOf(buyer), buyerBefore, "nobody could buy a claim the kernel would not honour");
         assertEq(usdc.balanceOf(provider), 0);
+    }
+
+    function test_buy_bindsTheBuyerToTheListedPrice() public {
+        uint256 jobId = _listed();
+        uint64 raised = uint64(984 * USDC);
+        vm.prank(provider);
+        market.cancel(jobId);
+        vm.prank(provider);
+        market.list(jobId, raised);
+        uint256 buyerBefore = usdc.balanceOf(buyer);
+        vm.expectRevert(abi.encodeWithSelector(IClaimMarket.PriceMismatch.selector, PRICE, raised));
+        vm.prank(buyer);
+        market.buy(jobId, PRICE);
+        assertEq(usdc.balanceOf(buyer), buyerBefore, "the buyer paid nothing at a price they did not agree to");
+        vm.prank(buyer);
+        market.buy(jobId, raised);
+        assertEq(usdc.balanceOf(buyer), buyerBefore - raised);
+        assertEq(market.payeeOf(jobId), buyer);
+    }
+
+    function test_liveJob_capsTheGasOfTheRoutingProbe() public {
+        MaliciousHook rogue = new MaliciousHook(address(kernel));
+        vm.prank(owner);
+        kernel.setHookWhitelist(address(rogue), true);
+        uint256 jobId = submittedJob(BUDGET, address(rogue));
+        rogue.setMode(MaliciousHook.Mode.Loop);
+        uint256 gasBefore = gasleft();
+        vm.expectRevert(IClaimMarket.PayoutNotRouted.selector);
+        vm.prank(provider);
+        market.list{gas: 3_000_000}(jobId, PRICE);
+        assertLt(gasBefore - gasleft(), 400_000, "a looping probe is cut off at the cap instead of eating the call");
     }
 }

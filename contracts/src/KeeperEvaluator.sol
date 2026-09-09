@@ -15,7 +15,6 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
 
     ISquareJob private immutable _squareJob;
     IArbitration private _arbitration;
-    uint48 private _finalizeGrace;
     Window[] private _windows;
     mapping(uint256 jobId => DisputeRef) private _disputes;
 
@@ -33,16 +32,16 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
     ) Ownable(initialOwner) {
         if (squareJob_ == address(0)) revert ZeroAddress();
         _squareJob = ISquareJob(squareJob_);
-        _pushWindow(0, challengeWindow, disputeWindow);
-        _setFinalizeGrace(finalizeGrace_);
+        _pushWindow(0, challengeWindow, disputeWindow, finalizeGrace_);
     }
 
     function configureWindows(uint48 challengeWindow, uint48 disputeWindow) external onlyOwner {
-        _pushWindow(uint48(block.timestamp), challengeWindow, disputeWindow);
+        _pushWindow(uint48(block.timestamp), challengeWindow, disputeWindow, _current().finalizeGrace);
     }
 
     function setFinalizeGrace(uint48 finalizeGrace_) external onlyOwner {
-        _setFinalizeGrace(finalizeGrace_);
+        Window storage window = _current();
+        _pushWindow(uint48(block.timestamp), window.challengeWindow, window.disputeWindow, finalizeGrace_);
     }
 
     function setArbitration(address arbitration_) external onlyOwner {
@@ -93,6 +92,9 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
         if (ref.resolved) revert AlreadyResolved();
         (IArbitration.Outcome outcome, uint16 providerBps, bytes32 resolutionHash) = _arbitration.decision(jobId);
         if (outcome != IArbitration.Outcome.Complete && outcome != IArbitration.Outcome.Lapsed) revert NotDecided();
+        if (providerBps != FULL_BPS && !_squareJob.getJobRecord(jobId).hookResolvesPayout) {
+            revert SplitNeedsAPayoutResolver();
+        }
 
         ref.resolved = true;
         _squareJob.complete(jobId, resolutionHash, abi.encode(providerBps, complianceProof));
@@ -102,12 +104,12 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
     }
 
     function settlementHorizon() external view returns (uint48) {
-        Window storage window = _windows[_windows.length - 1];
-        return window.challengeWindow + window.disputeWindow + _finalizeGrace;
+        Window storage window = _current();
+        return window.challengeWindow + window.disputeWindow + window.finalizeGrace;
     }
 
     function finalizeGrace() external view returns (uint48) {
-        return _finalizeGrace;
+        return _current().finalizeGrace;
     }
 
     function supportsInterface(bytes4 interfaceId) public view override(ERC165, IERC165) returns (bool) {
@@ -124,6 +126,7 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
 
     function challengeEndsAt(uint256 jobId) external view returns (uint48) {
         ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
+        if (job.evaluator != address(this)) return 0;
         if (job.submittedAt == 0) return 0;
         return job.submittedAt + windowFor(job.submittedAt).challengeWindow;
     }
@@ -165,17 +168,23 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
         if (fee > 0) _squareJob.withdrawTo(msg.sender, fee);
     }
 
-    function _setFinalizeGrace(uint48 finalizeGrace_) private {
-        if (finalizeGrace_ == 0) revert ZeroWindow();
-        _finalizeGrace = finalizeGrace_;
-        emit FinalizeGraceConfigured(finalizeGrace_);
+    function _current() private view returns (Window storage) {
+        return _windows[_windows.length - 1];
     }
 
-    function _pushWindow(uint48 effectiveFrom, uint48 challengeWindow, uint48 disputeWindow) private {
-        if (challengeWindow == 0 || disputeWindow == 0) revert ZeroWindow();
-        _windows.push(Window({
-            effectiveFrom: effectiveFrom, challengeWindow: challengeWindow, disputeWindow: disputeWindow
-        }));
+    function _pushWindow(uint48 effectiveFrom, uint48 challengeWindow, uint48 disputeWindow, uint48 finalizeGrace_)
+        private
+    {
+        if (challengeWindow == 0 || disputeWindow == 0 || finalizeGrace_ == 0) revert ZeroWindow();
+        _windows.push(
+            Window({
+                effectiveFrom: effectiveFrom,
+                challengeWindow: challengeWindow,
+                disputeWindow: disputeWindow,
+                finalizeGrace: finalizeGrace_
+            })
+        );
         emit WindowsConfigured(effectiveFrom, challengeWindow, disputeWindow);
+        emit FinalizeGraceConfigured(finalizeGrace_);
     }
 }

@@ -41,6 +41,7 @@ interface ISquareJob {
         address payee;
         bytes32 deliverable;
         string description;
+        uint48 settlementHorizon;
     }
 
     event JobCreated(
@@ -76,6 +77,8 @@ interface ISquareJob {
     event PlatformFeeAccrued(uint256 indexed jobId, address indexed treasury, uint256 amount);
     event Withdrawn(address indexed account, address indexed to, uint256 amount);
     event FeesUpdated(uint16 platformFeeBP, uint16 evaluatorFeeBP, address treasury);
+    event HookFailed(uint256 indexed jobId, address indexed hook, bytes4 selector, bytes reason);
+    event PayoutUnresolvable(uint256 indexed jobId, address indexed hook);
 
     error InvalidJob();
     error WrongStatus();
@@ -100,6 +103,7 @@ interface ISquareJob {
     error InsufficientBalance();
     error DescriptionTooLong(uint256 maxLength);
     error SettledByEvaluator();
+    error ProviderIsEvaluator();
 
     function createJob(
         address provider,
