@@ -210,10 +210,20 @@ jobs:
   end-to-end:
     name: end-to-end (policy → proof → Arc)
     runs-on: ubuntu-latest
-    # A job that reaches a network needs a ceiling. The first run of this one
-    # hung for hours on a compiler download inside a scratch Foundry project and
-    # would have held a runner until the six-hour default. Fifteen minutes is
-    # generous: the whole thing takes about three.
+    # A job that reaches a network needs a ceiling, and this one has now used it
+    # twice for two different reasons.
+    #
+    # First it sat for hours on a compiler download inside a scratch Foundry
+    # project; that is fixed by compiling in this project instead. Then it hit
+    # the ceiling every run for a reason the ceiling itself made visible: the
+    # script finished in under a minute, printed its result, and never exited,
+    # because snarkjs leaves a worker pool up after fullProve. At six hours that
+    # read as a hang; at fifteen minutes it read as a process that had finished
+    # and not left, which is what it was.
+    #
+    # Measured, not estimated: the job takes 55 seconds. Fifteen minutes is a
+    # ceiling, not a budget — an earlier version of this comment called it
+    # generous and put the work at three minutes, and both were guesses.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0

@@ -41,6 +41,7 @@ imported rather than copied.
 $ node contracts/script/prove-and-verify-on-arc.mjs
 rpc      https://rpc.testnet.arc.io
 chain id 5042002
+client   arc/v1
 block    61216037
 
 verifier  the repository contract, keyed to this build, state-overridden at a
@@ -68,7 +69,7 @@ Arc gas for the verification: 281,596
   verify             71 ms
   total            1307 ms
 
-Policy committed, proof built from it, Arc accepted it.
+Policy committed, proof built from it, accepted by chain 5042002 (arc/v1).
 ```
 
 ## Measured
@@ -129,6 +130,52 @@ rebuilding. It would also change a security-adjacent script and the disclosure
 narrative, and [#16][i16] replaces the key outright, so it is left alone here
 and recorded as an option rather than taken.
 
+## Which chain answered
+
+The script's only claim is that Arc accepted the proof, and `ARC_RPC_URL` points
+wherever it is told, so the endpoint is checked before the claim is made.
+
+The chain id alone does not check it, and that is the part worth being careful
+about. This repository runs anvil forks of Arc with `--chain-id 5042002`
+([`packages/aa/scripts/fork.ts:119`](../../packages/aa/scripts/fork.ts),
+[`contracts/README.md`](../../contracts/README.md)), so a fork answers the id
+identically. Measured against both, side by side:
+
+| | Arc | `anvil --fork-url` Arc |
+|---|---|---|
+| `eth_chainId` | `5042002` | `5042002` — **identical** |
+| `web3_clientVersion` | `arc/v1` | `anvil/v1.5.1` |
+| `anvil_nodeInfo` | `method not supported` | returns node state |
+
+So the id is necessary and not sufficient, and what separates the two is whether
+the node has a development namespace. A fork is exactly what this must not
+accept: it runs revm, and the whole point is that Arc's own `0x06`/`0x07`/`0x08`
+agree with revm's rather than assuming it.
+
+Both rejections are exercised:
+
+```console
+$ ARC_RPC_URL=http://127.0.0.1:8599 node script/prove-and-verify-on-arc.mjs   # anvil fork of Arc
+Error: http://127.0.0.1:8599 answers anvil_nodeInfo, so it is a development
+node — very likely an anvil fork of Arc, which reports Arc's chain id and runs
+revm. This script exists to check Arc's own precompiles, which a fork does not
+have.
+exit=1
+
+$ ARC_RPC_URL=http://127.0.0.1:8598 node script/prove-and-verify-on-arc.mjs   # vanilla anvil
+exit=1
+```
+
+The first of those would have passed before [#127][i127] raised this: the chain
+id matched.
+
+**What this does not do is prove the endpoint is Arc.** A hostile RPC can lie
+about all three answers. It catches the realistic failure — an `ARC_RPC_URL`
+left pointing at somebody's local fork — and the closing line names the chain
+and the client that answered, so that is not taken on trust either.
+
+[i127]: https://github.com/wienerlabs/square/issues/127
+
 ## The negative control
 
 `ok    a substituted policy commitment is rejected` is the half that makes the
@@ -156,7 +203,7 @@ to the same value, so the control cannot pass vacuously.
 
 ## In CI
 
-`circuits.yml`, job `end-to-end (policy → proof → Arc)`. It is deliberately
+`circuits.yml`, job `end-to-end (policy → proof → Arc)`, 55 seconds. It is deliberately
 **not** a required status check yet: it is new, and it reaches a young testnet,
 and the rule this repository set for itself is that a check whose red is a
 statement about Arc being reachable should not block unrelated merges. Promote

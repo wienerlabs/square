@@ -45,6 +45,7 @@ const RPC = process.env.ARC_RPC_URL ?? 'https://rpc.testnet.arc.io';
 // verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[8])
 const SELECTOR = '0xc9219a7a';
 const SCRATCH = '0x00000000000000000000000000000000000c0de0';
+const ARC_TESTNET_CHAIN_ID = 5042002;
 const TRUE = `0x${'0'.repeat(63)}1`;
 const FALSE = `0x${'0'.repeat(64)}`;
 
@@ -231,9 +232,55 @@ async function main() {
     );
   }
 
+  // Which chain answered, checked rather than printed.
+  //
+  // This script's only claim is "Arc accepted it", and ARC_RPC_URL can point
+  // anywhere, so the endpoint has to be established before the claim means
+  // anything. square#127 raised the same gap in verify-on-arc.mjs.
+  //
+  // The chain id alone does not establish it, and that is the part worth being
+  // careful about. This repository runs anvil forks of Arc with
+  // `--chain-id 5042002` — packages/aa/scripts/fork.ts:119 and
+  // contracts/README.md:72 — so a fork answers the id identically. Measured
+  // against both, side by side:
+  //
+  //                        Arc            anvil --fork-url Arc
+  //   eth_chainId          5042002        5042002          identical
+  //   web3_clientVersion   arc/v1         anvil/v1.5.1     differs
+  //   anvil_nodeInfo       unsupported    returns state    differs
+  //
+  // So the id is necessary and not sufficient, and what separates the two is
+  // whether the node has a development namespace. A fork is exactly what this
+  // script must not accept: it runs revm, and the whole point here is that
+  // Arc's own 0x06/0x07/0x08 agree with revm's rather than assuming it.
+  //
+  // What this does not do is prove the endpoint is Arc. A hostile RPC can lie
+  // about all three. It catches the realistic failure — an ARC_RPC_URL left
+  // pointing at somebody's local fork — and the final line names what answered
+  // so the reader is not taking that on trust either.
   const chainId = Number(await rpc('eth_chainId', []));
+  if (chainId !== ARC_TESTNET_CHAIN_ID) {
+    throw new Error(
+      `${RPC} is chain ${chainId}, not Arc Testnet (${ARC_TESTNET_CHAIN_ID}). `
+      + 'Nothing below would be a statement about Arc.',
+    );
+  }
+
+  const client = await rpc('web3_clientVersion', []).catch(() => 'unknown');
+  const isSimulator = await rpc('anvil_nodeInfo', []).then(() => true, () => false);
+  if (isSimulator) {
+    throw new Error(
+      `${RPC} answers anvil_nodeInfo, so it is a development node — very likely `
+      + 'an anvil fork of Arc, which reports Arc\'s chain id and runs revm. This '
+      + 'script exists to check Arc\'s own precompiles, which a fork does not '
+      + 'have.',
+    );
+  }
+
   const block = Number(await rpc('eth_blockNumber', []));
-  process.stdout.write(`rpc      ${RPC}\nchain id ${chainId}\nblock    ${block}\n`);
+  process.stdout.write(
+    `rpc      ${RPC}\nchain id ${chainId}\nclient   ${client}\nblock    ${block}\n`,
+  );
   process.stdout.write(deployed
     ? `verifier ${deployed} (deployed — must have been generated from this exact key)\n\n`
     : '\nverifier  the repository contract, keyed to this build, state-overridden at a\n'
@@ -319,7 +366,9 @@ async function main() {
     process.stdout.write(`${failures} check(s) failed.\n`);
     process.exit(1);
   }
-  process.stdout.write('Policy committed, proof built from it, Arc accepted it.\n');
+  process.stdout.write(
+    `Policy committed, proof built from it, accepted by chain ${chainId} (${client}).\n`,
+  );
 }
 
 await main();
