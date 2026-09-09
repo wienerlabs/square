@@ -20,7 +20,8 @@ export function encodeSubmitOptParams(params: SubmitOptParams): Hex {
   return encodeAbiParameters(submitParams, [params.agentId, params.validationRequestHash ?? ZERO_HASH]);
 }
 
-export function decodeSubmitOptParams(data: Hex): { agentId: bigint; validationRequestHash: Hex } {
+export function decodeSubmitOptParams(data: Hex): { agentId: bigint; validationRequestHash: Hex } | null {
+  if (data === "0x") return null;
   const [agentId, validationRequestHash] = decodeAbiParameters(submitParams, data);
   return { agentId, validationRequestHash };
 }
