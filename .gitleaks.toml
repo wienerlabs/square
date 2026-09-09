@@ -4,9 +4,13 @@
 # tek tek yaziliyor; "test dosyalarini atla" bicimindeki genis bir kural
 # bilerek yok, cunku gercek bir sir de bir test dosyasinda durabilir.
 #
-# Not: bu surumde [allowlist] altindaki `regexes` alani `useDefault = true`
-# ile birlestiginde uygulanmiyor; deger bazinda istisna yerine yol bazinda
-# istisna yazmak zorunda kaldik. Yeni bir yol eklerken gerekcesini de yaz.
+# Not: tekil [allowlist] blogundaki `regexes` alani `useDefault = true` ile
+# birlestiginde uygulanmiyor. Cogul [[allowlists]] + `regexTarget` calisiyor —
+# square#45'te dogrulandi, negatif kontrolle: ayni dosyaya konan gercek bir sir
+# hala yakalaniyor. Deger bazinda yazilabiliyorsa oyle yaz, cunku yol bazinda
+# istisna o dosyaya sonradan girecek her seyi de gorunmez yapiyor.
+#
+# Yeni bir istisna eklerken gerekcesini de yaz.
 
 [extend]
 useDefault = true
