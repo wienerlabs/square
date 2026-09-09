@@ -5,6 +5,7 @@ import {
   decodeErrorResult,
   http,
   keccak256,
+  pad,
   parseEther,
   parseUnits,
   toHex,
@@ -29,13 +30,24 @@ import {
   type SquareEnv,
 } from "../scripts/square.js";
 import { simpleAccountAbi } from "../src/abi.js";
+import {
+  callGasLimitFromTransactionEstimate,
+  executionGasOfTransactionEstimate,
+  intrinsicCalldataGas,
+  INTRINSIC_TRANSACTION_GAS,
+} from "../src/callGasLimit.js";
+import { SIMPLE_ACCOUNT_IMPLEMENTATION_V07 } from "../src/constants.js";
 import { createSelfBundler, type SelfBundler } from "../src/selfBundler.js";
 import {
   CallSimulationRevertedError,
   EntryPointMismatchError,
   UserOperationRejectedError,
 } from "../src/errors.js";
-import { toSimpleSmartAccount, type SimpleSmartAccount } from "../src/simpleAccount.js";
+import {
+  toSimpleSmartAccount,
+  SIMPLE_ACCOUNT_PROXY_DISPATCH_GAS,
+  type SimpleSmartAccount,
+} from "../src/simpleAccount.js";
 
 const rpcUrl = inject("rpcUrl");
 const deployment = inject("deployment");
@@ -147,6 +159,52 @@ describe("an agent smart account accepts and submits a job through the self-bund
     const balanceAfter = await publicClient.getBalance({ address: secondKeeper.account.address });
     const paidForGas = result.receipt.gasUsed * result.receipt.effectiveGasPrice;
     expect(balanceAfter).toBe(balanceBefore - paidForGas + result.actualGasCost);
+  });
+
+  it("callGasLimit is the execution gas of the call times the safety factor, not the whole-transaction estimate", async () => {
+    const pricedJob = await createJob(env, client, account.address);
+    const calls = [{ to: deployment.SquareJob, data: encodeSetBudget(pricedJob, budget) }];
+    const callData = await account.encodeCalls(calls);
+    const estimate = await publicClient.estimateGas({
+      account: bundler.entryPointAddress,
+      to: account.address,
+      data: callData,
+    });
+
+    const unsigned = await bundler.prepareUserOperation(account, calls, fees);
+
+    expect(await account.isDeployed()).toBe(true);
+    expect(estimate).toBeGreaterThan(INTRINSIC_TRANSACTION_GAS + intrinsicCalldataGas(callData));
+    expect(unsigned.callGasLimit).toBe(callGasLimitFromTransactionEstimate(estimate, callData));
+    expect(unsigned.callGasLimit).toBeLessThan(estimate);
+    expect(unsigned.callGasLimit).toBeGreaterThan(executionGasOfTransactionEstimate(estimate, callData));
+  });
+
+  it("an undeployed account is priced the same way, on top of the proxy dispatch allowance", async () => {
+    const fresh = await toSimpleSmartAccount({ client: publicClient, owner, salt: 11n });
+    const calls = [{ to: owner.address, data: "0x" as Hex }];
+    const callData = await fresh.encodeCalls(calls);
+    const code = await publicClient.getCode({ address: SIMPLE_ACCOUNT_IMPLEMENTATION_V07 });
+    const estimate = await publicClient.estimateGas({
+      account: bundler.entryPointAddress,
+      to: fresh.address,
+      data: callData,
+      stateOverride: [
+        {
+          address: fresh.address,
+          code: code as Hex,
+          stateDiff: [{ slot: toHex(0, { size: 32 }), value: pad(owner.address, { size: 32 }) }],
+        },
+      ],
+    });
+
+    const unsigned = await bundler.prepareUserOperation(fresh, calls, fees);
+
+    expect(await fresh.isDeployed()).toBe(false);
+    expect(unsigned.callGasLimit).toBe(
+      callGasLimitFromTransactionEstimate(estimate + SIMPLE_ACCOUNT_PROXY_DISPATCH_GAS, callData),
+    );
+    expect(unsigned.callGasLimit).toBeLessThan(estimate + SIMPLE_ACCOUNT_PROXY_DISPATCH_GAS);
   });
 
   it("a UserOperation signed by a non-owner is rejected by the EntryPoint with AA24", async () => {
