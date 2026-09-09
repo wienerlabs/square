@@ -39,8 +39,14 @@ async function main(): Promise<void> {
   const logger = createLogger({ service: "square-keeper", version });
   const metrics = createMetrics({ service: "square-keeper" });
   const databaseUrl = process.env["DATABASE_URL"];
+  const ephemeralMirror = !databaseUrl;
   const db = databaseUrl ? pgDatabase(databaseUrl) : await pgliteDatabase();
-  if (!databaseUrl) await migrate(db, MIGRATIONS_DIR, "up");
+  if (ephemeralMirror) {
+    await migrate(db, MIGRATIONS_DIR, "up");
+    logger.warn("keeper.ephemeral_mirror", {
+      reason: "DATABASE_URL is not set, so the job mirror lives in this process, no indexer writes to it and no job will ever be finalized",
+    });
+  }
 
   const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
   const client = createSquareClient({ publicClient, deployment, walletClient: createWalletClient({ chain, transport: http(rpcUrl), account }) });
@@ -54,11 +60,23 @@ async function main(): Promise<void> {
     defaultFinalizeGas: BigInt(integer("FINALIZE_GAS", 450_000)),
     defaultFinalizeDecidedGas: BigInt(integer("FINALIZE_DECIDED_GAS", 500_000)),
     recordExpiries: process.env["RECORD_EXPIRIES"] !== "false",
+    ephemeralMirror,
+    retryPolicy: {
+      baseDelaySeconds: BigInt(integer("RETRY_BASE_SECONDS", 60)),
+      maxDelaySeconds: BigInt(integer("RETRY_MAX_SECONDS", 3_600)),
+      giveUpAfter: integer("RETRY_GIVE_UP_AFTER", 6),
+      maxJournalRowsPerJob: integer("RETRY_MAX_JOURNAL_ROWS", 3),
+    },
   });
 
   const alerting = createAlerting({
     service: "square-keeper",
-    rules: [keeperStalled({ maxPendingAgeSeconds: integer("MAX_PENDING_AGE_SECONDS", 600) })],
+    rules: [
+      keeperStalled({
+        maxPendingAgeSeconds: integer("MAX_PENDING_AGE_SECONDS", 600),
+        maxTickAgeSeconds: integer("MAX_TICK_AGE_SECONDS", 300),
+      }),
+    ],
     notify: process.env["ALERT_WEBHOOK_URL"] ? webhookNotifier(process.env["ALERT_WEBHOOK_URL"]) : logNotifier(logger),
   });
   const health = createHealth({
@@ -67,10 +85,19 @@ async function main(): Promise<void> {
     checks: {
       database: { check: async () => ({ ok: (await db.query("select 1")).rowCount === 1 }), critical: true },
       rpc: { check: async () => ({ ok: (await publicClient.getChainId()) === chainId }), critical: true },
-      balance: async () => {
-        const balance = await publicClient.getBalance({ address: account.address });
-        return { ok: balance > 10n ** 16n, detail: `${balance} wei of native USDC for gas` };
+      balance: {
+        check: async () => {
+          const balance = await publicClient.getBalance({ address: account.address });
+          return { ok: balance > 10n ** 16n, detail: `${balance} wei of native USDC for gas` };
+        },
+        critical: true,
       },
+      mirror: () => ({
+        ok: !ephemeralMirror,
+        detail: ephemeralMirror
+          ? "DATABASE_URL is not set, the mirror is private to this process and stays empty"
+          : "reading the mirror an indexer writes",
+      }),
     },
   });
 
@@ -84,9 +111,18 @@ async function main(): Promise<void> {
   });
 
   const controller = new AbortController();
+  const evaluateAlerts = async (): Promise<void> => {
+    const result = await alerting.evaluate({ ...metrics.snapshot() });
+    for (const failure of result.errors) {
+      metrics.recordAlertDispatchFailure(failure.rule, failure.stage);
+      logger.error("keeper.alert_dispatch_failed", { reason: `${failure.rule} failed at the ${failure.stage} stage: ${failure.error}` });
+    }
+  };
   const alertTimer = setInterval(() => {
-    void alerting.evaluate({ ...metrics.snapshot() });
-  }, 30_000);
+    void evaluateAlerts().catch((error: unknown) => {
+      logger.error("keeper.alert_cycle_failed", { error: error instanceof Error ? error.message : String(error) });
+    });
+  }, integer("ALERT_INTERVAL_MS", 30_000));
   const stop = (): void => {
     controller.abort();
     clearInterval(alertTimer);
