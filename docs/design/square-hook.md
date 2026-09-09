@@ -188,6 +188,15 @@ because its answer is the payee; when it cannot answer, `claimRefund` reopens
 after `expiredAt` and emits `PayoutUnresolvable`. The pre-settlement actions
 keep the strict call, so a wrong agent binding still reverts the submit.
 
+That trade is only defensible while something reads the event, so the reader is
+named here. **`services/indexer`** decodes both events as it applies a batch,
+logs `indexer.hook_write_failed` at `error` and counts them into
+`square_hook_write_failures_total{kind}` with `kind` set to `reputation` or
+`validation`. The indexer's alerting carries the `hookWriteFailures` rule from
+`packages/observability`, which fires on the first one rather than on a rate,
+because a registry that starts refusing writes is not a rate problem. The raw
+event stays queryable in `job_events` either way.
+
 `recordExpiry(jobId)` and every write path also guard with `recorded[jobId]`
 so one job yields at most one feedback entry.
 

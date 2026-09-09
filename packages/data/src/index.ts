@@ -11,7 +11,15 @@ export {
   type MigrationStatus,
 } from "./migrate.js";
 export { sweepAll, DEFAULT_RATE_LIMIT_WINDOW_MS, type SweepOptions, type SweepResult } from "./retention.js";
-export { hexToBytes, bytesToHex, type Hex, type Json } from "./codec.js";
+export {
+  hexToBytes,
+  bytesToHex,
+  stripNullCharacters,
+  hasNullCharacters,
+  NULL_CHARACTER_REPLACEMENT,
+  type Hex,
+  type Json,
+} from "./codec.js";
 export type { IndexedContract } from "./contracts.js";
 export * as jobs from "./repositories/jobs.js";
 export * as jobEvents from "./repositories/jobEvents.js";

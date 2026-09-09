@@ -183,20 +183,24 @@ export async function listInChallengeWindow(db: Database, chainId: number, now: 
   return rows.map(rowToJob);
 }
 
-export async function listFinalizable(db: Database, chainId: number, now: bigint): Promise<JobRecord[]> {
+export async function listFinalizable(db: Database, chainId: number, now: bigint, evaluator?: Hex): Promise<JobRecord[]> {
+  const filter = evaluator === undefined ? "" : " and evaluator = $3";
+  const params: unknown[] = evaluator === undefined ? [chainId, now.toString()] : [chainId, now.toString(), hexToBytes(evaluator)];
   const { rows } = await db.query<JobRow>(
     `select ${COLUMNS} from jobs
-     where chain_id = $1 and status = ${JOB_STATUS.submitted} and not disputed and challenge_end is not null and challenge_end <= $2
+     where chain_id = $1 and status = ${JOB_STATUS.submitted} and not disputed and challenge_end is not null and challenge_end <= $2${filter}
      order by challenge_end, job_id`,
-    [chainId, now.toString()],
+    params,
   );
   return rows.map(rowToJob);
 }
 
-export async function listDisputedSubmitted(db: Database, chainId: number): Promise<JobRecord[]> {
+export async function listDisputedSubmitted(db: Database, chainId: number, evaluator?: Hex): Promise<JobRecord[]> {
+  const filter = evaluator === undefined ? "" : " and evaluator = $2";
+  const params: unknown[] = evaluator === undefined ? [chainId] : [chainId, hexToBytes(evaluator)];
   const { rows } = await db.query<JobRow>(
-    `select ${COLUMNS} from jobs where chain_id = $1 and status = ${JOB_STATUS.submitted} and disputed order by job_id`,
-    [chainId],
+    `select ${COLUMNS} from jobs where chain_id = $1 and status = ${JOB_STATUS.submitted} and disputed${filter} order by job_id`,
+    params,
   );
   return rows.map(rowToJob);
 }

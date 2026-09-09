@@ -35,6 +35,30 @@ export function nullableBigIntParam(value: bigint | null): string | null {
   return value === null ? null : value.toString();
 }
 
+export const NULL_CHARACTER_REPLACEMENT = "\uFFFD";
+
+const NULL_CHARACTER = /\u0000/g;
+
+export function stripNullCharacters<T extends Json>(value: T): T {
+  if (typeof value === "string") return value.replace(NULL_CHARACTER, NULL_CHARACTER_REPLACEMENT) as T;
+  if (Array.isArray(value)) return value.map((entry) => stripNullCharacters(entry)) as T;
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key.replace(NULL_CHARACTER, NULL_CHARACTER_REPLACEMENT), stripNullCharacters(entry)]),
+    ) as T;
+  }
+  return value;
+}
+
+export function hasNullCharacters(value: Json): boolean {
+  if (typeof value === "string") return value.includes("\u0000");
+  if (Array.isArray(value)) return value.some((entry) => hasNullCharacters(entry));
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).some(([key, entry]) => key.includes("\u0000") || hasNullCharacters(entry));
+  }
+  return false;
+}
+
 export function jsonParam(value: Json): string {
-  return JSON.stringify(value);
+  return JSON.stringify(stripNullCharacters(value));
 }

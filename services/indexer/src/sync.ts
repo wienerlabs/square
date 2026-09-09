@@ -2,7 +2,7 @@ import type { Address, Hex, Log, PublicClient } from "viem";
 import { decodeSquareLogs, type SquareDeployment, type SquareEvent } from "@squaresdk/core";
 import { arbiterSets, checkpoints, claimListings, disputes, jobEvents, jobs, ledgerBalances, type Database, type IndexedContract } from "@squaresdk/data";
 import type { Logger, Metrics } from "@squaresdk/observability";
-import { applyEvent, emptyState, ledgerKey, type IndexerState } from "./reducer.js";
+import { applyEvent, cloneState, emptyState, ledgerKey, type IndexerState, type ReducerNotice } from "./reducer.js";
 
 const CONTRACTS: IndexedContract[] = ["SquareJob", "KeeperEvaluator", "Arbitration", "ClaimMarket", "SquareHook"];
 
@@ -27,7 +27,22 @@ export interface SyncResult {
   head: bigint;
   events: number;
   applied: number;
+  quarantined: number;
 }
+
+export type DeploymentChangePolicy = "fail" | "restart";
+
+export interface QuarantinedEvent {
+  contract: string;
+  eventName: string;
+  blockNumber: string;
+  logIndex: number;
+  txHash: string;
+  stage: "journal" | "reduce";
+  error: string;
+}
+
+export const MAX_TRACKED_QUARANTINE = 100;
 
 export interface IndexerOptions {
   db: Database;
@@ -38,6 +53,7 @@ export interface IndexerOptions {
   batchBlocks: bigint;
   logger: Logger;
   metrics?: Metrics;
+  onDeploymentChange?: DeploymentChangePolicy;
 }
 
 function toJson(value: unknown): unknown {
@@ -60,15 +76,21 @@ function emptyDirty(): Dirty {
 }
 
 export class Indexer {
-  readonly state: IndexerState = emptyState();
+  private current: IndexerState = emptyState();
   private readonly persistedLedger = new Map<string, bigint>();
   private readonly addresses: Address[];
+  private readonly quarantined: QuarantinedEvent[] = [];
   private cursor: bigint | null = null;
   private lastHead = 0n;
+  private windowsMissing = 0;
 
   constructor(private readonly options: IndexerOptions) {
     const d = options.deployment;
     this.addresses = [d.squareJob, d.keeperEvaluator, d.arbitration, d.claimMarket, d.squareHook];
+  }
+
+  get state(): IndexerState {
+    return this.current;
   }
 
   get lastIndexedBlock(): bigint | null {
@@ -79,15 +101,53 @@ export class Indexer {
     return this.lastHead;
   }
 
+  get quarantinedEvents(): readonly QuarantinedEvent[] {
+    return this.quarantined;
+  }
+
+  get missingWindowEvents(): number {
+    return this.windowsMissing;
+  }
+
   async start(): Promise<void> {
+    const redeployed = await this.deploymentChanges();
+    if (redeployed.length > 0) {
+      const summary = redeployed
+        .map((change) => `${change.contract} checkpointed at ${change.stored} but the deployment says ${change.current}`)
+        .join("; ");
+      if ((this.options.onDeploymentChange ?? "fail") === "fail") {
+        throw new Error(
+          `indexer checkpoint belongs to a different deployment on chain ${this.options.chainId}: ${summary}. ` +
+            "Point DATABASE_URL at a fresh database, or set ON_DEPLOYMENT_CHANGE=restart to reindex from START_BLOCK.",
+        );
+      }
+      this.options.logger.warn("indexer.deployment_changed", { chainId: this.options.chainId, reason: summary });
+      await this.replayJournal();
+      this.cursor = null;
+      this.options.logger.info("indexer.started", { chainId: this.options.chainId, blockNumber: 0, count: this.current.jobs.size });
+      return;
+    }
     await this.replayJournal();
     const checkpoint = await checkpoints.get(this.options.db, this.options.chainId, "SquareJob");
     this.cursor = checkpoint ? checkpoint.lastBlock : null;
     this.options.logger.info("indexer.started", {
       chainId: this.options.chainId,
       blockNumber: this.cursor === null ? 0 : Number(this.cursor),
-      count: this.state.jobs.size,
+      count: this.current.jobs.size,
     });
+  }
+
+  private async deploymentChanges(): Promise<Array<{ contract: IndexedContract; stored: Address; current: Address }>> {
+    const changes: Array<{ contract: IndexedContract; stored: Address; current: Address }> = [];
+    for (const contract of CONTRACTS) {
+      const checkpoint = await checkpoints.get(this.options.db, this.options.chainId, contract);
+      if (checkpoint === null) continue;
+      const current = this.addressOf(contract);
+      if (checkpoint.address.toLowerCase() !== current.toLowerCase()) {
+        changes.push({ contract, stored: checkpoint.address as Address, current });
+      }
+    }
+    return changes;
   }
 
   private async replayJournal(): Promise<void> {
@@ -106,8 +166,52 @@ export class Indexer {
       blockHash: null,
       removed: false,
     })) as Log[];
-    for (const event of decodeSquareLogs(logs, this.options.deployment)) applyEvent(this.state, event);
-    for (const [key, amount] of this.state.ledger) this.persistedLedger.set(key, amount);
+    for (const event of decodeSquareLogs(logs, this.options.deployment)) {
+      try {
+        applyEvent(this.current, event, (notice) => this.observe(notice, false));
+      } catch (error) {
+        this.quarantine(event, "reduce", error);
+      }
+    }
+    for (const [key, amount] of this.current.ledger) this.persistedLedger.set(key, amount);
+  }
+
+  private observe(notice: ReducerNotice, counted: boolean): void {
+    const { logger, metrics } = this.options;
+    if (notice.code === "windowsMissing") {
+      this.windowsMissing += 1;
+      logger.warn("indexer.windows_missing", {
+        jobId: notice.jobId.toString(),
+        reason: "SubmissionTimed arrived with no configured challenge window, START_BLOCK is after KeeperEvaluator deployment",
+      });
+      return;
+    }
+    if (notice.code === "reputationWriteFailed") {
+      logger.error("indexer.hook_write_failed", { jobId: notice.jobId.toString(), reason: "reputation" });
+      if (counted) metrics?.recordHookWriteFailure("reputation");
+      return;
+    }
+    logger.error("indexer.hook_write_failed", { jobId: notice.jobId.toString(), reason: "validation" });
+    if (counted) metrics?.recordHookWriteFailure("validation");
+  }
+
+  private quarantine(event: SquareEvent, stage: "journal" | "reduce", error: unknown): void {
+    const entry: QuarantinedEvent = {
+      contract: event.contract,
+      eventName: event.eventName,
+      blockNumber: (event.blockNumber ?? 0n).toString(),
+      logIndex: event.logIndex ?? 0,
+      txHash: event.transactionHash ?? "0x",
+      stage,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    this.quarantined.push(entry);
+    if (this.quarantined.length > MAX_TRACKED_QUARANTINE) this.quarantined.shift();
+    this.options.metrics?.recordQuarantinedEvent(event.contract, event.eventName);
+    this.options.logger.error("indexer.event_quarantined", {
+      blockNumber: Number(event.blockNumber ?? 0n),
+      reason: `${event.contract}.${event.eventName} at log ${entry.logIndex} failed at the ${stage} stage: ${entry.error}`,
+    });
   }
 
   async syncOnce(): Promise<SyncResult | null> {
@@ -122,42 +226,62 @@ export class Indexer {
     const to = from + this.options.batchBlocks - 1n < head ? from + this.options.batchBlocks - 1n : head;
     const logs = await this.options.publicClient.getLogs({ address: this.addresses, fromBlock: from, toBlock: to });
     const events = decodeSquareLogs(logs, this.options.deployment);
-    const applied = await this.applyBatch(events, to);
+    const batch = await this.applyBatch(events, to);
     this.cursor = to;
     this.options.metrics?.setIndexerHead(to);
-    this.options.logger.info("indexer.synced", { blockNumber: Number(to), count: events.length, applied });
-    return { fromBlock: from, toBlock: to, head, events: events.length, applied };
+    this.options.logger.info("indexer.synced", { blockNumber: Number(to), count: events.length, applied: batch.applied });
+    return { fromBlock: from, toBlock: to, head, events: events.length, applied: batch.applied, quarantined: batch.quarantined };
   }
 
-  private async applyBatch(events: SquareEvent[], toBlock: bigint): Promise<number> {
+  private async applyBatch(events: SquareEvent[], toBlock: bigint): Promise<{ applied: number; quarantined: number }> {
     const { db, chainId } = this.options;
     const dirty = emptyDirty();
+    const draft = events.length === 0 ? this.current : cloneState(this.current);
+    const stagedLedger = new Map<string, bigint>();
+    const failures: Array<{ event: SquareEvent; stage: "journal" | "reduce"; error: unknown }> = [];
+    const notices: ReducerNotice[] = [];
     let applied = 0;
     await db.transaction(async (tx) => {
       for (const event of events) {
-        const inserted = await jobEvents.insertIfAbsent(tx, {
-          chainId,
-          blockNumber: event.blockNumber ?? 0n,
-          logIndex: event.logIndex ?? 0,
-          txHash: event.transactionHash ?? ("0x" + "00".repeat(32) as Hex),
-          contract: event.contract,
-          name: event.eventName,
-          jobId: jobIdOf(event),
-          args: {
-            raw: { address: event.address, topics: event.topics as Hex[], data: event.data },
-            decoded: toJson(event.args),
-          } as never,
-        });
+        let inserted = false;
+        try {
+          inserted = await tx.transaction((scoped) =>
+            jobEvents.insertIfAbsent(scoped, {
+              chainId,
+              blockNumber: event.blockNumber ?? 0n,
+              logIndex: event.logIndex ?? 0,
+              txHash: event.transactionHash ?? ("0x" + "00".repeat(32) as Hex),
+              contract: event.contract,
+              name: event.eventName,
+              jobId: jobIdOf(event),
+              args: {
+                raw: { address: event.address, topics: event.topics as Hex[], data: event.data },
+                decoded: toJson(event.args),
+              } as never,
+            }),
+          );
+        } catch (error) {
+          failures.push({ event, stage: "journal", error });
+          continue;
+        }
         if (!inserted) continue;
-        applied += 1;
-        this.applyAndTrack(event, dirty);
+        try {
+          this.applyAndTrack(event, draft, dirty, (notice) => notices.push(notice));
+          applied += 1;
+        } catch (error) {
+          failures.push({ event, stage: "reduce", error });
+        }
       }
-      await this.persist(tx, dirty, toBlock);
+      await this.persist(tx, draft, dirty, toBlock, stagedLedger);
       for (const contract of CONTRACTS) {
         await checkpoints.set(tx, { chainId, contract, address: this.addressOf(contract), lastBlock: toBlock });
       }
     });
-    return applied;
+    this.current = draft;
+    for (const [key, amount] of stagedLedger) this.persistedLedger.set(key, amount);
+    for (const notice of notices) this.observe(notice, true);
+    for (const failure of failures) this.quarantine(failure.event, failure.stage, failure.error);
+    return { applied, quarantined: failures.length };
   }
 
   private addressOf(contract: IndexedContract): Address {
@@ -176,25 +300,25 @@ export class Indexer {
     }
   }
 
-  private applyAndTrack(event: SquareEvent, dirty: Dirty): void {
-    const ledgerBefore = new Map(this.state.ledger);
-    applyEvent(this.state, event);
+  private applyAndTrack(event: SquareEvent, draft: IndexerState, dirty: Dirty, notice: (notice: ReducerNotice) => void): void {
+    const ledgerBefore = new Map(draft.ledger);
+    applyEvent(draft, event, notice);
     const jobId = jobIdOf(event);
     if (jobId !== null) {
-      if (this.state.jobs.has(jobId)) dirty.jobs.add(jobId);
-      if (this.state.disputes.has(jobId)) dirty.disputes.add(jobId);
-      if (this.state.listings.has(jobId)) dirty.listings.add(jobId);
+      if (draft.jobs.has(jobId)) dirty.jobs.add(jobId);
+      if (draft.disputes.has(jobId)) dirty.disputes.add(jobId);
+      if (draft.listings.has(jobId)) dirty.listings.add(jobId);
     }
     if (event.contract === "Arbitration" && event.eventName === "ArbitersUpdated") dirty.arbiterSets.add(event.args.version);
-    for (const [key, amount] of this.state.ledger) {
+    for (const [key, amount] of draft.ledger) {
       if (ledgerBefore.get(key) !== amount) dirty.ledger.add(key);
     }
   }
 
-  private async persist(tx: Database, dirty: Dirty, block: bigint): Promise<void> {
+  private async persist(tx: Database, draft: IndexerState, dirty: Dirty, block: bigint, stagedLedger: Map<string, bigint>): Promise<void> {
     const chainId = this.options.chainId;
     for (const jobId of dirty.jobs) {
-      const job = this.state.jobs.get(jobId);
+      const job = draft.jobs.get(jobId);
       if (!job) continue;
       await jobs.upsert(tx, {
         chainId,
@@ -223,7 +347,7 @@ export class Indexer {
       });
     }
     for (const jobId of dirty.disputes) {
-      const d = this.state.disputes.get(jobId);
+      const d = draft.disputes.get(jobId);
       if (!d) continue;
       await disputes.upsert(tx, {
         chainId,
@@ -240,7 +364,7 @@ export class Indexer {
       });
     }
     for (const jobId of dirty.listings) {
-      const l = this.state.listings.get(jobId);
+      const l = draft.listings.get(jobId);
       if (!l) continue;
       await claimListings.upsert(tx, {
         chainId,
@@ -254,18 +378,18 @@ export class Indexer {
       });
     }
     for (const version of dirty.arbiterSets) {
-      const set = this.state.arbiterSets.get(version);
+      const set = draft.arbiterSets.get(version);
       if (!set) continue;
       await arbiterSets.upsert(tx, { chainId, version, arbiters: set.arbiters, threshold: set.threshold });
     }
     for (const key of dirty.ledger) {
-      const amount = this.state.ledger.get(key) ?? 0n;
+      const amount = draft.ledger.get(key) ?? 0n;
       const before = this.persistedLedger.get(key) ?? 0n;
       const delta = amount - before;
       if (delta === 0n) continue;
       const [contract, account] = key.split(":") as [IndexedContract, Address];
       await ledgerBalances.adjust(tx, { chainId, contract, account, delta, updatedBlock: block });
-      this.persistedLedger.set(key, amount);
+      stagedLedger.set(key, amount);
     }
   }
 

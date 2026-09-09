@@ -12,6 +12,7 @@ const challengeEnd = 1_000n;
 const now = 2_000n;
 const txHash = "0x1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8" as const;
 const address = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" as const;
+const evaluator = deploymentFor(chainId).keeperEvaluator;
 const silent = createLogger({ service: "test", version: "0", sink: () => {} });
 
 function revertedReceipt(): TransactionReceipt {
@@ -66,7 +67,7 @@ describe("the keeper journals what the chain accepted", () => {
       jobId,
       client: address,
       provider: address,
-      evaluator: address,
+      evaluator,
       hook: null,
       description: "",
       budget,

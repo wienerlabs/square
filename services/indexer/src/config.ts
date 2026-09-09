@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { deploymentFor, deploymentFromJson, type SquareDeployment } from "@squaresdk/core";
+import type { DeploymentChangePolicy } from "./sync.js";
 
 export interface IndexerConfig {
   chainId: number;
@@ -11,6 +12,10 @@ export interface IndexerConfig {
   port: number;
   databaseUrl: string | undefined;
   version: string;
+  maxLagBlocks: bigint;
+  alertIntervalMs: number;
+  alertWebhookUrl: string | undefined;
+  onDeploymentChange: DeploymentChangePolicy;
 }
 
 function required(name: string): string {
@@ -33,6 +38,13 @@ export function loadDeployment(chainId: number): SquareDeployment {
   return deploymentFor(chainId);
 }
 
+function deploymentChangePolicy(): DeploymentChangePolicy {
+  const raw = process.env["ON_DEPLOYMENT_CHANGE"];
+  if (raw === undefined || raw === "") return "fail";
+  if (raw === "fail" || raw === "restart") return raw;
+  throw new Error("ON_DEPLOYMENT_CHANGE must be fail or restart");
+}
+
 export function configFromEnv(): IndexerConfig {
   const chainId = integer("CHAIN_ID", 5042002);
   return {
@@ -45,5 +57,9 @@ export function configFromEnv(): IndexerConfig {
     port: integer("PORT", 3010),
     databaseUrl: process.env["DATABASE_URL"],
     version: process.env["SQUARE_VERSION"] ?? "0.1.0",
+    maxLagBlocks: BigInt(integer("MAX_LAG_BLOCKS", 100)),
+    alertIntervalMs: integer("ALERT_INTERVAL_MS", 30_000),
+    alertWebhookUrl: process.env["ALERT_WEBHOOK_URL"],
+    onDeploymentChange: deploymentChangePolicy(),
   };
 }
