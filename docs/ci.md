@@ -26,7 +26,7 @@ pull request.
 | `cli` | The resolver and the CLI build; the CLI's exit codes are unchanged. Hermetic. |
 | `did-aip-driver (unit)` | The driver's config parsing and envelope construction. |
 | `did-aip-driver image` | The container answers, and a malformed DID is still a 400 rather than a 500. |
-| `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. |
+| `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. A red `secret scan` names the rule, the file and the line in the job log: gitleaks runs with `--verbose`, and with `--redact` beside it the value itself is never printed. It walks the git history, so the finding can sit in a commit the diff no longer shows. |
 
 Three are **not** required to merge. Each one's red is a statement about Arc
 Testnet being reachable, or about a funded account, rather than about the change,
