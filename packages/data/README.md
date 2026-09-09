@@ -50,7 +50,7 @@ service never imports `pg` directly:
 | `arbiterSets` | `upsert`, `get`, `latest` |
 | `idempotencyKeys` | `get`, `putIfAbsent` (returns `stored`, `replay` or `conflict`), `sweepExpired` |
 | `rateLimits` | `increment(db, bucket, windowStart)` (returns the new count), `sweep(db, windowMs)` |
-| `x402Payments` | `insertAccepted` (false on replay), `markSettled`, `markFailed`, `get`, `sweep` |
+| `x402Payments` | `insertAccepted` (false on replay), `markSettled`, `markFailed`, `recordSettlementAttempt`, `listAccepted`, `get`, `sweep` |
 | `keeperActions` | `append`, `recent`, `sweep` |
 | `hostedAgents` | `upsert`, `get` |
 
@@ -74,6 +74,14 @@ submitted 2, completed 3, rejected 4, expired 5), `disputes.DISPUTE_OUTCOME` (co
 reject 2, expired 3), `claimListings.CLAIM_LISTING_STATUS` (listed 1, sold 2, cancelled 3),
 `x402Payments.X402_STATUS` (accepted 1, settled 2, failed 3). Indexed contracts are the
 `IndexedContract` union; keeper actions are the `KeeperAction` union.
+
+`x402_payments` has one transition rule and this repository is the only implementation of
+it: `accepted` is the only state a row can leave, `settled` and `failed` are terminal, and
+`markSettled` and `markFailed` return whether the update held so a caller can tell a real
+transition from a zero-row update. `markFailed` stores its reason.
+`recordSettlementAttempt` records a broadcast transaction hash without leaving `accepted`,
+and `listAccepted` returns the rows that have not reached a terminal state, which is what
+`@squaresdk/x402`'s reconciliation pass reads.
 
 ## Migrations
 
@@ -102,6 +110,7 @@ letting a raw `relation already exists` stall the deploy.
 | `0003_x402` | `x402_payments` |
 | `0004_hosted_agents` | `hosted_agents` |
 | `0005_keeper` | `keeper_actions` |
+| `0006_x402_reason` | `x402_payments.reason` |
 
 Migrations never run at service boot. They are an explicit deploy step, run before the new
 service version starts, with the connection string in `DATABASE_URL`:

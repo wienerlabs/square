@@ -20,7 +20,18 @@ export interface AcceptedPayment extends PaymentIdentity {
 export interface X402PaymentRecord extends AcceptedPayment {
   txHash: Hex | null;
   status: number;
+  reason: string | null;
   createdAt: Date;
+}
+
+export interface AcceptedSettlement extends PaymentIdentity {
+  txHash: Hex | null;
+  validBefore: bigint;
+}
+
+export interface FailureDetail {
+  reason?: string | undefined;
+  txHash?: Hex | undefined;
 }
 
 interface X402PaymentRow {
@@ -34,10 +45,20 @@ interface X402PaymentRow {
   tx_hash: Uint8Array | null;
   status: number;
   valid_before: string;
+  reason: string | null;
   created_at: Date;
 }
 
-const COLUMNS = "chain_id, asset, payer, nonce, amount, pay_to, resource, tx_hash, status, valid_before, created_at";
+interface AcceptedSettlementRow {
+  chain_id: string;
+  asset: Uint8Array;
+  payer: Uint8Array;
+  nonce: Uint8Array;
+  tx_hash: Uint8Array | null;
+  valid_before: string;
+}
+
+const COLUMNS = "chain_id, asset, payer, nonce, amount, pay_to, resource, tx_hash, status, valid_before, reason, created_at";
 const IDENTITY_MATCH = "chain_id = $1 and asset = $2 and payer = $3 and nonce = $4";
 
 function identityParams(identity: PaymentIdentity): unknown[] {
@@ -63,13 +84,41 @@ export async function markSettled(db: Database, identity: PaymentIdentity, txHas
   return rowCount === 1;
 }
 
-export async function markFailed(db: Database, identity: PaymentIdentity, txHash?: Hex): Promise<boolean> {
+export async function markFailed(db: Database, identity: PaymentIdentity, failure: FailureDetail = {}): Promise<boolean> {
   const { rowCount } = await db.query(
-    `update x402_payments set status = ${X402_STATUS.failed}, tx_hash = coalesce($5::bytea, tx_hash)
+    `update x402_payments set status = ${X402_STATUS.failed}, tx_hash = coalesce($5::bytea, tx_hash), reason = $6
      where ${IDENTITY_MATCH} and status = ${X402_STATUS.accepted}`,
-    [...identityParams(identity), txHash === undefined ? null : hexToBytes(txHash)],
+    [
+      ...identityParams(identity),
+      failure.txHash === undefined ? null : hexToBytes(failure.txHash),
+      failure.reason ?? null,
+    ],
   );
   return rowCount === 1;
+}
+
+export async function recordSettlementAttempt(db: Database, identity: PaymentIdentity, txHash: Hex): Promise<boolean> {
+  const { rowCount } = await db.query(
+    `update x402_payments set tx_hash = $5 where ${IDENTITY_MATCH} and status = ${X402_STATUS.accepted}`,
+    [...identityParams(identity), hexToBytes(txHash)],
+  );
+  return rowCount === 1;
+}
+
+export async function listAccepted(db: Database, limit = 100): Promise<AcceptedSettlement[]> {
+  const { rows } = await db.query<AcceptedSettlementRow>(
+    `select chain_id, asset, payer, nonce, tx_hash, valid_before from x402_payments
+     where status = ${X402_STATUS.accepted} order by created_at, payer, nonce limit $1`,
+    [limit],
+  );
+  return rows.map((row) => ({
+    chainId: Number(row.chain_id),
+    asset: bytesToHex(row.asset),
+    payer: bytesToHex(row.payer),
+    nonce: bytesToHex(row.nonce),
+    txHash: nullableBytesToHex(row.tx_hash),
+    validBefore: toBigInt(row.valid_before),
+  }));
 }
 
 export async function get(db: Database, identity: PaymentIdentity): Promise<X402PaymentRecord | null> {
@@ -88,6 +137,7 @@ export async function get(db: Database, identity: PaymentIdentity): Promise<X402
         txHash: nullableBytesToHex(row.tx_hash),
         status: row.status,
         validBefore: toBigInt(row.valid_before),
+        reason: row.reason,
         createdAt: row.created_at,
       };
 }

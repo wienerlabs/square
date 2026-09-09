@@ -3,13 +3,21 @@ import { migrate, migrationStatus, MigrationConflictError, MIGRATIONS_DIR } from
 import { pgliteDatabase } from "../src/pglite.js";
 import type { Database } from "../src/database.js";
 
-const ALL = ["0001_indexer", "0002_hardening", "0003_x402", "0004_hosted_agents", "0005_keeper"];
+const ALL = ["0001_indexer", "0002_hardening", "0003_x402", "0004_hosted_agents", "0005_keeper", "0006_x402_reason"];
 
 async function tableNames(db: Database): Promise<string[]> {
   const { rows } = await db.query<{ table_name: string }>(
     "select table_name from information_schema.tables where table_schema = 'public' order by table_name",
   );
   return rows.map((row) => row.table_name);
+}
+
+async function columnNames(db: Database, table: string): Promise<string[]> {
+  const { rows } = await db.query<{ column_name: string }>(
+    "select column_name from information_schema.columns where table_schema = 'public' and table_name = $1 order by column_name",
+    [table],
+  );
+  return rows.map((row) => row.column_name);
 }
 
 async function schemaSnapshot(db: Database): Promise<unknown> {
@@ -22,7 +30,7 @@ async function schemaSnapshot(db: Database): Promise<unknown> {
 }
 
 describe("migrations", () => {
-  it("applies all five in order, reverts the last one, and re-applies it", async () => {
+  it("applies all six in order, reverts the last one, and re-applies it", async () => {
     const db = await pgliteDatabase();
     try {
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(ALL);
@@ -43,11 +51,11 @@ describe("migrations", () => {
         "x402_payments",
       ]);
 
-      expect((await migrate(db, MIGRATIONS_DIR, "down")).applied).toEqual(["0005_keeper"]);
-      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL.slice(0, 4), pending: ["0005_keeper"] });
-      expect(await tableNames(db)).not.toContain("keeper_actions");
+      expect((await migrate(db, MIGRATIONS_DIR, "down")).applied).toEqual(["0006_x402_reason"]);
+      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL.slice(0, 5), pending: ["0006_x402_reason"] });
+      expect(await columnNames(db, "x402_payments")).not.toContain("reason");
 
-      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0005_keeper"]);
+      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0006_x402_reason"]);
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL, pending: [] });
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual([]);
     } finally {
@@ -55,13 +63,13 @@ describe("migrations", () => {
     }
   });
 
-  it("up, down five steps, up leaves the schema identical", async () => {
+  it("up, down six steps, up leaves the schema identical", async () => {
     const db = await pgliteDatabase();
     try {
       await migrate(db, MIGRATIONS_DIR, "up");
       const first = await schemaSnapshot(db);
 
-      expect((await migrate(db, MIGRATIONS_DIR, "down", 5)).applied).toEqual([...ALL].reverse());
+      expect((await migrate(db, MIGRATIONS_DIR, "down", 6)).applied).toEqual([...ALL].reverse());
       expect(await tableNames(db)).toEqual(["schema_migrations"]);
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: [], pending: ALL });
 
@@ -94,10 +102,10 @@ describe("migrations", () => {
 
       const status = await migrationStatus(db, MIGRATIONS_DIR);
       expect(status.applied).toEqual(["0001_indexer", "0002_hardening"]);
-      expect(status.pending).toEqual(["0003_x402", "0004_hosted_agents", "0005_keeper"]);
+      expect(status.pending).toEqual(["0003_x402", "0004_hosted_agents", "0005_keeper", "0006_x402_reason"]);
 
       await db.query("insert into schema_migrations (name) values ('0003_x402')");
-      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0004_hosted_agents", "0005_keeper"]);
+      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0004_hosted_agents", "0005_keeper", "0006_x402_reason"]);
       expect(await tableNames(db)).toContain("keeper_actions");
     } finally {
       await db.close();
