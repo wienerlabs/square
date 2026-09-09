@@ -34,7 +34,6 @@
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -132,7 +131,7 @@ function verifierBytecodeFor(verificationKey) {
   const constants = execFileSync(
     process.execPath,
     [path.join(ROOT, 'script', 'verifier-constants.mjs'), verificationKey],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', timeout: 60_000 },
   ).trimEnd();
 
   const first = source.indexOf('    uint256 private constant ALPHA_X');
@@ -141,23 +140,31 @@ function verifierBytecodeFor(verificationKey) {
     throw new Error('could not find the key constants in src/Groth16Verifier.sol');
   }
   const end = source.indexOf('\n', lastIc) + 1;
-  const rebuilt = source.slice(0, first) + constants + '\n' + source.slice(end);
+  const rebuilt = (source.slice(0, first) + constants + '\n' + source.slice(end))
+    // A distinct name so it cannot collide with the real contract in any
+    // `forge` command that resolves by name rather than by path.
+    .replace('contract Groth16Verifier {', 'contract VerifierForThisBuild {');
 
-  // A scratch Foundry project. The verifier has no imports, so it needs
-  // nothing but a src directory and a solc pin that matches the repository's.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-verifier-'));
-  fs.mkdirSync(path.join(dir, 'src'));
-  fs.writeFileSync(path.join(dir, 'src', 'Groth16Verifier.sol'), rebuilt);
-  fs.writeFileSync(
-    path.join(dir, 'foundry.toml'),
-    '[profile.default]\nsrc = "src"\nout = "out"\nsolc_version = "0.8.28"\n'
-    + 'optimizer = true\noptimizer_runs = 10_000\nbytecode_hash = "none"\ncbor_metadata = false\n',
-  );
+  // Compiled inside this Foundry project, not a scratch one.
+  //
+  // A scratch project has its own out/ and cache/, so `forge` resolves the
+  // compiler from nothing and, on a cold CI runner, sits waiting on a download
+  // that the job's warm-up step already did for *this* project. That is what
+  // hung the end-to-end job for hours before it was cancelled. Compiling here
+  // reuses the warm cache and the repository's own solc pin.
+  //
+  // The file is generated, gitignored and removed in the finally below; it
+  // exists only for the length of one `forge inspect`.
+  const dir = path.join(ROOT, 'src', 'generated');
+  const file = path.join(dir, 'VerifierForThisBuild.sol');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, rebuilt);
   try {
     return execFileSync(
       'forge',
-      ['inspect', 'src/Groth16Verifier.sol:Groth16Verifier', 'deployedBytecode'],
-      { cwd: dir, encoding: 'utf8' },
+      ['inspect', 'src/generated/VerifierForThisBuild.sol:VerifierForThisBuild',
+        'deployedBytecode'],
+      { cwd: ROOT, encoding: 'utf8', timeout: 300_000 },
     ).trim();
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

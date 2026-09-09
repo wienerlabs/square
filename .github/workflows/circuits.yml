@@ -210,6 +210,11 @@ jobs:
   end-to-end:
     name: end-to-end (policy → proof → Arc)
     runs-on: ubuntu-latest
+    # A job that reaches a network needs a ceiling. The first run of this one
+    # hung for hours on a compiler download inside a scratch Foundry project and
+    # would have held a runner until the six-hour default. Fifteen minutes is
+    # generous: the whole thing takes about three.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
