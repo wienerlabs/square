@@ -178,3 +178,48 @@ describe('padCategoryList guards itself', () => {
     expect(out[2]).toBe('0');
   });
 });
+
+// Which error a caller hears when more than one thing is wrong.
+//
+// square#45 made policy_salt required, and every test above became a test of
+// that too — because validateRequest reports missing fields before it checks
+// the shape of the ones that are present, so an incomplete fixture makes every
+// format assertion unreachable. That is how these tests broke: not because the
+// behaviour they cover changed, but because a field was added to the request.
+//
+// The ordering is deliberate and is not changed here: a field that is absent
+// cannot be format-checked, and the missing-field pass reports all of them at
+// once where the format checks stop at the first. What was missing is any
+// statement of it. These three assert the priority directly, so the next
+// required field breaks this describe — which says what happened — instead of
+// a dozen assertions elsewhere that say something else.
+describe('which error wins when two things are wrong', () => {
+  const withoutSalt = () => {
+    const req = { ...BASE };
+    delete req.policy_salt;
+    return req;
+  };
+
+  it('reports a malformed field when nothing is missing', async () => {
+    await expect(buildCircuitInput({ ...BASE, time_restrictions: {} }))
+      .rejects.toThrow('time_restrictions: must be an array');
+  });
+
+  it('reports a missing field when nothing is malformed', async () => {
+    await expect(buildCircuitInput(withoutSalt()))
+      .rejects.toThrow('Missing required field(s): policy_salt');
+  });
+
+  it('reports the missing field when both are wrong', async () => {
+    await expect(buildCircuitInput({ ...withoutSalt(), time_restrictions: {} }))
+      .rejects.toThrow('Missing required field(s): policy_salt');
+  });
+
+  it('names every missing field at once, not one per round trip', async () => {
+    const req = { ...BASE };
+    delete req.policy_salt;
+    delete req.max_daily_spend;
+    await expect(buildCircuitInput(req))
+      .rejects.toThrow(/Missing required field\(s\): .*max_daily_spend.*policy_salt|.*policy_salt.*max_daily_spend/);
+  });
+});

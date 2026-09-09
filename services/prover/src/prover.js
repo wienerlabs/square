@@ -73,6 +73,20 @@ function validateRequest(req) {
     'policy_salt',
     // stripe_receipt_hash is OPTIONAL and defaults to '0'.
   ];
+  // Absence before malformation, and the order is deliberate.
+  //
+  // A field that is not there cannot be format-checked, so every check below
+  // would need a null guard if this ran second. And this one reports *all* the
+  // missing fields at once, which a caller can act on in a single round trip;
+  // the format checks report the first problem they meet.
+  //
+  // The consequence is that a request missing one field and malforming another
+  // hears about the missing one only. That is the right trade, but it is not
+  // free: it means any test asserting on a specific format message is also
+  // asserting that nothing is missing. `test/validation.test.js` pins this
+  // ordering directly so the dependency is stated rather than discovered when
+  // an unrelated required field is added — which is exactly what square#45 did
+  // to square#119's tests by making policy_salt required.
   const missing = required.filter((k) => req[k] === undefined || req[k] === null);
   if (missing.length > 0) {
     throw new Error(`Missing required field(s): ${missing.join(', ')}`);
