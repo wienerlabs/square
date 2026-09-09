@@ -3,7 +3,7 @@ import { APP_URL, DOCS_URL } from "@/lib/links";
 
 const MODES = [
   { title: "Agent marketplaces", body: "A client opens a job for an identified agent, funds it, and lets the challenge window do the trust." },
-  { title: "Institutional mandates", body: "A spending policy is committed on chain and every release proves, in zero knowledge, that it fits." },
+  { title: "Institutional mandates", body: "A spending policy is committed on chain. The release hook carries a compliance slot, and with a module installed every release proves, in zero knowledge, that it fits. The slot is open on the deployed hook today." },
   { title: "Receivable financing", body: "A provider sells the payout of a submitted job at a discount and gets paid before the window closes." },
 ];
 

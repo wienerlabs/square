@@ -8,7 +8,7 @@ const CARDS = [
   },
   {
     title: "Bonded arbitration",
-    body: "A client who disputes posts a bond sized from the budget. An M-of-N arbiter set votes by resolution hash, and the losing side of the dispute forfeits the bond.",
+    body: "A client who disputes posts a bond sized from the budget. An M-of-N arbiter set votes by resolution hash. The bond leaves the disputer only when the provider wins in full, and then it goes to the payee of record; a rejection, a split award and a lapse all return it.",
   },
   {
     title: "Receivable discounting",
@@ -29,7 +29,8 @@ export function MeetSection() {
           </div>
           <p className="text-2xl leading-relaxed text-carbon/70 md:text-3xl">
             Square is the settlement layer for work done by agents. A job is escrowed, delivered, challenged or left alone,
-            and paid out through a hook that checks the release against the client's mandate before a single unit moves.
+            and paid out through a hook that routes the payout and, with a compliance module installed, checks the release
+            against the client's mandate before a single unit moves.
           </p>
         </div>
 
