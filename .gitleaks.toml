@@ -40,3 +40,12 @@ Degeri degistirerek cozulemez, ki ptau onbellek anahtarinda oyle cozulmustu:
 orada anahtarin bicimi tesadufiydi, burada degerin kendisi kayit."""
 regexTarget = "line"
 regexes = ['''"zkey_sha256":\s*"[0-9a-f]{64}"''']
+
+[[allowlists]]
+description = """Anvil'in yayinlanmis 0 numarali test hesabinin ozel anahtari.
+Yerel yigin (compose.yaml) keeper'i bu anahtarla imzalar; anahtar Foundry
+belgelerinde ve anvil'in her acilis ciktisinda yazilidir, 31337 disinda hicbir
+seyi kontrol etmez. Istisna YOL degil DEGER bazinda: .env.example'a baska bir
+anahtar girilirse gitleaks onu yine yakalar."""
+regexTarget = "line"
+regexes = ['''0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80''']
