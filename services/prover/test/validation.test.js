@@ -20,6 +20,8 @@ const USDC = '0x3600000000000000000000000000000000000000';
 
 const BASE = Object.freeze({
   policy_id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
+  // square#45: the secret the eight leaf salts derive from.
+  policy_salt: '7777777777777777777777777777777777777777777777777777777777777',
   operator_id: '0x3333333333333333333333333333333333333333',
   max_daily_spend: '100000000',
   max_per_transaction: '10000000',
