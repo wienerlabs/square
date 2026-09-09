@@ -6,13 +6,14 @@ import {
   type ContractFunctionArgs,
   type ContractFunctionName,
   type Hex,
+  isAddressEqual,
   type PublicClient,
   type TransactionReceipt,
   type Transport,
   type WalletClient,
 } from "viem";
 import { arbitrationAbi, claimMarketAbi, erc20Abi, keeperEvaluatorAbi, squareHookAbi, squareJobAbi } from "./abi/index.js";
-import { agentFromDid } from "./agent.js";
+import { agentFromDid, type AgentReference } from "./agent.js";
 import { deploymentFor, type SquareDeployment } from "./deployments.js";
 import { decodeSquareLogs, eventsNamed, type SquareEvent } from "./events.js";
 import { encodeCompleteOptParams, encodeSubmitOptParams, ZERO_HASH } from "./optParams.js";
@@ -75,6 +76,50 @@ export class EventNotFoundError extends Error {
   }
 }
 
+export class TransactionRevertedError extends Error {
+  constructor(
+    readonly hash: Hex,
+    readonly receipt: TransactionReceipt,
+  ) {
+    super(`transaction ${hash} was mined in block ${receipt.blockNumber} and reverted, so it changed nothing`);
+    this.name = "TransactionRevertedError";
+  }
+}
+
+export class DeploymentChainMismatchError extends Error {
+  constructor(
+    readonly deploymentChainId: number,
+    readonly clientChainId: number,
+  ) {
+    super(`the deployment is for chain ${deploymentChainId} but the client is connected to chain ${clientChainId}`);
+    this.name = "DeploymentChainMismatchError";
+  }
+}
+
+export class DidScopeMismatchError extends Error {
+  constructor(
+    readonly did: string,
+    readonly reference: AgentReference,
+    readonly deployment: SquareDeployment,
+  ) {
+    super(
+      `${did} is scoped to chain ${reference.chainId} registry ${reference.registry}, ` +
+        `but this client settles on chain ${deployment.chainId} registry ${deployment.identityRegistry}`,
+    );
+    this.name = "DidScopeMismatchError";
+  }
+}
+
+export class AgentIdMismatchError extends Error {
+  constructor(
+    readonly agentId: bigint,
+    readonly didAgentId: bigint,
+  ) {
+    super(`agentId ${agentId} was passed alongside a did that names agent ${didAgentId}`);
+    this.name = "AgentIdMismatchError";
+  }
+}
+
 type WriteArgs<TAbi extends Abi, TName extends ContractFunctionName<TAbi, "nonpayable" | "payable">> = {
   abi: TAbi;
   address: Address;
@@ -91,14 +136,27 @@ export class SquareClient {
     this.publicClient = config.publicClient;
     this.walletClient = config.walletClient;
     this.deployment = config.deployment ?? deploymentFor(this.chainIdOf(config));
+    this.assertClientsAreOnDeploymentChain(config);
+  }
+
+  private declaredChainId(config: SquareClientConfig): number | undefined {
+    return config.publicClient.chain?.id ?? config.walletClient?.chain?.id;
   }
 
   private chainIdOf(config: SquareClientConfig): number {
-    const chainId = config.publicClient.chain?.id ?? config.walletClient?.chain?.id;
+    const chainId = this.declaredChainId(config);
     if (chainId === undefined) {
       throw new Error("pass a deployment explicitly when the clients carry no chain");
     }
     return chainId;
+  }
+
+  private assertClientsAreOnDeploymentChain(config: SquareClientConfig): void {
+    for (const chainId of [config.publicClient.chain?.id, config.walletClient?.chain?.id]) {
+      if (chainId !== undefined && chainId !== this.deployment.chainId) {
+        throw new DeploymentChainMismatchError(this.deployment.chainId, chainId);
+      }
+    }
   }
 
   get account(): Address {
@@ -120,6 +178,7 @@ export class SquareClient {
     } as never);
     const hash = await wallet.writeContract(simulation.request as never);
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status !== "success") throw new TransactionRevertedError(hash, receipt);
     return { hash, receipt, events: decodeSquareLogs(receipt.logs, this.deployment) };
   }
 
@@ -327,8 +386,20 @@ export class SquareClient {
     });
   }
 
+  private agentIdFor(params: SubmitParams): bigint | undefined {
+    if (params.did === undefined) return params.agentId;
+    const reference = agentFromDid(params.did);
+    if (reference.chainId !== this.deployment.chainId || !isAddressEqual(reference.registry, this.deployment.identityRegistry)) {
+      throw new DidScopeMismatchError(params.did, reference, this.deployment);
+    }
+    if (params.agentId !== undefined && params.agentId !== reference.agentId) {
+      throw new AgentIdMismatchError(params.agentId, reference.agentId);
+    }
+    return reference.agentId;
+  }
+
   async submit(params: SubmitParams): Promise<TransactionResult> {
-    const agentId = params.agentId ?? (params.did ? agentFromDid(params.did).agentId : undefined);
+    const agentId = this.agentIdFor(params);
     const optParams =
       agentId === undefined
         ? "0x"
