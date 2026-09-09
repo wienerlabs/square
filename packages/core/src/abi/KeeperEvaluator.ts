@@ -129,6 +129,11 @@ export const keeperEvaluatorAbi = [
             "name": "disputeWindow",
             "type": "uint48",
             "internalType": "uint48"
+          },
+          {
+            "name": "finalizeGrace",
+            "type": "uint48",
+            "internalType": "uint48"
           }
         ]
       }
@@ -428,6 +433,11 @@ export const keeperEvaluatorAbi = [
             "name": "disputeWindow",
             "type": "uint48",
             "internalType": "uint48"
+          },
+          {
+            "name": "finalizeGrace",
+            "type": "uint48",
+            "internalType": "uint48"
           }
         ]
       }
@@ -691,6 +701,11 @@ export const keeperEvaluatorAbi = [
   {
     "type": "error",
     "name": "ReentrancyGuardReentrantCall",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "SplitNeedsAPayoutResolver",
     "inputs": []
   },
   {

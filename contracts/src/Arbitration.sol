@@ -90,6 +90,9 @@ contract Arbitration is IArbitration, Ownable2Step, ReentrancyGuard {
         if (d.outcome != Outcome.None) revert AlreadyDecided();
         if (outcome == Outcome.Complete) {
             if (providerBps == 0 || providerBps > FULL_BPS) revert BadResolution();
+            if (providerBps != FULL_BPS && !_squareJob.getJobRecord(jobId).hookResolvesPayout) {
+                revert SplitNeedsAPayoutResolver();
+            }
         } else if (outcome == Outcome.Reject) {
             if (providerBps != 0) revert BadResolution();
         } else {
@@ -126,7 +129,7 @@ contract Arbitration is IArbitration, Ownable2Step, ReentrancyGuard {
         Dispute storage d = _disputes[jobId];
         if (d.disputedAt == 0) revert UnknownDispute();
         ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
-        if (job.status == ISquareJob.JobStatus.Expired || job.status == ISquareJob.JobStatus.Rejected) {
+        if (job.status == ISquareJob.JobStatus.Expired) {
             _settleBond(jobId, d, d.disputer);
             return;
         }

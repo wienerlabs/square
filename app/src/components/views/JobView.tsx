@@ -130,12 +130,13 @@ function SetBudgetAction({ ctx, detail }: { ctx: ActionContext; detail: JobDetai
   );
 }
 
-function parseAgent(input: string): { agentId?: bigint; error?: string } {
+function parseAgent(input: string): { agentId?: bigint; did?: string; error?: string } {
   const trimmed = input.trim();
   if (trimmed.length === 0) return {};
   if (trimmed.startsWith("did:")) {
     try {
-      return { agentId: agentFromDid(trimmed).agentId };
+      agentFromDid(trimmed);
+      return { did: trimmed };
     } catch (error) {
       return { error: error instanceof InvalidDidError ? error.message : describeError(error) };
     }
@@ -158,8 +159,8 @@ function SubmitAction({ ctx, detail, horizon, now }: { ctx: ActionContext; detai
       disabled={deliverable === null || parsedAgent.error !== undefined || tooClose}
       onClick={() => {
         if (deliverable === null) return;
-        const agentId = parsedAgent.agentId;
-        void ctx.run("Submit", () => ctx.square.submit({ jobId: ctx.id, deliverable, agentId }));
+        const { agentId, did } = parsedAgent;
+        void ctx.run("Submit", () => ctx.square.submit({ jobId: ctx.id, deliverable, agentId, did }));
       }}
       ctx={ctx}
     >
@@ -668,8 +669,8 @@ export function JobView() {
                 title="Buy the receivable"
                 label="Buy claim"
                 buttonLabel={`Buy for ${formatUsdc(listing.price)} USDC`}
-                description={`Pays the seller ${formatUsdc(listing.price)} USDC for a face value of ${formatUsdc(listing.faceValue)} USDC. An approval is sent first if the allowance is short.`}
-                send={(client) => client.buyClaim(id)}
+                description={`Pays the seller ${formatUsdc(listing.price)} USDC for a face value of ${formatUsdc(listing.faceValue)} USDC. The transaction is bound to this price and reverts if the seller relists at another one. An approval is sent first if the allowance is short.`}
+                send={(client) => client.buyClaim(id, { expectedPrice: listing.price })}
               />
             ) : null}
             {showCancel ? (

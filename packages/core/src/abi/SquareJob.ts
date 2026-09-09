@@ -358,6 +358,11 @@ export const squareJobAbi = [
             "name": "description",
             "type": "string",
             "internalType": "string"
+          },
+          {
+            "name": "settlementHorizon",
+            "type": "uint48",
+            "internalType": "uint48"
           }
         ]
       }
@@ -824,6 +829,37 @@ export const squareJobAbi = [
   },
   {
     "type": "event",
+    "name": "HookFailed",
+    "inputs": [
+      {
+        "name": "jobId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "hook",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "selector",
+        "type": "bytes4",
+        "indexed": false,
+        "internalType": "bytes4"
+      },
+      {
+        "name": "reason",
+        "type": "bytes",
+        "indexed": false,
+        "internalType": "bytes"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "HookWhitelistUpdated",
     "inputs": [
       {
@@ -1124,6 +1160,25 @@ export const squareJobAbi = [
   },
   {
     "type": "event",
+    "name": "PayoutUnresolvable",
+    "inputs": [
+      {
+        "name": "jobId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "hook",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "PlatformFeeAccrued",
     "inputs": [
       {
@@ -1376,6 +1431,11 @@ export const squareJobAbi = [
   {
     "type": "error",
     "name": "ProviderAlreadySet",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ProviderIsEvaluator",
     "inputs": []
   },
   {

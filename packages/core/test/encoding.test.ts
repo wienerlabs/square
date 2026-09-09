@@ -26,6 +26,10 @@ describe("submit optParams", () => {
     const encoded = encodeSubmitOptParams({ agentId: 7n });
     expect(decodeSubmitOptParams(encoded)).toEqual({ agentId: 7n, validationRequestHash: ZERO_HASH });
   });
+
+  it("reads empty optParams as no agent instead of inventing agent zero", () => {
+    expect(decodeSubmitOptParams("0x")).toBeNull();
+  });
 });
 
 describe("complete optParams", () => {
