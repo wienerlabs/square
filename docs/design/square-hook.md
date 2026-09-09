@@ -92,9 +92,13 @@ Encoded by the provider (the SDK does it). The hook verifies that the ERC-8004
 agent belongs to the provider: `IdentityRegistry.ownerOf(agentId) == provider`
 or, when the registry exposes it, `getAgentWallet(agentId) == provider`. A
 mismatch reverts the submit, because a provider must not be able to credit
-someone else's agent. `validationRequestHash` may be zero; when set, it is the
-`requestHash` of a `ValidationRegistry.validationRequest(validator = SquareHook,
-…)` the agent owner made, which is what lets the hook answer it later.
+someone else's agent. `validationRequestHash` may be zero; when set, it must be
+the `requestHash` of a `ValidationRegistry.validationRequest(validator =
+SquareHook, agentId = the bound agent, ...)`, and the hook reads
+`getValidationStatus(requestHash)` at bind time to check both: a request that
+names another validator or another agent reverts the submit with
+`ValidationRequestMismatch` (#113). That is what lets the hook answer the
+request later without answering someone else's.
 
 ### `complete`: the evaluator carries the split, the keeper carries the proof
 
@@ -102,9 +106,14 @@ someone else's agent. `validationRequestHash` may be zero; when set, it is the
 optParams = abi.encode(uint16 providerBps, bytes complianceProof)
 ```
 
-Encoded by `KeeperEvaluator`, the only evaluator the whitelisted hook is used
-with. `providerBps` is `10 000` on the optimistic path and whatever the
-arbitration decided otherwise. `complianceProof` is opaque to the hook and is
+Encoded by `KeeperEvaluator`. The kernel does not tie the hook to one
+evaluator; what it ties is reputation: the hook writes positive ERC-8004
+feedback only when the job's evaluator is its `trustedEvaluator` (the
+`KeeperEvaluator` the deploy binds) and the budget reaches
+`minReputationBudget`, and emits `ReputationSkipped` otherwise (#111).
+Negative and neutral records are written for any job, since a provider gains
+nothing by writing them against its own agent. `providerBps` is `10 000` on
+the optimistic path and whatever the arbitration decided otherwise. `complianceProof` is opaque to the hook and is
 handed to the compliance module unchanged; its inner layout (Groth16 proof and
 the eight public signals) is #27's. Empty bytes are valid while no module is
 installed.
@@ -157,7 +166,7 @@ The order inside `complete` is the whole point of the unified hook:
 providerShare)` from the same inputs. They are two calls because one is a view
 the kernel needs a return value from and the other is where a revert belongs.
 
-## Registry writes never block settlement
+## Nothing in the hook blocks settlement
 
 `giveFeedback` and `validationResponse` are calls into ERC-8004's upgradeable
 registries. They are wrapped in `try/catch`. On failure the hook emits
@@ -166,6 +175,18 @@ kernel's `complete` still lands. An `afterAction` that reverted here would roll
 back a settlement because a side registry misbehaved, which is the wrong
 priority: the money decision is the kernel's, the reputation signal is
 advisory.
+
+The same rule now holds one level up (#100,
+[docs/decisions/hook-failure-modes.md](../decisions/hook-failure-modes.md)).
+On `complete` and `reject` the kernel calls `beforeAction` and `afterAction`
+tolerantly: a hook that reverts or exhausts its gas cap yields
+`HookFailed(jobId, hook, selector, reason)` and the settlement finishes. The
+compliance module is wrapped the same way inside `_checkRelease`; a reverting
+module reads as "not verified", emits `ComplianceCheckFailed`, and the job
+completes with a `0` validation response. Only `resolvePayout` stays strict,
+because its answer is the payee; when it cannot answer, `claimRefund` reopens
+after `expiredAt` and emits `PayoutUnresolvable`. The pre-settlement actions
+keep the strict call, so a wrong agent binding still reverts the submit.
 
 That trade is only defensible while something reads the event, so the reader is
 named here. **`services/indexer`** decodes both events as it applies a batch,
@@ -183,7 +204,8 @@ so one job yields at most one feedback entry.
 
 ERC-8183 treats the hook as client-supplied and trusted, and accepts by design
 that a reverting hook blocks every hookable action until `expiredAt`. We do not
-give clients that freedom. The kernel keeps `whitelistedHooks[address]`, owner-
+give clients that freedom, and since #100 a reverting hook cannot block the
+way out of escrow at all. The kernel keeps `whitelistedHooks[address]`, owner-
 managed, and `createJob` reverts with `HookNotWhitelisted` for any other
 address. `address(0)` is an entry in the same map, `true` at deployment, so a
 deployment may later refuse un-hooked jobs by setting it `false`.

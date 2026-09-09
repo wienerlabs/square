@@ -31,6 +31,16 @@ export const squareHookAbi = [
         "name": "initialOwner",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "trustedEvaluator_",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "minReputationBudget_",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ],
     "stateMutability": "nonpayable"
@@ -129,6 +139,19 @@ export const squareHookAbi = [
         "name": "",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "minReputationBudget",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ],
     "stateMutability": "view"
@@ -255,6 +278,24 @@ export const squareHookAbi = [
   },
   {
     "type": "function",
+    "name": "setReputationPolicy",
+    "inputs": [
+      {
+        "name": "trustedEvaluator_",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "minReputationBudget_",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "squareJob",
     "inputs": [],
     "outputs": [
@@ -300,6 +341,19 @@ export const squareHookAbi = [
   },
   {
     "type": "function",
+    "name": "trustedEvaluator",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "validationOf",
     "inputs": [
       {
@@ -338,6 +392,25 @@ export const squareHookAbi = [
         "type": "bytes32",
         "indexed": false,
         "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ComplianceCheckFailed",
+    "inputs": [
+      {
+        "name": "jobId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "reason",
+        "type": "bytes",
+        "indexed": false,
+        "internalType": "bytes"
       }
     ],
     "anonymous": false
@@ -426,6 +499,25 @@ export const squareHookAbi = [
   },
   {
     "type": "event",
+    "name": "ReputationPolicyUpdated",
+    "inputs": [
+      {
+        "name": "trustedEvaluator",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "minReputationBudget",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "ReputationRecorded",
     "inputs": [
       {
@@ -451,6 +543,31 @@ export const squareHookAbi = [
         "type": "int128",
         "indexed": false,
         "internalType": "int128"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ReputationSkipped",
+    "inputs": [
+      {
+        "name": "jobId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "agentId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "reason",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
       }
     ],
     "anonymous": false
@@ -585,6 +702,17 @@ export const squareHookAbi = [
         "name": "account",
         "type": "address",
         "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "ValidationRequestMismatch",
+    "inputs": [
+      {
+        "name": "requestHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ]
   }

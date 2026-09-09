@@ -74,6 +74,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         address hook
     ) external nonReentrant returns (uint256 jobId) {
         if (evaluator == address(0)) revert ZeroAddress();
+        if (provider == evaluator) revert ProviderIsEvaluator();
         if (expiredAt <= block.timestamp) revert ExpiryInPast();
         if (expiredAt > type(uint48).max) revert ExpiryTooLarge();
         if (!_whitelistedHooks[hook]) revert HookNotWhitelisted(hook);
@@ -83,7 +84,8 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
             if (!hook.supportsInterface(type(IACPHook).interfaceId)) revert InvalidHook(hook);
             resolvesPayout = hook.supportsInterface(type(IPayoutResolver).interfaceId);
         }
-        uint256 earliest = block.timestamp + _settlementHorizon(evaluator);
+        uint48 horizon = _settlementHorizon(evaluator);
+        uint256 earliest = block.timestamp + horizon;
         if (expiredAt < earliest) revert ExpiryTooShort(earliest);
 
         jobId = ++_jobCounter;
@@ -96,6 +98,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         job.hook = hook;
         job.hookResolvesPayout = resolvesPayout;
         job.description = description;
+        job.settlementHorizon = horizon;
 
         emit JobCreated(jobId, msg.sender, provider, evaluator, expiredAt, hook);
         emit JobDescribed(jobId, uint48(block.timestamp), description);
@@ -107,6 +110,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         if (msg.sender != job.client) revert Unauthorized();
         if (job.provider != address(0)) revert ProviderAlreadySet();
         if (provider == address(0)) revert ZeroAddress();
+        if (provider == job.evaluator) revert ProviderIsEvaluator();
 
         bytes memory data = abi.encode(provider, optParams);
         _beforeHook(job.hook, jobId, data);
@@ -154,7 +158,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         if (job.status != JobStatus.Funded) revert WrongStatus();
         if (msg.sender != job.provider) revert Unauthorized();
         if (block.timestamp >= job.expiredAt) revert PastExpiry();
-        uint256 earliest = block.timestamp + _settlementHorizon(job.evaluator);
+        uint256 earliest = block.timestamp + job.settlementHorizon;
         if (job.expiredAt < earliest) revert ExpiryTooShort(earliest);
 
         bytes memory data = abi.encode(deliverable, optParams);
@@ -174,7 +178,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
 
         bytes memory data = abi.encode(reason, optParams);
         (address payee, uint16 providerBps) = _resolvePayout(job, jobId, data);
-        _beforeHook(job.hook, jobId, data);
+        _beforeHookTolerant(job.hook, jobId, data);
 
         job.status = JobStatus.Completed;
         job.payee = payee;
@@ -204,7 +208,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         emit PayoutRouted(jobId, payee, providerBps, providerShare, clientShare);
         emit JobCompleted(jobId, msg.sender, reason);
 
-        _afterHook(job.hook, jobId, data);
+        _afterHookTolerant(job.hook, jobId, data);
     }
 
     function reject(uint256 jobId, bytes32 reason, bytes calldata optParams) external nonReentrant {
@@ -219,7 +223,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         }
 
         bytes memory data = abi.encode(reason, optParams);
-        _beforeHook(job.hook, jobId, data);
+        _beforeHookTolerant(job.hook, jobId, data);
         job.status = JobStatus.Rejected;
         if (previous != JobStatus.Open) {
             uint256 amount = job.budget;
@@ -227,14 +231,17 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
             emit Refunded(jobId, job.client, amount);
         }
         emit JobRejected(jobId, msg.sender, reason);
-        _afterHook(job.hook, jobId, data);
+        _afterHookTolerant(job.hook, jobId, data);
     }
 
     function claimRefund(uint256 jobId) external nonReentrant {
         JobRecord storage job = _existing(jobId);
         if (job.status != JobStatus.Funded && job.status != JobStatus.Submitted) revert WrongStatus();
         if (block.timestamp < job.expiredAt) revert NotExpired();
-        if (job.status == JobStatus.Submitted && _settlementHorizon(job.evaluator) != 0) revert SettledByEvaluator();
+        if (job.status == JobStatus.Submitted && job.settlementHorizon != 0) {
+            if (_payoutResolvable(job, jobId)) revert SettledByEvaluator();
+            emit PayoutUnresolvable(jobId, job.hook);
+        }
 
         job.status = JobStatus.Expired;
         uint256 amount = job.budget;
@@ -351,6 +358,18 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         if (providerBps > BPS) revert InvalidSplit();
     }
 
+    function _payoutResolvable(JobRecord storage job, uint256 jobId) private view returns (bool) {
+        if (!job.hookResolvesPayout) return true;
+        bytes memory probe = abi.encode(bytes32(0), bytes(""));
+        try IPayoutResolver(job.hook).resolvePayout{gas: _hookGasLimit}(jobId, probe) returns (
+            address payee, uint16 providerBps
+        ) {
+            return payee != address(0) && providerBps <= BPS;
+        } catch {
+            return false;
+        }
+    }
+
     function _beforeHook(address hook, uint256 jobId, bytes memory data) private {
         if (hook == address(0)) return;
         _callHook(hook, abi.encodeCall(IACPHook.beforeAction, (jobId, msg.sig, data)));
@@ -359,6 +378,21 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
     function _afterHook(address hook, uint256 jobId, bytes memory data) private {
         if (hook == address(0)) return;
         _callHook(hook, abi.encodeCall(IACPHook.afterAction, (jobId, msg.sig, data)));
+    }
+
+    function _beforeHookTolerant(address hook, uint256 jobId, bytes memory data) private {
+        if (hook == address(0)) return;
+        _callHookTolerant(hook, jobId, abi.encodeCall(IACPHook.beforeAction, (jobId, msg.sig, data)));
+    }
+
+    function _afterHookTolerant(address hook, uint256 jobId, bytes memory data) private {
+        if (hook == address(0)) return;
+        _callHookTolerant(hook, jobId, abi.encodeCall(IACPHook.afterAction, (jobId, msg.sig, data)));
+    }
+
+    function _callHookTolerant(address hook, uint256 jobId, bytes memory callData) private {
+        (bool ok, bytes memory ret) = hook.call{gas: _hookGasLimit}(callData);
+        if (!ok) emit HookFailed(jobId, hook, msg.sig, ret);
     }
 
     function _callHook(address hook, bytes memory callData) private {

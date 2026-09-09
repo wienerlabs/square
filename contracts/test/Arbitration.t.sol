@@ -5,6 +5,9 @@ import {BaseTest} from "./Base.t.sol";
 import {ISquareJob} from "../src/interfaces/ISquareJob.sol";
 import {IArbitration} from "../src/interfaces/IArbitration.sol";
 import {IKeeperEvaluator} from "../src/interfaces/IKeeperEvaluator.sol";
+import {KeeperEvaluator} from "../src/KeeperEvaluator.sol";
+import {Arbitration} from "../src/Arbitration.sol";
+import {MaliciousHook} from "./mocks/MaliciousHook.sol";
 
 contract ArbitrationTest is BaseTest {
     uint256 internal constant BUDGET = 1_000 * USDC;
@@ -29,15 +32,21 @@ contract ArbitrationTest is BaseTest {
     }
 
     function test_open_requiresAnArbiterSet() public {
+        KeeperEvaluator bare = new KeeperEvaluator(address(kernel), owner, CHALLENGE_WINDOW, DISPUTE_WINDOW, FINALIZE_GRACE);
+        Arbitration empty = new Arbitration(address(bare), owner, BOND_BPS, MIN_BOND);
         vm.prank(owner);
-        keeper.configureWindows(CHALLENGE_WINDOW, DISPUTE_WINDOW);
-        uint256 jobId = submittedHookedJob(BUDGET);
-        vm.mockCallRevert(
-            address(arbitration), abi.encodeWithSelector(IArbitration.open.selector), abi.encodeWithSelector(IArbitration.NoArbiters.selector)
-        );
+        bare.setArbitration(address(empty));
+        vm.prank(client);
+        uint256 jobId = kernel.createJob(provider, address(bare), expiry(), "", address(0));
+        vm.prank(provider);
+        kernel.setBudget(jobId, BUDGET, "");
+        vm.prank(client);
+        kernel.fund(jobId, BUDGET, "");
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, "");
         vm.expectRevert(IArbitration.NoArbiters.selector);
         vm.prank(client);
-        keeper.dispute(jobId, bytes32(0));
+        bare.dispute(jobId, bytes32(0));
     }
 
     function test_vote_singleVoteDoesNotDecide() public {
@@ -232,18 +241,30 @@ contract ArbitrationTest is BaseTest {
         arbitration.settleBond(99);
     }
 
-    function test_settleBond_returnsTheBondWhenTheJobCanNoLongerComplete() public {
-        (uint256 jobId, uint64 bond) = _disputed(BUDGET);
-        ISquareJob.JobRecord memory job = record(jobId);
-        job.status = ISquareJob.JobStatus.Expired;
-        vm.mockCall(address(kernel), abi.encodeWithSelector(ISquareJob.getJobRecord.selector, jobId), abi.encode(job));
+    function test_settleBond_returnsTheBondWhenTheJobExpiresUnderADeadResolver() public {
+        MaliciousHook rogue = new MaliciousHook(address(kernel));
+        vm.prank(owner);
+        kernel.setHookWhitelist(address(rogue), true);
+        uint256 jobId = submittedJob(BUDGET, address(rogue));
+        uint64 bond = arbitration.bondFor(uint64(BUDGET));
+        vm.prank(client);
+        keeper.dispute(jobId, keccak256("evidence"));
+        rogue.setMode(MaliciousHook.Mode.ResolverReverts);
+        vm.expectRevert(IArbitration.NothingToSettle.selector);
+        arbitration.settleBond(jobId);
+        vm.warp(expiry());
+        arbitration.lapse(jobId);
+        vm.expectRevert(MaliciousHook.HookSaysNo.selector);
+        keeper.finalizeDecided(jobId, "");
+        kernel.claimRefund(jobId);
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Expired));
         vm.prank(stranger);
         arbitration.settleBond(jobId);
         assertEq(arbitration.withdrawable(client), bond, "a job that cannot complete gives the disputer the bond back");
         vm.expectRevert(IArbitration.NothingToSettle.selector);
         arbitration.settleBond(jobId);
-        vm.clearMockedCalls();
         assertEq(usdc.balanceOf(address(arbitration)), bond);
+        assertSolvent();
     }
 
     function test_bondWithdraw() public {
@@ -274,5 +295,50 @@ contract ArbitrationTest is BaseTest {
         assertEq(usdc.balanceOf(provider), netOf(BUDGET) + bond);
         assertEq(usdc.balanceOf(client), clientBefore, "the bond is gone for good");
         assertEq(arbitration.withdrawable(client), 0);
+    }
+
+    function test_vote_splitNeedsAPayoutResolver() public {
+        uint256 jobId = submittedJob(BUDGET, address(0));
+        vm.prank(client);
+        keeper.dispute(jobId, keccak256("evidence"));
+        vm.expectRevert(IArbitration.SplitNeedsAPayoutResolver.selector);
+        vote(arb1, jobId, IArbitration.Outcome.Complete, 4_000);
+        vote(arb1, jobId, IArbitration.Outcome.Complete, FULL_BPS);
+        vote(arb2, jobId, IArbitration.Outcome.Complete, FULL_BPS);
+        vm.prank(cranker);
+        keeper.finalizeDecided(jobId, "");
+        assertEq(record(jobId).providerBps, FULL_BPS);
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET), "a hookless job can only be completed in full or rejected");
+    }
+
+    function test_settleBond_routesTheBondInAllFourOutcomes() public {
+        (uint256 rejected, uint64 bond) = _disputed(BUDGET);
+        vote(arb1, rejected, IArbitration.Outcome.Reject, 0);
+        vote(arb2, rejected, IArbitration.Outcome.Reject, 0);
+        assertEq(arbitration.withdrawable(client), bond, "reject: the disputer gets the bond back");
+
+        (uint256 full,) = _disputed(BUDGET);
+        vote(arb1, full, IArbitration.Outcome.Complete, FULL_BPS);
+        vote(arb2, full, IArbitration.Outcome.Complete, FULL_BPS);
+        vm.prank(cranker);
+        keeper.finalizeDecided(full, "");
+        assertEq(arbitration.withdrawable(provider), bond, "full completion: the payee takes the bond");
+        assertEq(arbitration.withdrawable(client), bond, "the client lost this one");
+
+        (uint256 split,) = _disputed(BUDGET);
+        vote(arb1, split, IArbitration.Outcome.Complete, 4_000);
+        vote(arb2, split, IArbitration.Outcome.Complete, 4_000);
+        vm.prank(cranker);
+        keeper.finalizeDecided(split, "");
+        assertEq(arbitration.withdrawable(client), 2 * bond, "split: the bond returns to the disputer");
+
+        (uint256 lapsed,) = _disputed(BUDGET);
+        vm.warp(arbitration.disputeOf(lapsed).resolveBy);
+        arbitration.lapse(lapsed);
+        vm.prank(cranker);
+        keeper.finalizeDecided(lapsed, "");
+        assertEq(arbitration.withdrawable(client), 3 * bond, "lapsed: the bond returns to the disputer");
+        assertEq(arbitration.withdrawable(provider), bond, "the provider never posts a bond and takes one only on a full win");
+        assertSolvent();
     }
 }

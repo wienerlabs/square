@@ -24,6 +24,7 @@ abstract contract BaseTest is Test {
     uint48 internal constant FINALIZE_GRACE = 1 hours;
     uint16 internal constant BOND_BPS = 1_000;
     uint64 internal constant MIN_BOND = 1_000_000;
+    uint64 internal constant MIN_REPUTATION_BUDGET = 1_000_000;
 
     MockUSDC internal usdc;
     MockIdentityRegistry internal identity;
@@ -65,7 +66,14 @@ abstract contract BaseTest is Test {
         arbitration = new Arbitration(address(keeper), owner, BOND_BPS, MIN_BOND);
         market = new ClaimMarket(address(kernel), address(keeper));
         hook = new SquareHook(
-            address(kernel), address(market), address(identity), address(reputation), address(validation), owner
+            address(kernel),
+            address(market),
+            address(identity),
+            address(reputation),
+            address(validation),
+            owner,
+            address(keeper),
+            MIN_REPUTATION_BUDGET
         );
 
         vm.startPrank(owner);

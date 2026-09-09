@@ -65,7 +65,9 @@ contract DeployLocal is Script {
             address(m.identity),
             address(m.reputation),
             address(m.validation),
-            deployer
+            deployer,
+            address(s.keeper),
+            1_000_000
         );
         // Deployed but not wired: the hook's compliance slot stays empty until
         // square#27 supplies a module, and the registry's spender set stays

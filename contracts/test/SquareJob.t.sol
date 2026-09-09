@@ -218,6 +218,12 @@ contract SquareJobTest is BaseTest {
         vm.expectRevert(ISquareJob.Unauthorized.selector);
         vm.prank(client);
         kernel.complete(jobId, bytes32(0), "");
+        vm.expectRevert(ISquareJob.Unauthorized.selector);
+        vm.prank(provider);
+        kernel.complete(jobId, bytes32(0), "");
+        vm.expectRevert(ISquareJob.Unauthorized.selector);
+        vm.prank(stranger);
+        kernel.complete(jobId, bytes32(0), "");
     }
 
     function test_complete_creditsLedgerInsteadOfPushing() public {
@@ -503,25 +509,99 @@ contract SquareJobTest is BaseTest {
         assertSolvent();
     }
 
-    function test_hook_revertBubblesTheHooksOwnError() public {
+    function test_hook_revertBubblesTheHooksOwnErrorBeforeSettlement() public {
+        MaliciousHook rogue = new MaliciousHook(address(kernel));
+        vm.prank(owner);
+        kernel.setHookWhitelist(address(rogue), true);
+        uint256 jobId = fundedJob(BUDGET, address(rogue));
+        rogue.setMode(MaliciousHook.Mode.Revert);
+        vm.expectRevert(MaliciousHook.HookSaysNo.selector);
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, "");
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Funded), "a reverting hook blocks a pre-settlement action");
+        rogue.setMode(MaliciousHook.Mode.Quiet);
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, "");
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Submitted));
+    }
+
+    function test_hook_revertNoLongerLocksTheEscrow() public {
         MaliciousHook rogue = new MaliciousHook(address(kernel));
         uint256 jobId = _rogueJob(rogue);
         rogue.setMode(MaliciousHook.Mode.Revert);
+        vm.expectEmit(true, true, false, true);
+        emit ISquareJob.HookFailed(
+            jobId, address(rogue), ISquareJob.complete.selector, abi.encodeWithSelector(MaliciousHook.HookSaysNo.selector)
+        );
+        vm.prank(address(keeper));
+        kernel.complete(jobId, bytes32(0), "");
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed), "the hook informs, it does not veto");
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET));
+        assertSolvent();
+    }
+
+    function test_reject_toleratesAHookThatReverts() public {
+        MaliciousHook rogue = new MaliciousHook(address(kernel));
+        uint256 jobId = _rogueJob(rogue);
+        rogue.setMode(MaliciousHook.Mode.Revert);
+        vm.expectEmit(true, true, false, true);
+        emit ISquareJob.HookFailed(
+            jobId, address(rogue), ISquareJob.reject.selector, abi.encodeWithSelector(MaliciousHook.HookSaysNo.selector)
+        );
+        vm.prank(address(keeper));
+        kernel.reject(jobId, bytes32(0), "");
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Rejected));
+        assertEq(kernel.withdrawable(client), BUDGET);
+        assertSolvent();
+    }
+
+    function test_claimRefund_opensWhenTheResolverIsDead() public {
+        MaliciousHook rogue = new MaliciousHook(address(kernel));
+        uint256 jobId = _rogueJob(rogue);
+        rogue.setMode(MaliciousHook.Mode.ResolverReverts);
         vm.expectRevert(MaliciousHook.HookSaysNo.selector);
         vm.prank(address(keeper));
         kernel.complete(jobId, bytes32(0), "");
-        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Submitted), "a reverting hook blocks the action");
+        vm.expectRevert(ISquareJob.NotExpired.selector);
+        kernel.claimRefund(jobId);
+        vm.warp(expiry());
+        uint256 callsBefore = rogue.calls();
+        vm.expectEmit(true, true, false, true);
+        emit ISquareJob.PayoutUnresolvable(jobId, address(rogue));
+        kernel.claimRefund(jobId);
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Expired), "a dead resolver reopens the exit");
+        assertEq(kernel.withdrawable(client), BUDGET);
+        assertEq(rogue.calls(), callsBefore, "no hook call on the refund path");
+        assertSolvent();
+    }
+
+    function test_claimRefund_staysClosedWhileTheResolverAnswers() public {
+        MaliciousHook rogue = new MaliciousHook(address(kernel));
+        uint256 jobId = _rogueJob(rogue);
+        vm.warp(expiry());
+        vm.expectRevert(ISquareJob.SettledByEvaluator.selector);
+        kernel.claimRefund(jobId);
+        rogue.setMode(MaliciousHook.Mode.Revert);
+        vm.expectRevert(ISquareJob.SettledByEvaluator.selector);
+        kernel.claimRefund(jobId);
+        vm.prank(address(keeper));
+        kernel.complete(jobId, bytes32(0), "");
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed), "the evaluator still settles it");
     }
 
     function test_hook_outOfGasIsBoundedByTheLimit() public {
         MaliciousHook rogue = new MaliciousHook(address(kernel));
-        uint256 jobId = _rogueJob(rogue);
+        vm.prank(owner);
+        kernel.setHookWhitelist(address(rogue), true);
+        uint256 jobId = fundedJob(BUDGET, address(rogue));
         rogue.setMode(MaliciousHook.Mode.Loop);
         uint256 gasBefore = gasleft();
         vm.expectRevert(abi.encodeWithSelector(ISquareJob.HookReverted.selector, address(rogue)));
-        vm.prank(address(keeper));
-        kernel.complete{gas: 3_000_000}(jobId, bytes32(0), "");
-        assertLt(gasBefore - gasleft(), 3_100_000, "the loop could not consume more than the forwarded limit");
+        vm.prank(provider);
+        kernel.submit{gas: 5_000_000}(jobId, DELIVERABLE, "");
+        uint256 used = gasBefore - gasleft();
+        assertLt(used, HOOK_GAS_LIMIT + 400_000, "the loop stops at the hook cap, not at the forwarded gas");
+        assertGt(used, HOOK_GAS_LIMIT / 2, "the loop really ran into the cap");
     }
 
     function test_hook_claimRefundIsNeverHooked() public {
@@ -610,5 +690,34 @@ contract SquareJobTest is BaseTest {
         assertEq(kernel.withdrawable(address(keeper)), evaluatorFee);
         assertEq(kernel.totalWithdrawable(), budget, "every base unit is accounted for");
         assertSolvent();
+    }
+
+    function test_createJob_refusesTheProviderAsEvaluator() public {
+        vm.expectRevert(ISquareJob.ProviderIsEvaluator.selector);
+        vm.prank(client);
+        kernel.createJob(provider, provider, expiry(), "", address(0));
+        vm.prank(client);
+        uint256 jobId = kernel.createJob(address(0), provider, expiry(), "", address(0));
+        vm.expectRevert(ISquareJob.ProviderIsEvaluator.selector);
+        vm.prank(client);
+        kernel.setProvider(jobId, provider, "");
+    }
+
+    function test_submit_usesTheHorizonPinnedAtCreation() public {
+        uint48 horizon = keeper.settlementHorizon();
+        vm.prank(client);
+        uint256 jobId = kernel.createJob(provider, address(keeper), block.timestamp + horizon + 1 hours, "", address(0));
+        assertEq(record(jobId).settlementHorizon, horizon, "the horizon the kernel checked is on the record");
+        vm.prank(provider);
+        kernel.setBudget(jobId, BUDGET, "");
+        vm.prank(client);
+        kernel.fund(jobId, BUDGET, "");
+        vm.prank(owner);
+        keeper.setFinalizeGrace(FINALIZE_GRACE + 2 days);
+        assertGt(keeper.settlementHorizon(), horizon + 1 hours, "the new horizon would not fit any more");
+        vm.warp(block.timestamp + 30 minutes);
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, "");
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Submitted), "a funded job keeps the horizon it was created under");
     }
 }
