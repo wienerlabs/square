@@ -54,6 +54,10 @@ function entryId(scope: string, key: string): string {
   return `${scope.length}:${scope}:${key}`;
 }
 
+export function idempotencyScope(scope: string, actor: string): string {
+  return `${scope.length}:${scope}:${actor}`;
+}
+
 export function memoryIdempotencyStore(options: StoreClockOptions = {}): IdempotencyStore {
   const now = options.now ?? Date.now;
   const entries = new Map<string, StoredResponse>();
@@ -84,17 +88,6 @@ export function memoryIdempotencyStore(options: StoreClockOptions = {}): Idempot
     },
   };
 }
-
-export const IDEMPOTENCY_TABLE_SQL = `create table if not exists idempotency_keys (
-  scope text not null,
-  key text not null,
-  request_hash bytea not null,
-  status smallint not null,
-  response jsonb not null,
-  created_at timestamptz not null default now(),
-  expires_at timestamptz not null,
-  primary key (scope, key)
-)`;
 
 const IDEMPOTENCY_CLAIM_SQL = `insert into idempotency_keys (scope, key, request_hash, status, response, created_at, expires_at)
 values ($1, $2, decode($3, 'hex'), $4, $5::jsonb, now(), $6::timestamptz)
@@ -164,6 +157,7 @@ export function postgresIdempotencyStore(db: SqlClient, options: StoreClockOptio
 }
 
 export interface IdempotencyRequest {
+  scope: string;
   key: string;
   requestHash: string;
 }
@@ -191,7 +185,6 @@ function outcomeFromStored(stored: StoredResponse, requestHash: string): Idempot
 
 export function withIdempotency<Input extends IdempotencyRequest>(
   store: IdempotencyStore,
-  scope: string,
   handler: (input: Input) => Promise<HandlerResponse>,
   options: WithIdempotencyOptions = {}
 ): (input: Input) => Promise<IdempotentOutcome> {
@@ -199,25 +192,26 @@ export function withIdempotency<Input extends IdempotencyRequest>(
   const shouldStore = options.shouldStore ?? ((response: HandlerResponse) => response.status < 500);
   const inFlight = new Map<string, Promise<IdempotentOutcome>>();
   const execute = async (input: Input): Promise<IdempotentOutcome> => {
-    const running = inFlight.get(input.key);
+    const id = entryId(input.scope, input.key);
+    const running = inFlight.get(id);
     if (running !== undefined) {
       await running.catch(() => undefined);
       return execute(input);
     }
     const run = (async (): Promise<IdempotentOutcome> => {
-      const existing = await store.get(scope, input.key);
+      const existing = await store.get(input.scope, input.key);
       if (existing !== undefined) return outcomeFromStored(existing, input.requestHash);
       const response = await handler(input);
       if (!shouldStore(response)) return { source: "handler", status: response.status, body: response.body };
-      const put = await store.putIfAbsent(scope, input.key, input.requestHash, response, ttlMs);
+      const put = await store.putIfAbsent(input.scope, input.key, input.requestHash, response, ttlMs);
       if (put.status === "exists") return outcomeFromStored(put.stored, input.requestHash);
       return { source: "handler", status: response.status, body: response.body };
     })();
-    inFlight.set(input.key, run);
+    inFlight.set(id, run);
     try {
       return await run;
     } finally {
-      inFlight.delete(input.key);
+      inFlight.delete(id);
     }
   };
   return execute;
@@ -225,11 +219,11 @@ export function withIdempotency<Input extends IdempotencyRequest>(
 
 export interface IdempotencyMiddlewareOptions {
   scope: string;
+  actorOf: (c: Context) => string | undefined;
   header?: string | undefined;
   ttlMs?: number | undefined;
   required?: boolean | undefined;
   methods?: readonly string[] | undefined;
-  actorOf?: ((c: Context) => string | undefined) | undefined;
 }
 
 interface CapturedBody {
@@ -294,9 +288,7 @@ export function idempotencyMiddleware(
   const methods = new Set(
     (options.methods ?? ["POST", "PUT", "PATCH", "DELETE"]).map((method) => method.toUpperCase())
   );
-  const execute = withIdempotency<MiddlewareInput>(store, options.scope, (input) => input.respond(), {
-    ttlMs: options.ttlMs,
-  });
+  const execute = withIdempotency<MiddlewareInput>(store, (input) => input.respond(), { ttlMs: options.ttlMs });
   return async (c, next) => {
     if (!methods.has(c.req.method.toUpperCase())) {
       await next();
@@ -308,13 +300,18 @@ export function idempotencyMiddleware(
       await next();
       return;
     }
+    const actor = options.actorOf(c);
+    if (actor === undefined || actor === "") {
+      return c.json({ error: "idempotency_actor_unknown" }, 400);
+    }
     const requestHash = hashRequest({
       method: c.req.method,
       path: pathWithQuery(c.req.url),
       body: await parsedRequestBody(c),
-      actor: options.actorOf?.(c),
+      actor,
     });
     const outcome = await execute({
+      scope: idempotencyScope(options.scope, actor),
       key,
       requestHash,
       respond: async () => {

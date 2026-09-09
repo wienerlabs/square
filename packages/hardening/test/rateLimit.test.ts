@@ -48,6 +48,34 @@ describe("rateLimiter", () => {
   });
 });
 
+describe("memoryRateLimitStore", () => {
+  it("prunes the windows that ended before the cutoff", async () => {
+    const store = memoryRateLimitStore();
+    await store.increment("a", 1_000);
+    await store.increment("b", 2_000);
+    expect(store.size()).toBe(2);
+    await store.prune(2_000);
+    expect(store.size()).toBe(1);
+    expect(await store.increment("b", 2_000)).toBe(2);
+  });
+
+  it("holds at most maxEntries buckets and drops the least recently used", async () => {
+    const store = memoryRateLimitStore({ maxEntries: 3 });
+    for (const bucket of ["a", "b", "c"]) await store.increment(bucket, 1_000);
+    expect(await store.increment("a", 1_000)).toBe(2);
+    await store.increment("d", 1_000);
+    expect(store.size()).toBe(3);
+    expect(await store.increment("b", 1_000)).toBe(1);
+    expect(await store.increment("a", 1_000)).toBe(3);
+  });
+
+  it("stays bounded when the bucket key is attacker chosen", async () => {
+    const store = memoryRateLimitStore({ maxEntries: 100 });
+    for (let index = 0; index < 50_000; index += 1) await store.increment(`ip:${index}`, 1_000);
+    expect(store.size()).toBe(100);
+  });
+});
+
 describe("postgresRateLimitStore", () => {
   function countingDb() {
     const calls: Array<{ text: string; params: unknown[] }> = [];

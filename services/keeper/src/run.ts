@@ -4,6 +4,20 @@ import { disputes, jobs, keeperActions, type Database } from "@squaresdk/data";
 import type { Logger, Metrics } from "@squaresdk/observability";
 import { decide, expiryIsNear, gasCostInUsdc, keeperFee, oldestPendingAge, type KeeperCandidate, type KeeperEconomics } from "./decide.js";
 
+export interface KeeperRetryPolicy {
+  baseDelaySeconds: bigint;
+  maxDelaySeconds: bigint;
+  giveUpAfter: number;
+  maxJournalRowsPerJob: number;
+}
+
+export const DEFAULT_RETRY_POLICY: KeeperRetryPolicy = {
+  baseDelaySeconds: 60n,
+  maxDelaySeconds: 3_600n,
+  giveUpAfter: 6,
+  maxJournalRowsPerJob: 3,
+};
+
 export interface KeeperOptions {
   db: Database;
   chainId: number;
@@ -14,7 +28,16 @@ export interface KeeperOptions {
   defaultFinalizeGas: bigint;
   defaultFinalizeDecidedGas: bigint;
   recordExpiries: boolean;
+  ephemeralMirror?: boolean;
+  retryPolicy?: KeeperRetryPolicy;
   complianceProofFor?: (jobId: bigint) => Promise<Hex>;
+}
+
+interface RetryState {
+  attempts: number;
+  nextAttemptAt: bigint;
+  gaveUp: boolean;
+  journaled: Set<string>;
 }
 
 export interface TickReport {
@@ -34,8 +57,49 @@ function usdc(amount: bigint): number {
 
 export class Keeper {
   private readonly journaledSkips = new Set<string>();
+  private readonly retries = new Map<string, RetryState>();
 
   constructor(private readonly options: KeeperOptions) {}
+
+  private get retryPolicy(): KeeperRetryPolicy {
+    return this.options.retryPolicy ?? DEFAULT_RETRY_POLICY;
+  }
+
+  private backoffSeconds(attempts: number): bigint {
+    const policy = this.retryPolicy;
+    const scaled = policy.baseDelaySeconds << BigInt(Math.max(0, attempts - 1));
+    return scaled > policy.maxDelaySeconds ? policy.maxDelaySeconds : scaled;
+  }
+
+  private retryOf(jobId: bigint): RetryState | undefined {
+    return this.retries.get(jobId.toString());
+  }
+
+  private async noteFailure(jobId: bigint, action: "finalize" | "finalizeDecided" | "lapse", message: string, now: bigint): Promise<boolean> {
+    const { db, chainId, logger, metrics } = this.options;
+    const policy = this.retryPolicy;
+    const key = jobId.toString();
+    const state = this.retries.get(key) ?? { attempts: 0, nextAttemptAt: now, gaveUp: false, journaled: new Set<string>() };
+    state.attempts += 1;
+    state.gaveUp = state.attempts >= policy.giveUpAfter;
+    const delay = this.backoffSeconds(state.attempts);
+    state.nextAttemptAt = now + delay;
+    this.retries.set(key, state);
+
+    const marker = state.gaveUp ? "gaveUp" : message.slice(0, 120);
+    if (!state.journaled.has(marker) && (state.gaveUp || state.journaled.size < policy.maxJournalRowsPerJob)) {
+      state.journaled.add(marker);
+      const reason = state.gaveUp ? `gave up after ${state.attempts} attempts: ${message}`.slice(0, 200) : message.slice(0, 200);
+      await keeperActions.append(db, { chainId, jobId, action, reason });
+    }
+    metrics?.recordKeeperAction(action, "failure");
+    if (state.gaveUp) {
+      logger.error("keeper.gave_up", { jobId: key, attempts: state.attempts, error: message });
+    } else {
+      logger.error("keeper.finalize_failed", { jobId: key, attempts: state.attempts, retryInSeconds: Number(delay), error: message });
+    }
+    return state.gaveUp;
+  }
 
   private async economics(): Promise<KeeperEconomics> {
     const gasPriceWei = await this.options.client.publicClient.getGasPrice();
@@ -77,7 +141,16 @@ export class Keeper {
     const { db, chainId, client, logger, metrics } = this.options;
     const report: TickReport = { finalized: [], applied: [], lapsed: [], skipped: [], expiriesRecorded: [], nearExpiry: [], pending: 0, oldestPendingAgeSeconds: 0 };
     const economics = await this.economics();
-    const mirrored = [...(await jobs.listFinalizable(db, chainId, now)), ...(await jobs.listDisputedSubmitted(db, chainId))];
+    const evaluator = client.deployment.keeperEvaluator;
+    const mirrored = [
+      ...(await jobs.listFinalizable(db, chainId, now, evaluator)),
+      ...(await jobs.listDisputedSubmitted(db, chainId, evaluator)),
+    ];
+    if (this.options.ephemeralMirror === true && mirrored.length === 0) {
+      logger.warn("keeper.empty_mirror", {
+        reason: "DATABASE_URL is not set, so this keeper reads a private in-memory mirror that no indexer writes to and it will never find a candidate",
+      });
+    }
     const confirmed: KeeperCandidate[] = [];
     for (const row of mirrored) {
       const candidate = await this.candidateFromChain(row.jobId);
@@ -95,18 +168,27 @@ export class Keeper {
         logger.warn("keeper.expiry_near", { jobId: candidate.jobId.toString(), expiredAt: (candidate.expiredAt ?? 0n).toString() });
       }
       const action = decide(candidate, now, economics);
+      if (action.kind !== "skip") {
+        const retry = this.retryOf(candidate.jobId);
+        if (retry?.gaveUp === true) {
+          report.skipped.push({ jobId: candidate.jobId, reason: "gaveUp" });
+          continue;
+        }
+        if (retry !== undefined && now < retry.nextAttemptAt) {
+          report.skipped.push({ jobId: candidate.jobId, reason: "backoff" });
+          continue;
+        }
+      }
       if (action.kind === "lapse") {
         try {
           const result = await client.lapse(candidate.jobId);
           await keeperActions.append(db, { chainId, jobId: candidate.jobId, action: "lapse", txHash: result.hash, gasUsed: result.receipt.gasUsed });
           metrics?.recordKeeperAction("lapse", "success");
+          this.retries.delete(candidate.jobId.toString());
           report.lapsed.push(candidate.jobId);
           logger.info("keeper.lapsed", { jobId: candidate.jobId.toString(), txHash: result.hash });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          await keeperActions.append(db, { chainId, jobId: candidate.jobId, action: "lapse", reason: message.slice(0, 200) });
-          metrics?.recordKeeperAction("lapse", "failure");
-          logger.error("keeper.lapse_failed", { jobId: candidate.jobId.toString(), error: message });
+          await this.noteFailure(candidate.jobId, "lapse", error instanceof Error ? error.message : String(error), now);
         }
         continue;
       }
@@ -133,17 +215,21 @@ export class Keeper {
         await keeperActions.append(db, { chainId, jobId: candidate.jobId, action: action.kind, txHash: result.hash, gasUsed: result.receipt.gasUsed, feeEarned: fee });
         metrics?.recordKeeperAction(action.kind, "success");
         metrics?.addKeeperFeeUsdc(usdc(fee));
+        metrics?.recordFinalizeGas(
+          action.kind,
+          action.kind === "finalize" ? economics.finalizeGas : economics.finalizeDecidedGas,
+          result.receipt.gasUsed,
+        );
+        this.retries.delete(candidate.jobId.toString());
         (action.kind === "finalize" ? report.finalized : report.applied).push(candidate.jobId);
         logger.info("keeper.finalized", { jobId: candidate.jobId.toString(), txHash: result.hash, gasUsed: Number(result.receipt.gasUsed), fee: usdc(fee) });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        await keeperActions.append(db, { chainId, jobId: candidate.jobId, action: action.kind, reason: message.slice(0, 200) });
-        metrics?.recordKeeperAction(action.kind, "failure");
-        logger.error("keeper.finalize_failed", { jobId: candidate.jobId.toString(), error: message });
+        await this.noteFailure(candidate.jobId, action.kind, error instanceof Error ? error.message : String(error), now);
       }
     }
 
     if (this.options.recordExpiries) await this.recordExpiries(report);
+    metrics?.recordKeeperTick();
     return report;
   }
 

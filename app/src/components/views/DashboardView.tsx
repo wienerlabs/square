@@ -18,6 +18,7 @@ import { PrimaryButton } from "@/components/PrimaryButton";
 import { SectionHeading } from "@/components/SectionHeading";
 import { StatusPill, phaseTone } from "@/components/StatusPill";
 import { TabBar } from "@/components/TabBar";
+import { keeperEvaluates } from "@/lib/actions";
 import { escrowFlow, phaseBreakdown } from "@/lib/charts";
 import { formatBigint, formatCountdown, formatTimestamp } from "@/lib/format";
 import { indexerUrl, useIndexerOverview } from "@/lib/indexer";
@@ -25,7 +26,7 @@ import { inputClass } from "@/components/Field";
 import { jobPhase, PHASE_LABELS, RECENT_JOB_WINDOW, useJobs, useNow, usePositions, useSquare, type JobPhase, type JobSummary } from "@/lib/square";
 import { matchesQuery } from "@/lib/stats";
 import { describeError, useTx } from "@/lib/tx";
-import { activeChain } from "@/lib/wagmi";
+import { activeChain, deployment } from "@/lib/wagmi";
 
 const tabs = [
   { id: "all", label: "All" },
@@ -56,6 +57,7 @@ function matchesTab(job: JobSummary, phase: JobPhase, tab: string): boolean {
 function ChallengeCell({ job, now }: { job: JobSummary; now: number }) {
   if (job.status === JobStatus.Submitted) {
     if (job.disputed) return <span className="text-graphite">Paused by dispute</span>;
+    if (!keeperEvaluates(job, deployment.keeperEvaluator)) return <span className="text-ash">Another evaluator</span>;
     if (job.challengeEnd === 0) return <span className="text-ash">Unknown</span>;
     return (
       <span className="flex flex-col">

@@ -841,6 +841,11 @@ export const arbitrationAbi = [
   },
   {
     "type": "error",
+    "name": "SplitNeedsAPayoutResolver",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "UnknownDispute",
     "inputs": []
   },

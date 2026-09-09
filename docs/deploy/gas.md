@@ -68,9 +68,11 @@ both registry writes landing on mocks, stays under 250 000 gas, a quarter of the
 which still leaves half the limit unused.
 
 
-## Arc Testnet, measured
+## Arc Testnet, measured on the superseded 2026-09-07 stack
 
-Receipts from the acceptance run of 2026-09-07 against the deployed stack, real USDC, provider registered as ERC-8004 agent 892531. Gas price 22.17 gwei on the native interface (1 gas = 2.217 x 10^-8 USDC). Full table with every transaction: [lifecycle-5042002.md](./lifecycle-5042002.md).
+Receipts from the acceptance run of 2026-09-07, against the settlement stack deployed that day. **That stack is superseded**: the contracts were redeployed on 2026-09-08 at new addresses ([redeploy-2026-09-08.md](./redeploy-2026-09-08.md)), so every hash below points into the history of a contract the SDK, the app and the README no longer reference. Real USDC, provider registered as ERC-8004 agent 892531. Gas price 22.17 gwei on the native interface (1 gas = 2.217 x 10^-8 USDC). The seventeen receipts below are the whole record this run left; no per-transaction table of it was kept.
+
+[lifecycle-5042002.md](./lifecycle-5042002.md) is **a different run**, made on 2026-09-08 against the current stack, and it does carry every transaction of its own. It shares no transaction hash with the receipts here, so it is not the table behind them. What it is, is the check on them, and that check is in [Checked against the current stack](#checked-against-the-current-stack) below.
 
 | Step | Gas (receipt) | Transaction |
 |---|---|---|
@@ -107,3 +109,20 @@ Per path, real chain:
 | all | 6901647 | 0.153028 |
 
 The chain charges slightly more than Foundry measures for the same calls (a `finalize` with the real registries and a first-touch storage slot on the ERC-8004 reputation registry lands at 465 486 gas against 417 852 in the suite), which is the registry writes being real rather than mocked. Everything else is within a few thousand gas of the local figure.
+
+### Checked against the current stack
+
+The 2026-09-08 lifecycle run walks the same seven paths against the redeployed contracts and carries its own per-path table. Comparing the two is what tells a reader whether the figures on this page still describe the system as it stands:
+
+| Path | Here, 2026-09-07 stack | [lifecycle-5042002.md](./lifecycle-5042002.md), 2026-09-08 stack | Difference |
+|---|---|---|---|
+| 1-optimistic | 1042338 | 1018521 | +2.34 % |
+| 2a-dispute-client-wins | 1177480 | 1182041 | -0.39 % |
+| 2b-dispute-provider-wins | 1310200 | 1308167 | +0.16 % |
+| 2c-dispute-split | 1359706 | 1357651 | +0.15 % |
+| 3-expiry | 485122 | 487505 | -0.49 % |
+| 4-cancel-before-funding | 342730 | 344957 | -0.65 % |
+| 6-receivable | 1077188 | 1088091 | -1.00 % |
+| The seven together | 6794764 | 6786933 | +0.115 % |
+
+The last row drops this page's `0-identity` line (106 883 gas for one `IdentityRegistry.register`), because the lifecycle run has no register step to compare it with; 6 901 647 minus 106 883 is the 6 794 764 above. The redeploy changed storage layouts and constructor signatures (#89, #90, #91, #92), and the cost of every path survived it within two and a half per cent. The one path that moved more than one per cent is `1-optimistic`, and all 23 817 gas of its difference sit in a single step: `finalize` cost 465 486 here against 437 220 there. That is the cold-slot effect the paragraph above already describes on that same call, not a change in what the call does.

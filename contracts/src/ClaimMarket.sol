@@ -12,6 +12,8 @@ import {ISquareJob} from "./interfaces/ISquareJob.sol";
 contract ClaimMarket is IClaimMarket, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
+    uint256 private constant PAYOUT_MARKET_PROBE_GAS = 50_000;
+
     ISquareJob private immutable _squareJob;
     IKeeperEvaluator private immutable _keeperEvaluator;
     IERC20 private immutable _token;
@@ -40,9 +42,10 @@ contract ClaimMarket is IClaimMarket, ReentrancyGuard {
         emit ClaimListed(jobId, msg.sender, price, uint64(face));
     }
 
-    function buy(uint256 jobId) external nonReentrant {
+    function buy(uint256 jobId, uint64 expectedPrice) external nonReentrant {
         Listing storage listing = _listings[jobId];
         if (listing.status != Status.Listed) revert NotListed();
+        if (listing.price != expectedPrice) revert PriceMismatch(expectedPrice, listing.price);
         ISquareJob.JobRecord memory job = _liveJob(jobId);
         if (msg.sender == listing.seller || msg.sender == job.provider) revert BuyerIsSeller();
         if (msg.sender == job.client) revert BuyerIsClient();
@@ -77,6 +80,10 @@ contract ClaimMarket is IClaimMarket, ReentrancyGuard {
         if (job.evaluator != address(_keeperEvaluator)) revert NotOptimisticJob();
         if (_keeperEvaluator.isDisputed(jobId)) revert Disputed();
         if (!job.hookResolvesPayout) revert PayoutNotRouted();
-        if (IPayoutResolver(job.hook).payoutMarket() != address(this)) revert PayoutNotRouted();
+        try IPayoutResolver(job.hook).payoutMarket{gas: PAYOUT_MARKET_PROBE_GAS}() returns (address routed) {
+            if (routed != address(this)) revert PayoutNotRouted();
+        } catch {
+            revert PayoutNotRouted();
+        }
     }
 }

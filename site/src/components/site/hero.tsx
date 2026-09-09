@@ -29,8 +29,8 @@ export function HeroSection() {
           </h1>
           <p className="mb-8 max-w-xl text-base leading-relaxed text-carbon/70 md:text-lg">
             An institution commits a spending mandate. Identified agents deliver against it. Escrow, an optimistic challenge
-            window, bonded arbitration and a receivable market settle the work in USDC, and every release first proves it
-            fits the mandate.
+            window, bonded arbitration and a receivable market settle the work in USDC, and the release hook carries a
+            compliance slot: with a module installed, a release first proves it fits the mandate.
           </p>
 
           <div className="flex flex-wrap items-center gap-5">

@@ -178,7 +178,63 @@ export interface RpcRetryOptions {
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-const defaultIsRetryable = (error: unknown): boolean => !(error instanceof Error && error.name === "AbortError");
+const PERMANENT_JSON_RPC_CODES = new Set([-32600, -32601, -32602, -32603]);
+const EXECUTION_REVERTED = /execution reverted/i;
+const MAX_CAUSE_DEPTH = 8;
+
+function causeChain(error: unknown): unknown[] {
+  const chain: unknown[] = [];
+  let current = error;
+  while (chain.length < MAX_CAUSE_DEPTH && typeof current === "object" && current !== null && !chain.includes(current)) {
+    chain.push(current);
+    current = (current as { cause?: unknown }).cause;
+  }
+  return chain;
+}
+
+function jsonRpcCode(candidate: unknown): number | undefined {
+  const code = (candidate as { code?: unknown }).code;
+  if (typeof code === "number" && Number.isInteger(code)) return code;
+  if (typeof code === "string" && /^-?\d+$/.test(code)) return Number(code);
+  return undefined;
+}
+
+export function isPermanentRpcError(error: unknown): boolean {
+  for (const link of causeChain(error)) {
+    const code = jsonRpcCode(link);
+    if (code !== undefined && PERMANENT_JSON_RPC_CODES.has(code)) return true;
+    const message = (link as { message?: unknown }).message;
+    if (typeof message === "string" && EXECUTION_REVERTED.test(message)) return true;
+  }
+  return false;
+}
+
+const defaultIsRetryable = (error: unknown): boolean => {
+  if (error instanceof Error && error.name === "AbortError") return false;
+  return !isPermanentRpcError(error);
+};
+
+async function sleepUntilElapsedOrAborted(
+  sleep: (ms: number) => Promise<void>,
+  ms: number,
+  signal: AbortSignal | undefined
+): Promise<boolean> {
+  if (signal === undefined) {
+    await sleep(ms);
+    return false;
+  }
+  if (signal.aborted) return true;
+  let onAbort: (() => void) | undefined;
+  try {
+    return await new Promise<boolean>((resolve, reject) => {
+      onAbort = () => resolve(true);
+      signal.addEventListener("abort", onAbort, { once: true });
+      sleep(ms).then(() => resolve(false), reject);
+    });
+  } finally {
+    if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+  }
+}
 
 export function jitteredBackoffDelay(
   attempt: number,
@@ -197,12 +253,14 @@ export async function withRpcRetry<T>(fn: (attempt: number) => Promise<T>, optio
   const isRetryable = options.isRetryable ?? defaultIsRetryable;
   const sleep = options.sleep ?? defaultSleep;
   const random = options.random ?? Math.random;
+  options.signal?.throwIfAborted();
   for (let attempt = 1; ; attempt += 1) {
     try {
       return await fn(attempt);
     } catch (error) {
       if (attempt >= attempts || options.signal?.aborted || !isRetryable(error)) throw error;
-      await sleep(jitteredBackoffDelay(attempt, baseDelayMs, maxDelayMs, random));
+      const delayMs = jitteredBackoffDelay(attempt, baseDelayMs, maxDelayMs, random);
+      if (await sleepUntilElapsedOrAborted(sleep, delayMs, options.signal)) throw error;
     }
   }
 }

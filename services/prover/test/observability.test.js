@@ -3,11 +3,14 @@ import request from 'supertest';
 import { app } from '../src/index.js';
 
 describe('observability endpoints', () => {
-  it('serves health with the artifact check', async () => {
+  it('serves health with the artifact check, and the check is critical', async () => {
     const response = await request(app).get('/health');
     expect([200, 503]).toContain(response.status);
     expect(response.body.service).toBe('square-prover');
     expect(response.body.checks.artifacts).toBeDefined();
+    expect(response.body.checks.artifacts.critical).toBe(true);
+    expect(response.status).toBe(response.body.checks.artifacts.ok ? 200 : 503);
+    expect(response.body.status).toBe(response.body.checks.artifacts.ok ? 'healthy' : 'unhealthy');
   });
 
   it('serves Prometheus metrics with the proof signals', async () => {

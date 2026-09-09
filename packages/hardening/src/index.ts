@@ -23,9 +23,9 @@ export type {
 } from "./ssrf.js";
 
 export {
-  IDEMPOTENCY_TABLE_SQL,
   hashRequest,
   idempotencyMiddleware,
+  idempotencyScope,
   memoryIdempotencyStore,
   postgresIdempotencyStore,
   withIdempotency,
@@ -44,13 +44,15 @@ export type {
 } from "./idempotency.js";
 
 export {
-  RATE_LIMIT_TABLE_SQL,
+  MEMORY_RATE_LIMIT_MAX_ENTRIES,
   memoryRateLimitStore,
   postgresRateLimitStore,
   rateLimitMiddleware,
   rateLimiter,
 } from "./rateLimit.js";
 export type {
+  MemoryRateLimitStore,
+  MemoryRateLimitStoreOptions,
   PostgresRateLimitStore,
   RateLimitDecision,
   RateLimitMiddlewareOptions,
@@ -62,12 +64,14 @@ export type {
 export {
   RpcEndpointCooldownError,
   createFailoverTransport,
+  isPermanentRpcError,
   jitteredBackoffDelay,
   withRpcRetry,
 } from "./rpcFailover.js";
 export type { EndpointHealth, FailoverTransport, FailoverTransportOptions, RpcRetryOptions } from "./rpcFailover.js";
 
 export {
+  MEMORY_NONCE_PRUNE_EVERY,
   SQUARE_ACTION_PRIMARY_TYPE,
   SQUARE_ACTION_TYPES,
   canonicalJson,
@@ -78,6 +82,8 @@ export {
   verifyAction,
 } from "./signedMessages.js";
 export type {
+  MemoryNonceStore,
+  MemoryNonceStoreOptions,
   NonceStore,
   SquareAction,
   VerifyActionFailure,

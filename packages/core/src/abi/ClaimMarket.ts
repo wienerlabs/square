@@ -23,6 +23,11 @@ export const claimMarketAbi = [
         "name": "jobId",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "expectedPrice",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ],
     "outputs": [],
@@ -259,6 +264,22 @@ export const claimMarketAbi = [
     "type": "error",
     "name": "PayoutNotRouted",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "PriceMismatch",
+    "inputs": [
+      {
+        "name": "expected",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "listed",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ]
   },
   {
     "type": "error",

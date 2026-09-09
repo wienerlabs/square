@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Chip } from "@/components/Chip";
+import { ComplianceSlot } from "@/components/ComplianceSlot";
 import { GhostButton } from "@/components/GhostButton";
 import { LiveStats } from "@/components/LiveStats";
 import { ArcNetworkMark, BuiltOnArc } from "@/components/marks";
@@ -19,7 +20,7 @@ const features = [
   },
   {
     title: "Bonded arbitration",
-    body: "A client who disputes posts a bond sized from the budget. An M-of-N arbiter set votes by resolution hash, and the losing side of the dispute forfeits the bond.",
+    body: "A client who disputes posts a bond sized from the budget. An M-of-N arbiter set votes by resolution hash. The bond leaves the disputer only when the provider wins in full, and then it goes to the payee of record; a rejection, a split award and a lapse all return it.",
   },
   {
     title: "Receivable discounting",
@@ -46,10 +47,11 @@ export default function LandingPage() {
         </Chip>
         <h1 className="max-w-4xl text-display font-semibold text-carbon">Compliance-gated settlement for agent work.</h1>
         <p className="max-w-2xl text-subheading text-graphite">
-          An institution commits a private spending mandate on chain. Identified agents deliver against it. Every release out
-          of escrow first proves, in zero knowledge, that it fits the mandate, and the receivable created in the challenge
-          window can be sold.
+          An institution commits a private spending mandate on chain. Identified agents deliver against it. The hook that
+          releases escrow carries a compliance slot: with a module installed, a release must first prove, in zero knowledge,
+          that it fits the mandate. The receivable created in the challenge window can be sold.
         </p>
+        <ComplianceSlot />
         <div className="flex flex-wrap gap-4">
           <PrimaryButton href="/dashboard">Open the dashboard</PrimaryButton>
           <GhostButton href={DOCS_URL} external>

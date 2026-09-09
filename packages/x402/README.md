@@ -44,9 +44,14 @@ Headers, all base64-encoded JSON:
 | `PAYMENT-RESPONSE` | server to client, on 200 | `SettleResponse`: `success`, `transaction`, `network`, `payer` |
 
 Settlement happens **after** the route handler returns (the x402 `authorization`
-flow, the library default). Pass `settlement: "before-handler"` to charge first
-(the `upfront` flow). Prices are decimal USDC strings; `usdcAsset("0.05")` turns
-one into the atomic `AssetAmount` the protocol carries.
+flow, the library default), and that is the only supported mode.
+`settlement: "before-handler"` is refused by `createPaidRoutes` and
+`createGatewayApp` with an error that says why: the `upfront` flow makes the
+resource server accept the payload without calling the facilitator's `verify`,
+and every replay-ledger operation this package owns lives in the verify hooks,
+so an upfront payment would be neither checked against the ledger nor written to
+it. Prices are decimal USDC strings; `usdcAsset("0.05")` turns one into the
+atomic `AssetAmount` the protocol carries.
 
 ## Running the gateway
 
@@ -95,17 +100,17 @@ payer's USDC moves straight from the payer to `payTo` inside
 `transferWithAuthorization`. To mount paid routes on an existing Hono app use
 `createPaidRoutes` and `app.use("*", ...)`; it returns the middleware only.
 
-`pool` is anything with `query(text, params) => { rows, rowCount }`, for example a
-`pg` `Pool`. Create the table with the exported `X402_PAYMENTS_DDL`:
+`pool` is a `@squaresdk/data` `Database`: `pgDatabase(process.env.DATABASE_URL)` in a
+service, `pgliteDatabase()` in a test. `postgresReplayStore` holds no SQL of its own;
+it is a thin adapter over that package's `x402Payments` repository, which is the single
+implementation of this ledger.
 
-```sql
-create table if not exists x402_payments (
-  chain_id bigint not null, asset bytea not null, payer bytea not null, nonce bytea not null,
-  amount numeric not null, pay_to bytea not null, resource text not null, tx_hash bytea,
-  status smallint not null, valid_before bigint not null, created_at timestamptz not null default now(),
-  primary key (chain_id, asset, payer, nonce)
-);
-```
+**Do not create `x402_payments` by hand.** It is defined once, in the
+`@squaresdk/data` migrations (`0003_x402`, plus `0006_x402_reason` for the failure
+reason), and created by `square-data migrate up` with `DATABASE_URL` set. This package
+used to export the table's DDL, which was one definition too many: creating the table
+first made `0003_x402` fail on `relation already exists`, and because the runner records
+a migration only after its DDL succeeds, every later migration stayed unapplied.
 
 `memoryReplayStore()` is for tests and single-process experiments only.
 
@@ -127,10 +132,24 @@ const receipt = decodePaymentResponseHeader(res.headers.get("PAYMENT-RESPONSE"))
 
 The wrapped `fetch` sends the request, reads the 402, signs one EIP-3009
 authorization for exactly the advertised amount with a fresh random nonce, retries
-once with `PAYMENT-SIGNATURE`, and returns the final response. The client only pays
-in the configured asset (Arc USDC by default) and never above
-`maxAmountPerPayment`; the payer signs an authorization, it never sends a
-transaction, so it needs USDC but no gas.
+once with `PAYMENT-SIGNATURE`, and returns the final response. The payer signs an
+authorization, it never sends a transaction, so it needs USDC but no gas.
+
+`maxAmountPerPayment` has no default and is required: a decimal USDC string such as
+`"1.00"`. `createPayingFetch` throws rather than build a client that would sign for
+whatever a 402 asks. What the client will sign for is decided by one rule of ours, and
+a 402 that does not fit it is refused without a signature:
+
+- the CAIP-2 network equals the configured one. The scheme is registered for that
+  network alone, not for `eip155:*`, so a 402 naming another chain has no client at all
+- the asset address equals the configured one, compared case-insensitively. Being one
+  of the x402 library's built-in default assets is not enough
+- the amount is a positive integer of atomic units at or below `maxAmountPerPayment`
+
+The library's own spend controls are configured with the same asset and the same cap,
+so a hostile 402 is usually refused a layer earlier, with the library's message. Either
+way nothing is signed. A 402 that offers several options is still payable: the rule
+filters the offers and the client takes one that fits.
 
 ## The replay guarantee
 
@@ -145,13 +164,56 @@ identity in a durable `ReplayStore` and moves it through three states:
    a race and is refused). This happens **before** settlement and before the route
    handler runs.
 3. `onAfterSettle` / `onSettleFailure`: mark it `settled` with the transaction hash,
-   or `failed`. A settled row is never downgraded.
+   or `failed` with a reason.
+
+One transition rule, in one place: **`accepted` is the only state a row can leave.**
+`markSettled` and `markFailed` both require the row to be `accepted` and both return
+whether the update held, so a second settle, a late failure after a settlement, or a
+mark for a row nobody accepted is a `false` the facilitator logs instead of a silent
+no-op. `markFailed`'s reason is stored, in the `reason` column added by migration
+`0006_x402_reason`, so reconciling a failure does not mean grepping logs for a
+`(payer, nonce)` pair.
+
+`has()` is deliberately status-blind: it answers "has this authorization identity ever
+been presented", not "did it settle". That is what replay protection needs, because an
+authorization that was accepted, or settled, or failed after being broadcast, must never
+be presented a second time. It also means a row must never be left in a state that
+cannot be resolved, which is what reconciliation is for.
 
 So one signed header buys one response, across restarts and across gateway
 replicas that share the database, and a signature that was seen but whose
 settlement failed cannot be presented again: the payer signs a new authorization
 instead. The chain remains the last line of defence (`authorizationState` makes
 the second `transferWithAuthorization` revert), the store is the first.
+
+### Reconciling a pending settlement
+
+There is one outcome the gateway cannot resolve on the spot: the transaction was
+broadcast but its receipt was not seen before the request ended, which the library
+reports as `settlement_pending`. The facilitator records the transaction hash on the
+still-`accepted` row and leaves it, because the payment may yet land and marking it
+failed would be a lie. `reconcileSettlements` closes it later:
+
+```ts
+import { createPublicClient, http } from "viem";
+import { arcTestnet, postgresReplayStore, receiptStatusFromClient, reconcileSettlements } from "@squaresdk/x402";
+
+const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
+
+const report = await reconcileSettlements({
+  store: postgresReplayStore(db),
+  receiptStatusOf: receiptStatusFromClient(publicClient),
+  logger: console,
+});
+```
+
+It reads the rows that are still `accepted` and, for each one: a successful receipt
+moves it to `settled` with that hash, a reverted receipt moves it to `failed` with
+`settlement_reverted`, and a receipt that cannot be found leaves it alone while the
+authorization is still valid. Once `validBefore` has passed the authorization can never
+be settled on chain again, so the row moves to `failed` with `authorization_expired`.
+It is idempotent and safe to run on a schedule beside `square-data sweep`; run it before
+that sweep, which drops rows 30 days after `validBefore`.
 
 Independently of the library's checks, `onBeforeVerify` also asserts that
 `payTo`, `asset` and `network` are on the configured allowlist, that the client's

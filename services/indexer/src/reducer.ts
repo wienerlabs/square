@@ -1,5 +1,6 @@
 import type { Address, Hex } from "viem";
 import { JobStatus, type SquareEvent } from "@squaresdk/core";
+import { stripNullCharacters } from "@squaresdk/data";
 
 export interface JobState {
   jobId: bigint;
@@ -73,6 +74,15 @@ export interface IndexerState {
 
 export const ListingStatus = { None: 0, Listed: 1, Sold: 2, Cancelled: 3 } as const;
 
+export type ReducerNotice =
+  | { code: "windowsMissing"; jobId: bigint; submittedAt: bigint }
+  | { code: "reputationWriteFailed"; jobId: bigint; agentId: bigint }
+  | { code: "validationWriteFailed"; jobId: bigint; requestHash: Hex };
+
+export type NoticeSink = (notice: ReducerNotice) => void;
+
+const ignoreNotice: NoticeSink = () => {};
+
 export function emptyState(): IndexerState {
   return { jobs: new Map(), disputes: new Map(), listings: new Map(), ledger: new Map(), windows: [], arbiterSets: new Map() };
 }
@@ -112,11 +122,11 @@ function requireDispute(state: IndexerState, jobId: bigint): DisputeState {
   return dispute;
 }
 
-export function applyEvent(state: IndexerState, event: SquareEvent): void {
+export function applyEvent(state: IndexerState, event: SquareEvent, notice: NoticeSink = ignoreNotice): void {
   const block = event.blockNumber ?? 0n;
   switch (event.contract) {
     case "SquareJob":
-      applyKernel(state, event, block);
+      applyKernel(state, event, block, notice);
       return;
     case "KeeperEvaluator":
       applyKeeper(state, event, block);
@@ -128,12 +138,12 @@ export function applyEvent(state: IndexerState, event: SquareEvent): void {
       applyMarket(state, event, block);
       return;
     case "SquareHook":
-      applyHook(state, event, block);
+      applyHook(state, event, block, notice);
       return;
   }
 }
 
-function applyKernel(state: IndexerState, event: Extract<SquareEvent, { contract: "SquareJob" }>, block: bigint): void {
+function applyKernel(state: IndexerState, event: Extract<SquareEvent, { contract: "SquareJob" }>, block: bigint, notice: NoticeSink): void {
   switch (event.eventName) {
     case "JobCreated": {
       const a = event.args;
@@ -165,7 +175,7 @@ function applyKernel(state: IndexerState, event: Extract<SquareEvent, { contract
     }
     case "JobDescribed": {
       const job = requireJob(state, event.args.jobId);
-      job.description = event.args.description;
+      job.description = stripNullCharacters(event.args.description);
       job.createdAt = BigInt(event.args.createdAt);
       job.updatedBlock = block;
       return;
@@ -208,6 +218,7 @@ function applyKernel(state: IndexerState, event: Extract<SquareEvent, { contract
       const job = requireJob(state, event.args.jobId);
       job.submittedAt = BigInt(event.args.submittedAt);
       job.expiredAt = BigInt(event.args.expiredAt);
+      if (state.windows.length === 0) notice({ code: "windowsMissing", jobId: job.jobId, submittedAt: job.submittedAt });
       const window = windowFor(state.windows, job.submittedAt);
       job.challengeEnd = window ? job.submittedAt + window.challengeWindow : null;
       job.updatedBlock = block;
@@ -370,16 +381,35 @@ function applyMarket(state: IndexerState, event: Extract<SquareEvent, { contract
   }
 }
 
-function applyHook(state: IndexerState, event: Extract<SquareEvent, { contract: "SquareHook" }>, block: bigint): void {
+function applyHook(state: IndexerState, event: Extract<SquareEvent, { contract: "SquareHook" }>, block: bigint, notice: NoticeSink): void {
+  if (event.eventName === "ReputationWriteFailed") {
+    notice({ code: "reputationWriteFailed", jobId: event.args.jobId, agentId: event.args.agentId });
+    return;
+  }
+  if (event.eventName === "ValidationWriteFailed") {
+    notice({ code: "validationWriteFailed", jobId: event.args.jobId, requestHash: event.args.requestHash });
+    return;
+  }
   if (event.eventName !== "AgentBound") return;
   const job = requireJob(state, event.args.jobId);
   job.agentId = event.args.agentId;
   job.updatedBlock = block;
 }
 
-export function reduce(events: SquareEvent[], state: IndexerState = emptyState()): IndexerState {
-  for (const event of events) applyEvent(state, event);
+export function reduce(events: SquareEvent[], state: IndexerState = emptyState(), notice: NoticeSink = ignoreNotice): IndexerState {
+  for (const event of events) applyEvent(state, event, notice);
   return state;
+}
+
+export function cloneState(state: IndexerState): IndexerState {
+  return {
+    jobs: new Map([...state.jobs].map(([jobId, job]) => [jobId, { ...job }])),
+    disputes: new Map([...state.disputes].map(([jobId, dispute]) => [jobId, { ...dispute, approvals: new Map(dispute.approvals) }])),
+    listings: new Map([...state.listings].map(([jobId, listing]) => [jobId, { ...listing }])),
+    ledger: new Map(state.ledger),
+    windows: state.windows.map((window) => ({ ...window })),
+    arbiterSets: new Map([...state.arbiterSets].map(([version, set]) => [version, { ...set, arbiters: [...set.arbiters] }])),
+  };
 }
 
 export function openJobs(state: IndexerState): JobState[] {
