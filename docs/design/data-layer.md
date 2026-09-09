@@ -270,10 +270,15 @@ create table keeper_actions (
 |---|---|---|
 | `job_events` | forever | it is the audit trail and the replay source |
 | `jobs`, `disputes`, `claim_listings`, `ledger_balances`, `arbiter_sets` | forever, rebuildable | mirror |
-| `idempotency_keys` | 24 h after `expires_at`, swept hourly | a client retrying after a day is a new request |
-| `rate_limits` | 2 windows, swept hourly | |
+| `idempotency_keys` | 24 h after `expires_at` | a client retrying after a day is a new request |
+| `rate_limits` | 2 windows | |
 | `x402_payments` | `valid_before` + 30 days | after `validBefore` the authorization cannot be settled on chain anyway; 30 days covers reconciliation |
 | `keeper_actions` | 90 days | operational, feeds the metrics in #50 |
+
+All four are removed by `square-data sweep`, which runs every sweep once and prints
+what each removed. Nothing sweeps on its own: the operator schedules that command
+hourly, from cron or a systemd timer, on the host that already holds `DATABASE_URL`
+for the migration step. `packages/data/README.md` carries both schedule examples.
 
 ## Access layer
 
