@@ -1,11 +1,12 @@
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 import { canonicalJson, memoryNonceStore, signAction, verifyAction } from "../src/signedMessages.js";
-import type { SquareAction } from "../src/signedMessages.js";
+import type { SquareAction, VerifyActionInput } from "../src/signedMessages.js";
 
 const alice = privateKeyToAccount("0x1111111111111111111111111111111111111111111111111111111111111111");
 const bob = privateKeyToAccount("0x2222222222222222222222222222222222222222222222222222222222222222");
 const NOW = 1_700_000_000n;
+const CHAIN_ID = 5042002n;
 
 function action(overrides: Partial<SquareAction> = {}): SquareAction {
   return {
@@ -15,7 +16,7 @@ function action(overrides: Partial<SquareAction> = {}): SquareAction {
     nonce: 1n,
     issuedAt: NOW - 10n,
     expiresAt: NOW + 60n,
-    chainId: 5042002n,
+    chainId: CHAIN_ID,
     ...overrides,
   };
 }
@@ -28,7 +29,7 @@ describe("verifyAction", () => {
   it("accepts a valid signature from the named and expected actor", async () => {
     const message = action();
     const signature = await signAction(alice, message);
-    const result = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW, nonceStore: freshStore() });
+    const result = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW, nonceStore: freshStore(), expectedChainId: CHAIN_ID });
     expect(result).toEqual({ ok: true, actor: alice.address, message });
   });
 
@@ -41,6 +42,7 @@ describe("verifyAction", () => {
       expectedActor: alice.address.toLowerCase() as `0x${string}`,
       now: NOW,
       nonceStore: freshStore(),
+      expectedChainId: CHAIN_ID,
     });
     expect(result.ok).toBe(true);
   });
@@ -48,37 +50,37 @@ describe("verifyAction", () => {
   it("rejects when the server expected a different actor", async () => {
     const message = action();
     const signature = await signAction(alice, message);
-    const result = await verifyAction({ message, signature, expectedActor: bob.address, now: NOW, nonceStore: freshStore() });
+    const result = await verifyAction({ message, signature, expectedActor: bob.address, now: NOW, nonceStore: freshStore(), expectedChainId: CHAIN_ID });
     expect(result).toMatchObject({ ok: false, reason: "unexpected_actor" });
   });
 
   it("rejects when the message names an actor who did not sign it", async () => {
     const message = action({ actor: bob.address });
     const signature = await signAction(alice, message);
-    const result = await verifyAction({ message, signature, expectedActor: bob.address, now: NOW, nonceStore: freshStore() });
+    const result = await verifyAction({ message, signature, expectedActor: bob.address, now: NOW, nonceStore: freshStore(), expectedChainId: CHAIN_ID });
     expect(result).toMatchObject({ ok: false, reason: "actor_mismatch" });
   });
 
   it("rejects a tampered message", async () => {
     const signature = await signAction(alice, action());
     const tampered = action({ resource: "invoice:43" });
-    const result = await verifyAction({ message: tampered, signature, expectedActor: alice.address, now: NOW, nonceStore: freshStore() });
+    const result = await verifyAction({ message: tampered, signature, expectedActor: alice.address, now: NOW, nonceStore: freshStore(), expectedChainId: CHAIN_ID });
     expect(result).toMatchObject({ ok: false, reason: "actor_mismatch" });
   });
 
   it("rejects an expired message, including exactly at expiresAt", async () => {
     const message = action();
     const signature = await signAction(alice, message);
-    const late = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW + 61n, nonceStore: freshStore() });
+    const late = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW + 61n, nonceStore: freshStore(), expectedChainId: CHAIN_ID });
     expect(late).toMatchObject({ ok: false, reason: "expired" });
-    const boundary = await verifyAction({ message, signature, expectedActor: alice.address, now: message.expiresAt, nonceStore: freshStore() });
+    const boundary = await verifyAction({ message, signature, expectedActor: alice.address, now: message.expiresAt, nonceStore: freshStore(), expectedChainId: CHAIN_ID });
     expect(boundary).toMatchObject({ ok: false, reason: "expired" });
   });
 
   it("rejects a message that is not yet valid", async () => {
     const message = action();
     const signature = await signAction(alice, message);
-    const result = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW - 11n, nonceStore: freshStore() });
+    const result = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW - 11n, nonceStore: freshStore(), expectedChainId: CHAIN_ID });
     expect(result).toMatchObject({ ok: false, reason: "not_yet_valid" });
   });
 
@@ -86,17 +88,17 @@ describe("verifyAction", () => {
     const nonceStore = freshStore();
     const message = action();
     const signature = await signAction(alice, message);
-    const first = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW, nonceStore });
+    const first = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW, nonceStore, expectedChainId: CHAIN_ID });
     expect(first.ok).toBe(true);
-    const replay = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW, nonceStore });
+    const replay = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW, nonceStore, expectedChainId: CHAIN_ID });
     expect(replay).toMatchObject({ ok: false, reason: "nonce_reused" });
 
     const next = action({ nonce: 2n });
-    const nextResult = await verifyAction({ message: next, signature: await signAction(alice, next), expectedActor: alice.address, now: NOW, nonceStore });
+    const nextResult = await verifyAction({ message: next, signature: await signAction(alice, next), expectedActor: alice.address, now: NOW, nonceStore, expectedChainId: CHAIN_ID });
     expect(nextResult.ok).toBe(true);
 
     const bobs = action({ actor: bob.address });
-    const bobResult = await verifyAction({ message: bobs, signature: await signAction(bob, bobs), expectedActor: bob.address, now: NOW, nonceStore });
+    const bobResult = await verifyAction({ message: bobs, signature: await signAction(bob, bobs), expectedActor: bob.address, now: NOW, nonceStore, expectedChainId: CHAIN_ID });
     expect(bobResult.ok).toBe(true);
   });
 
@@ -104,8 +106,8 @@ describe("verifyAction", () => {
     const nonceStore = freshStore();
     const message = action();
     const signature = await signAction(alice, message);
-    await verifyAction({ message, signature, expectedActor: bob.address, now: NOW, nonceStore });
-    const result = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW, nonceStore });
+    await verifyAction({ message, signature, expectedActor: bob.address, now: NOW, nonceStore, expectedChainId: CHAIN_ID });
+    const result = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW, nonceStore, expectedChainId: CHAIN_ID });
     expect(result.ok).toBe(true);
   });
 
@@ -116,9 +118,19 @@ describe("verifyAction", () => {
     expect(result).toMatchObject({ ok: false, reason: "chain_mismatch" });
   });
 
+  it("refuses to verify at all when the caller leaves expectedChainId out", async () => {
+    const message = action();
+    const signature = await signAction(alice, message);
+    const nonceStore = freshStore();
+    const withoutChain = { message, signature, expectedActor: alice.address, now: NOW, nonceStore } as unknown as VerifyActionInput;
+    const result = await verifyAction(withoutChain);
+    expect(result).toMatchObject({ ok: false, reason: "missing_expected_chain_id" });
+    expect(await nonceStore.consume(alice.address, message.nonce, message.expiresAt)).toBe(true);
+  });
+
   it("rejects garbage signatures without throwing", async () => {
     const message = action();
-    const result = await verifyAction({ message, signature: "0x1234", expectedActor: alice.address, now: NOW, nonceStore: freshStore() });
+    const result = await verifyAction({ message, signature: "0x1234", expectedActor: alice.address, now: NOW, nonceStore: freshStore(), expectedChainId: CHAIN_ID });
     expect(result.ok).toBe(false);
     expect(result.ok ? undefined : result.reason).toMatch(/invalid_signature|actor_mismatch/);
   });
@@ -126,7 +138,7 @@ describe("verifyAction", () => {
   it("rejects malformed messages", async () => {
     const message = action({ expiresAt: NOW - 20n });
     const signature = await signAction(alice, message);
-    const result = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW, nonceStore: freshStore() });
+    const result = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW, nonceStore: freshStore(), expectedChainId: CHAIN_ID });
     expect(result).toMatchObject({ ok: false, reason: "malformed_message" });
   });
 });
@@ -139,6 +151,39 @@ describe("memoryNonceStore", () => {
     expect(await store.consume(alice.address, 1n, NOW + 10n)).toBe(false);
     clock = NOW + 10n;
     expect(await store.consume(alice.address, 1n, NOW + 20n)).toBe(true);
+  });
+
+  it("drops an actor entry once every nonce it holds has expired", async () => {
+    let clock = NOW;
+    const store = memoryNonceStore({ now: () => clock, pruneEvery: 1_000_000 });
+    for (let index = 0; index < 200; index += 1) {
+      const actor = `0x${index.toString(16).padStart(40, "0")}` as `0x${string}`;
+      expect(await store.consume(actor, 1n, NOW + 10n)).toBe(true);
+    }
+    expect(store.size()).toBe(200);
+    clock = NOW + 10n;
+    expect(store.prune()).toBe(200);
+    expect(store.size()).toBe(0);
+  });
+
+  it("prunes on its own after pruneEvery calls, without waiting for each actor to return", async () => {
+    let clock = NOW;
+    const store = memoryNonceStore({ now: () => clock, pruneEvery: 4 });
+    for (let index = 0; index < 3; index += 1) {
+      const actor = `0x${index.toString(16).padStart(40, "0")}` as `0x${string}`;
+      await store.consume(actor, 1n, NOW + 10n);
+    }
+    expect(store.size()).toBe(3);
+    clock = NOW + 10n;
+    await store.consume(bob.address, 1n, NOW + 20n);
+    expect(store.size()).toBe(1);
+  });
+
+  it("keeps a live nonce when a prune runs", async () => {
+    const store = memoryNonceStore({ now: () => NOW, pruneEvery: 1 });
+    expect(await store.consume(alice.address, 1n, NOW + 10n)).toBe(true);
+    expect(await store.consume(alice.address, 1n, NOW + 10n)).toBe(false);
+    expect(store.size()).toBe(1);
   });
 });
 

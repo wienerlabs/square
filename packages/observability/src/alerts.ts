@@ -11,6 +11,8 @@ export interface AlertSnapshot {
   proofAttempts?: number;
   proofFailures?: number;
   disputesOpen?: number;
+  lastKeeperTickAt?: number;
+  hookWriteFailures?: number;
   [key: string]: unknown;
 }
 
@@ -59,6 +61,7 @@ export interface AlertError {
 export interface EvaluationResult {
   notified: Alert[];
   errors: AlertError[];
+  skipped: boolean;
 }
 
 export interface RuleState {
@@ -155,14 +158,26 @@ export function createAlerting(options: AlertingOptions): Alerting {
     }
   }
 
+  let running = false;
+
+  async function evaluateOnce(snapshot: AlertSnapshot): Promise<EvaluationResult> {
+    const now = clock();
+    const notified: Alert[] = [];
+    const errors: AlertError[] = [];
+    for (const entry of tracked) step(entry, snapshot, now, errors);
+    for (const entry of tracked) await flush(entry, notified, errors);
+    return { notified, errors, skipped: false };
+  }
+
   return {
     async evaluate(snapshot) {
-      const now = clock();
-      const notified: Alert[] = [];
-      const errors: AlertError[] = [];
-      for (const entry of tracked) step(entry, snapshot, now, errors);
-      for (const entry of tracked) await flush(entry, notified, errors);
-      return { notified, errors };
+      if (running) return { notified: [], errors: [], skipped: true };
+      running = true;
+      try {
+        return await evaluateOnce(snapshot);
+      } finally {
+        running = false;
+      }
     },
     state() {
       return tracked.map((entry) => {
@@ -192,6 +207,7 @@ export const DEFAULT_MAX_FAILURE_RATIO = 0.2;
 export const DEFAULT_FAILURE_WINDOW_SECONDS = 300;
 export const DEFAULT_MIN_ATTEMPTS = 5;
 export const DEFAULT_MAX_OPEN_DISPUTES = 10;
+export const DEFAULT_MAX_TICK_AGE_SECONDS = 300;
 
 export interface RuleOptions {
   forSeconds?: number;
@@ -200,17 +216,29 @@ export interface RuleOptions {
 
 export interface KeeperStalledOptions extends RuleOptions {
   maxPendingAgeSeconds?: number;
+  maxTickAgeSeconds?: number;
 }
 
 export function keeperStalled(options: KeeperStalledOptions = {}): AlertRule {
   const max = options.maxPendingAgeSeconds ?? DEFAULT_MAX_PENDING_AGE_SECONDS;
+  const maxTickAge = options.maxTickAgeSeconds ?? DEFAULT_MAX_TICK_AGE_SECONDS;
   return {
     name: "keeperStalled",
     severity: options.severity ?? "page",
     forSeconds: options.forSeconds ?? 60,
-    evaluate(snapshot) {
+    evaluate(snapshot, context) {
+      const lastTickAt = numeric(snapshot.lastKeeperTickAt);
+      if (lastTickAt !== undefined) {
+        const tickAge = Math.round((context.now - lastTickAt) / 1000);
+        if (tickAge > maxTickAge) {
+          return { firing: true, detail: `no keeper tick completed for ${tickAge}s, above ${maxTickAge}s` };
+        }
+      }
       const age = numeric(snapshot.oldestPendingAgeSeconds);
-      if (age === undefined) return { firing: false, detail: "no pending-age sample" };
+      if (age === undefined) {
+        if (lastTickAt === undefined) return { firing: false, detail: "no pending-age sample" };
+        return { firing: false, detail: `a keeper tick completed within ${maxTickAge}s` };
+      }
       if (age > max) {
         return { firing: true, detail: `oldest finalizable job has waited ${age}s, above ${max}s` };
       }
@@ -288,6 +316,27 @@ export function proofFailureRate(options: ProofFailureRateOptions = {}): AlertRu
       const summary = `${windowFailures}/${windowAttempts} proofs failed (${(ratio * 100).toFixed(1)}%) in the last ${windowSeconds}s`;
       if (ratio > maxRatio) return { firing: true, detail: `${summary}, above ${(maxRatio * 100).toFixed(1)}%` };
       return { firing: false, detail: summary };
+    },
+  };
+}
+
+export interface HookWriteFailuresOptions extends RuleOptions {
+  maxFailures?: number;
+}
+
+export function hookWriteFailures(options: HookWriteFailuresOptions = {}): AlertRule {
+  const max = options.maxFailures ?? 0;
+  return {
+    name: "hookWriteFailures",
+    severity: options.severity ?? "warn",
+    forSeconds: options.forSeconds ?? 0,
+    evaluate(snapshot) {
+      const failures = numeric(snapshot.hookWriteFailures);
+      if (failures === undefined) return { firing: false, detail: "no hook write sample" };
+      if (failures > max) {
+        return { firing: true, detail: `${failures} ERC-8004 registry writes failed, these should never fire` };
+      }
+      return { firing: false, detail: "no ERC-8004 registry write has failed" };
     },
   };
 }

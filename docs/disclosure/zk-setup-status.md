@@ -160,14 +160,27 @@ Not affected:
 Use, verbatim or close to it:
 
 > The ZK trusted setup inherited from the prior work is a demo setup in both
-> phases, not a ceremony. A public multi-party ceremony covering both is
-> planned. Until it completes, no claim of production-level assurance applies to
-> anything in this repository.
+> phases, not a ceremony. A key built in this repository is a different artifact:
+> its phase 1 is real, the Perpetual Powers of Tau contribution 80 adopted in
+> [#15][i15] and verified by hash, and its phase 2 is still a development one,
+> a single contribution with no beacon. The public multi-party phase-2 ceremony
+> is [#16][i16] and it has not been held. Until it completes, no claim of
+> production-level assurance applies to anything in this repository.
 
 Short form, where a sentence is all there is room for:
 
-> The trusted setup is a demo: phase 1 was generated locally and phase 2 has one
-> contribution with no beacon. The public ceremony has not been held.
+> The trusted setup is a demo. The inherited key is a demo in both phases; a key
+> built here stands on the adopted public powers of tau but its phase 2 is still
+> one contribution with no beacon, and the phase-2 ceremony has not been held.
+
+Two parts, always, and in that order: what the inherited artifact is, then what
+this repository can build today. [`circuits/README.md`](../../circuits/README.md)
+already carries that shape and is the model. Naming only the inherited artifact
+understates a key built here; naming only a key built here hides what the prior
+work shipped.
+
+Do not write that the planned ceremony covers both phases. It does not, and has
+not since [#15][i15] closed phase 1 by adoption: [#16][i16] is phase 2 alone.
 
 Never write, in any language: that the setup is production-anything, that the
 ceremony has been held, or that phase 1 is the Hermez powers of tau. <!-- ci-allow-phrase -->

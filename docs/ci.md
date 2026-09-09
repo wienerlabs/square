@@ -13,7 +13,7 @@ pull request.
 
 | Check | What a green run means |
 |---|---|
-| `build, test, gas` | 111 Foundry tests, `forge build --sizes`, a gas report on the pull request and a coverage table on the run summary. |
+| `build, test, gas` | The whole Foundry suite, `forge build --sizes`, a gas report on the pull request and a coverage table on the run summary. |
 | `@squaresdk/core against anvil` | The SDK drives all five settlement paths against a locally deployed stack. |
 | `verifies on Arc Testnet` | A proof the prover produced verifies against Arc's own `0x06`/`0x07`/`0x08`, not revm's. |
 | `circuits` | `payment.circom` compiles, a proving key builds, and 49 constraint tests ran against them. |

@@ -1,7 +1,13 @@
 import { createPublicClient, custom } from "viem";
 import type { Transport } from "viem";
 import { describe, expect, it, vi } from "vitest";
-import { RpcEndpointCooldownError, createFailoverTransport, jitteredBackoffDelay, withRpcRetry } from "../src/rpcFailover.js";
+import {
+  RpcEndpointCooldownError,
+  createFailoverTransport,
+  isPermanentRpcError,
+  jitteredBackoffDelay,
+  withRpcRetry,
+} from "../src/rpcFailover.js";
 
 type Handler = (args: { method: string; params?: unknown }) => Promise<unknown>;
 
@@ -197,5 +203,115 @@ describe("withRpcRetry", () => {
     expect(jitteredBackoffDelay(10, 100, 1_000, () => 1)).toBe(1_000);
     expect(jitteredBackoffDelay(10, 100, 1_000, () => 0)).toBe(500);
     expect(jitteredBackoffDelay(1, 200, 5_000, () => 0)).toBe(100);
+  });
+
+  it("never calls fn when the signal was already aborted before the first attempt", async () => {
+    let calls = 0;
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      withRpcRetry(
+        async () => {
+          calls += 1;
+          throw new Error("rpc down");
+        },
+        { attempts: 3, signal: controller.signal, sleep: async () => undefined }
+      )
+    ).rejects.toThrow(/abort/i);
+    expect(calls).toBe(0);
+  });
+
+  it("cuts the backoff sleep short when the signal aborts, and does not call fn again", async () => {
+    let calls = 0;
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    setTimeout(() => controller.abort(), 20);
+    await expect(
+      withRpcRetry(
+        async () => {
+          calls += 1;
+          throw new Error("rpc down");
+        },
+        { attempts: 3, baseDelayMs: 400, maxDelayMs: 400, random: () => 1, signal: controller.signal }
+      )
+    ).rejects.toThrow("rpc down");
+    expect(calls).toBe(1);
+    expect(Date.now() - startedAt).toBeLessThan(390);
+  });
+
+  it("sleeps the full backoff when no signal aborts it", async () => {
+    let calls = 0;
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    await expect(
+      withRpcRetry(
+        async () => {
+          calls += 1;
+          throw new Error("rpc down");
+        },
+        { attempts: 2, baseDelayMs: 60, maxDelayMs: 60, random: () => 1, signal: controller.signal }
+      )
+    ).rejects.toThrow("rpc down");
+    expect(calls).toBe(2);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(50);
+  });
+
+  it("does not retry a permanent json-rpc error under the default predicate", async () => {
+    for (const code of [-32600, -32601, -32602, -32603]) {
+      let calls = 0;
+      await expect(
+        withRpcRetry(
+          async () => {
+            calls += 1;
+            throw Object.assign(new Error("invalid params"), { code });
+          },
+          { attempts: 4, sleep: async () => undefined }
+        )
+      ).rejects.toThrow("invalid params");
+      expect(calls).toBe(1);
+    }
+  });
+
+  it("does not retry execution reverted but still retries a transient server error", async () => {
+    let reverted = 0;
+    await expect(
+      withRpcRetry(
+        async () => {
+          reverted += 1;
+          throw new Error("execution reverted: insufficient balance");
+        },
+        { attempts: 4, sleep: async () => undefined }
+      )
+    ).rejects.toThrow("execution reverted");
+    expect(reverted).toBe(1);
+
+    let transient = 0;
+    await expect(
+      withRpcRetry(
+        async () => {
+          transient += 1;
+          throw Object.assign(new Error("server error"), { code: -32000 });
+        },
+        { attempts: 4, sleep: async () => undefined }
+      )
+    ).rejects.toThrow("server error");
+    expect(transient).toBe(4);
+  });
+});
+
+describe("isPermanentRpcError", () => {
+  it("finds the code through a wrapped cause chain and leaves transient errors retryable", () => {
+    expect(isPermanentRpcError(Object.assign(new Error("invalid params"), { code: -32602 }))).toBe(true);
+    expect(isPermanentRpcError(new Error("outer", { cause: Object.assign(new Error("inner"), { code: -32601 }) }))).toBe(true);
+    expect(isPermanentRpcError(new Error("outer", { cause: new Error("execution reverted") }))).toBe(true);
+    expect(isPermanentRpcError(Object.assign(new Error("limit exceeded"), { code: -32005 }))).toBe(false);
+    expect(isPermanentRpcError(new Error("socket hang up"))).toBe(false);
+    expect(isPermanentRpcError("not an object")).toBe(false);
+  });
+
+  it("survives a self-referencing cause chain", () => {
+    const looping = new Error("looping") as Error & { cause?: unknown };
+    looping.cause = looping;
+    expect(isPermanentRpcError(looping)).toBe(false);
   });
 });

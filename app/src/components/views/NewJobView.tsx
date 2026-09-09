@@ -17,6 +17,7 @@ import { SectionHeading } from "@/components/SectionHeading";
 import { Step, type StepState } from "@/components/Step";
 import { ArcNetworkMark, UsdcMark } from "@/components/marks";
 import { WalletButton } from "@/components/WalletButton";
+import { minimumExpiry } from "@/lib/actions";
 import { formatBps, formatDuration, formatTimestamp, formatUsdc, fromDatetimeLocal, parseUsdc, shortHash, toDatetimeLocal } from "@/lib/format";
 import { useNetwork, useNow, useSquare } from "@/lib/square";
 import { describeError, useTx } from "@/lib/tx";
@@ -135,7 +136,8 @@ export function NewJobView() {
   }, []);
 
   const horizon = network.data?.settlementHorizon;
-  const minExpiry = horizon === undefined ? null : now + horizon;
+  const floor = horizon === undefined ? null : minimumExpiry(now, horizon);
+  const minExpiry = floor === null ? null : floor.at;
 
   const specState = useMemo(() => parseSpec(spec), [spec]);
   const canonical = useMemo(() => (specState.kind === "ok" ? (canonicalize(specState.value) ?? "") : ""), [specState]);
@@ -147,8 +149,8 @@ export function NewJobView() {
       ? null
       : expirySeconds === null
         ? "Enter a date and time."
-        : minExpiry !== null && expirySeconds < minExpiry
-          ? `The expiry must be at least ${formatDuration(horizon ?? 0)} from now, so the challenge and dispute windows fit before it.`
+        : floor !== null && expirySeconds < floor.at
+          ? `The expiry must be at least ${formatDuration(floor.horizon + floor.margin)} from now: one settlement horizon of ${formatDuration(floor.horizon)} for the challenge and dispute windows, plus ${formatDuration(floor.margin)} of margin, because submit measures the same horizon again from its own block and a job created at the bare minimum can never be submitted.`
           : null;
   const expiryValid = expirySeconds !== null && expiryError === null;
   const budgetAmount = budget.trim().length === 0 ? null : parseUsdc(budget);
@@ -340,8 +342,8 @@ export function NewJobView() {
               htmlFor="expiry"
               error={expiryError}
               hint={
-                minExpiry !== null && horizon !== undefined
-                  ? `Earliest ${formatTimestamp(minExpiry)}, which is now plus the settlement horizon of ${formatDuration(horizon)}.`
+                floor !== null
+                  ? `Earliest ${formatTimestamp(floor.at)}: the settlement horizon of ${formatDuration(floor.horizon)} plus ${formatDuration(floor.margin)} of margin, so the job is still submittable once it is funded and delivered.`
                   : network.isError
                     ? `The settlement horizon could not be read: ${describeError(network.error)}`
                     : "Reading the settlement horizon from KeeperEvaluator."
@@ -545,7 +547,7 @@ export function NewJobView() {
 
             <ul className="mt-6 flex flex-col gap-2" aria-label="Ready to send">
               <Check done={providerValid}>Provider address</Check>
-              <Check done={expiryValid}>Expiry after the settlement horizon</Check>
+              <Check done={expiryValid}>Expiry with room left to submit</Check>
               <Check done={specState.kind === "ok"}>Valid JSON spec</Check>
               <Check done={onActiveChain}>Wallet connected on {activeChain.name}</Check>
             </ul>

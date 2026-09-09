@@ -48,25 +48,61 @@ export function currentUnixSeconds(): bigint {
   return BigInt(Math.floor(Date.now() / 1000));
 }
 
-export function memoryNonceStore(options: { now?: (() => bigint) | undefined } = {}): NonceStore {
+export interface MemoryNonceStore extends NonceStore {
+  prune(): number;
+  size(): number;
+}
+
+export interface MemoryNonceStoreOptions {
+  now?: (() => bigint) | undefined;
+  pruneEvery?: number | undefined;
+}
+
+export const MEMORY_NONCE_PRUNE_EVERY = 64;
+
+export function memoryNonceStore(options: MemoryNonceStoreOptions = {}): MemoryNonceStore {
   const now = options.now ?? currentUnixSeconds;
+  const pruneEvery = Math.max(1, options.pruneEvery ?? MEMORY_NONCE_PRUNE_EVERY);
   const used = new Map<string, Map<bigint, bigint>>();
+  let consumedSincePrune = 0;
+  const dropExpired = (nonces: Map<bigint, bigint>, current: bigint): void => {
+    for (const [seen, expiry] of nonces) if (expiry <= current) nonces.delete(seen);
+  };
+  const prune = (): number => {
+    const current = now();
+    let droppedActors = 0;
+    for (const [actorKey, nonces] of used) {
+      dropExpired(nonces, current);
+      if (nonces.size === 0) {
+        used.delete(actorKey);
+        droppedActors += 1;
+      }
+    }
+    consumedSincePrune = 0;
+    return droppedActors;
+  };
   return {
     async consume(actor, nonce, expiresAt) {
+      consumedSincePrune += 1;
+      if (consumedSincePrune >= pruneEvery) prune();
       const actorKey = actor.toLowerCase();
       const nonces = used.get(actorKey) ?? new Map<bigint, bigint>();
-      const current = now();
-      for (const [seen, expiry] of nonces) if (expiry <= current) nonces.delete(seen);
+      dropExpired(nonces, now());
       if (nonces.has(nonce)) return false;
       nonces.set(nonce, expiresAt);
       used.set(actorKey, nonces);
       return true;
+    },
+    prune,
+    size() {
+      return used.size;
     },
   };
 }
 
 export type VerifyActionFailure =
   | "malformed_message"
+  | "missing_expected_chain_id"
   | "chain_mismatch"
   | "invalid_signature"
   | "actor_mismatch"
@@ -84,8 +120,8 @@ export interface VerifyActionInput {
   signature: Hex;
   expectedActor: Address;
   nonceStore: NonceStore;
+  expectedChainId: bigint | number;
   now?: bigint | number | undefined;
-  expectedChainId?: bigint | number | undefined;
 }
 
 function failure(reason: VerifyActionFailure, detail: string): VerifyActionResult {
@@ -101,7 +137,13 @@ export async function verifyAction(input: VerifyActionInput): Promise<VerifyActi
   if (!isAddress(message.actor)) return failure("malformed_message", "message.actor is not an address");
   if (!isAddress(expectedActor)) return failure("malformed_message", "expectedActor is not an address");
   if (message.expiresAt <= message.issuedAt) return failure("malformed_message", "expiresAt must be after issuedAt");
-  if (input.expectedChainId !== undefined && BigInt(input.expectedChainId) !== message.chainId) {
+  if (input.expectedChainId === undefined || input.expectedChainId === null) {
+    return failure(
+      "missing_expected_chain_id",
+      "expectedChainId is required: without it a signature made for another chain verifies here"
+    );
+  }
+  if (BigInt(input.expectedChainId) !== message.chainId) {
     return failure("chain_mismatch", `message is for chain ${message.chainId}, expected ${input.expectedChainId}`);
   }
   let recovered: Address;

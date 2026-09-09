@@ -17,11 +17,38 @@ proves it by comparing the rebuilt state with the chain field by field.
   checkpoint, all in one transaction. On start it replays the journal from the
   database and continues from the checkpoint, so a restart re-reads nothing
   from the chain and never applies a log twice.
+- A batch is reduced into a copy of the in-memory state, and the copy is adopted
+  only after the transaction commits. A rolled-back batch therefore leaves the
+  in-memory state and the persisted ledger cursor exactly where they were, and
+  the retry applies each log once rather than twice.
+- Each log is journalled inside its own savepoint. One log that Postgres refuses
+  or that the reducer rejects is set aside instead of failing the batch: it is
+  counted in `square_indexer_quarantined_events_total`, logged as
+  `indexer.event_quarantined`, listed on `/quarantine`, and the rest of the batch
+  still commits and the checkpoint still advances. Chain strings are untrusted,
+  so a `U+0000` in a job description is stripped on the way into the mirror
+  rather than left to poison a `jsonb` bind.
+- On start it compares the address stored in `indexer_checkpoints` with the
+  address in the deployment file. A mismatch means the checkpoint belongs to an
+  earlier deployment on the same chain and resuming from it would silently skip
+  every event of the new contracts, so the indexer refuses to start unless
+  `ON_DEPLOYMENT_CHANGE=restart` tells it to reindex from `START_BLOCK`.
 - No reorg handling. Arc has deterministic finality: a block is either final or
   absent, so `latest` is safe to index.
 - `api.ts` serves `/jobs/open`, `/jobs/in-window`, `/jobs/finalizable`,
   `/jobs/provider/:address`, `/jobs/:id`, `/listings`, `/disputes/open`,
-  `/status`, plus `/health`, `/metrics` and `/version`.
+  `/status`, `/quarantine`, plus `/health`, `/metrics` and `/version`.
+- `/health` marks the lag check critical, so an indexer more than
+  `MAX_LAG_BLOCKS` behind the chain head answers 503 rather than 200 and a
+  readiness probe takes it out of rotation.
+- Alerting runs in-process every `ALERT_INTERVAL_MS` with the `indexerLagging`
+  and `hookWriteFailures` rules. Delivery failures are logged as
+  `indexer.alert_dispatch_failed` and counted in
+  `square_alert_dispatch_failures_total`, so a broken webhook is visible instead
+  of silent.
+- `SubmissionTimed` arriving while no `WindowsConfigured` has been seen is a
+  configuration error, not a job with no window: it warns as
+  `indexer.windows_missing` and shows up as `missingWindowEvents` on `/status`.
 
 ## Running
 
@@ -33,6 +60,10 @@ export START_BLOCK=<deployment block>
 export BATCH_BLOCKS=2000
 export POLL_INTERVAL_MS=3000
 export PORT=3010
+export MAX_LAG_BLOCKS=100             # above this the lag check fails and /health answers 503
+export ALERT_INTERVAL_MS=30000
+export ALERT_WEBHOOK_URL=             # empty logs the alerts instead of posting them
+export ON_DEPLOYMENT_CHANGE=fail      # or restart, to reindex from START_BLOCK after a redeploy
 npx square-data migrate up
 npm install --install-links && npm run build && npm start
 ```
@@ -43,7 +74,10 @@ itself, because there is nothing to preserve.
 
 ## Tests
 
-`npm test` runs the reducer suite hermetically. With an anvil at
+`npm test` runs the reducer suite and the isolation suite hermetically, the
+second one driving encoded logs through a PGlite journal to cover the poison
+event, the rolled-back batch, the deployment change and the stalled health
+check. With an anvil at
 `http://127.0.0.1:8545` carrying the local stack
 (`contracts/script/DeployLocal.s.sol`) it also runs the sync test with a
 PGlite journal and the differential test that drives every settlement path

@@ -116,9 +116,11 @@ in an appendix.
 > - **Phase 2 — demo.** One contribution. No beacon. One machine again.
 >
 > Either half alone lets whoever held that entropy forge a proof for any
-> statement. A public multi-party ceremony covering both phases is scheduled.
-> Until it completes and its verifying key is deployed, nothing here carries an
-> assurance claim — and we are not asking anyone to put value behind it.
+> statement. Phase 1 is settled for keys built in the Square repository, which
+> stand on the adopted Perpetual Powers of Tau contribution 80; the public
+> multi-party **phase-2** ceremony is scheduled and has not been held. Until it
+> completes and its verifying key is deployed, nothing here carries an assurance
+> claim, and we are not asking anyone to put value behind it.
 >
 > `inspect-zkey-setup.mjs payment.zkey` → `phase 1 UNRECOGNISED, phase 2: 1, no beacon`
 
@@ -127,9 +129,10 @@ Speaker note for that slide:
 > This is the slide people expect us to leave out. Both phases are development
 > quality: the tau was made locally and phase 2 has a single contribution with
 > no beacon. You do not have to take that from me — the tool reads it out of the
-> key. We are running the real ceremony over both phases; that is issue 16 and
-> it is on the schedule. We will not describe this as production until it is
-> done.
+> key. Phase 1 we already closed, by adopting the public Perpetual Powers of Tau
+> contribution 80 and checking its hash, so keys we build now stand on it. Issue
+> 16 is the phase-2 ceremony and it is on the schedule. We will not describe this
+> as production until it is done.
 
 ## 2. Three old repositories' READMEs
 
@@ -160,8 +163,10 @@ block. It is short enough to fit a footer and specific enough to be checkable:
 
 > **Trusted setup: demo, both phases.** The powers of tau was generated locally
 > rather than taken from a public ceremony, and phase 2 has one contribution
-> with no beacon. A public multi-party ceremony covering both is scheduled;
-> until it completes, no assurance claim applies.
+> with no beacon. Keys built in the Square repository stand on the adopted
+> Perpetual Powers of Tau contribution 80 instead, so only the phase-2 ceremony
+> is outstanding; it is scheduled, and until it completes, no assurance claim
+> applies.
 > Verify: `github.com/wienerlabs/square` → `docs/disclosure/zk-setup-status.md`
 
 Rules for these materials:
@@ -187,10 +192,12 @@ proofs come up, not when someone asks how the setup was generated.
 > setup, and both halves of ours are development quality. The powers of tau was
 > generated on one machine rather than taken from a public ceremony, and phase 2
 > has a single contribution with no beacon. Either one means whoever ran it
-> could forge a proof. We are treating it as a demo and we are running the real
-> ceremony over both phases — public, multi-party, an external tau with a
-> published hash, a beacon announced in advance, transcripts published. Until
-> that lands we are not claiming assurance for any of it.
+> could forge a proof. We are treating it as a demo. Phase 1 we have since
+> closed by adopting an external tau with a published hash, the Perpetual Powers
+> of Tau contribution 80, so keys we build now inherit it; the real **phase-2**
+> ceremony is still ahead: public, multi-party, a beacon announced in advance,
+> transcripts published. Until that lands we are not claiming assurance for any
+> of it.
 
 **If they ask "so are the proofs real?":**
 
