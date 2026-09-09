@@ -104,10 +104,14 @@ export async function hashUuid(uuidString, label = 'policy_id') {
 //
 // The overflow message reports the ceiling but not how many entries were sent:
 // list cardinality is part of the policy the circuit exists to hide.
-function pad(values, maxLength, label) {
-  if (values.length > maxLength) {
+export function assertWithinCircuitMaximum(length, maxLength, label) {
+  if (length > maxLength) {
     throw new Error(`${label}: exceeds the circuit maximum of ${maxLength} entries`);
   }
+}
+
+function pad(values, maxLength, label) {
+  assertWithinCircuitMaximum(values.length, maxLength, label);
   const out = values.map(String);
   while (out.length < maxLength) out.push('0');
   return out;
@@ -118,6 +122,12 @@ export function padAddressList(addresses, maxLength, label) {
 }
 
 export async function padCategoryList(categories, maxLength, label) {
+  // Before the loop, not after it. pad() checks the same thing, but by then
+  // every entry has already been Poseidon-hashed and thrown away: the body limit
+  // allows roughly 65,400 single-character categories at about 100 microseconds
+  // each, and `await` on an already-resolved value never yields, so the event
+  // loop is blocked for the whole of it and /health stops answering.
+  assertWithinCircuitMaximum(categories.length, maxLength, label);
   const hashed = [];
   for (const category of categories) {
     hashed.push(await hashCategory(category, label));
