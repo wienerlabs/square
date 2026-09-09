@@ -4,9 +4,13 @@
 # tek tek yaziliyor; "test dosyalarini atla" bicimindeki genis bir kural
 # bilerek yok, cunku gercek bir sir de bir test dosyasinda durabilir.
 #
-# Not: bu surumde [allowlist] altindaki `regexes` alani `useDefault = true`
-# ile birlestiginde uygulanmiyor; deger bazinda istisna yerine yol bazinda
-# istisna yazmak zorunda kaldik. Yeni bir yol eklerken gerekcesini de yaz.
+# Not: tekil [allowlist] blogundaki `regexes` alani `useDefault = true` ile
+# birlestiginde uygulanmiyor. Cogul [[allowlists]] + `regexTarget` calisiyor —
+# square#45'te dogrulandi, negatif kontrolle: ayni dosyaya konan gercek bir sir
+# hala yakalaniyor. Deger bazinda yazilabiliyorsa oyle yaz, cunku yol bazinda
+# istisna o dosyaya sonradan girecek her seyi de gorunmez yapiyor.
+#
+# Yeni bir istisna eklerken gerekcesini de yaz.
 
 [extend]
 useDefault = true
@@ -26,3 +30,17 @@ paths = [
   '''^contracts/script/DeployLocal\.s\.sol$''',
   '''^packages/core/test/fork\.test\.ts$''',
 ]
+
+[[allowlists]]
+description = """proofs.json'daki `zkey_sha256`: fixture'lari ureten zkey'in
+ozeti. square#121 onu oraya koydu, cunku commit'lenmis verifier ile
+fixture'larin ayni anahtardan geldigi baska turlu soylenemiyor. generic-api-key
+kuralina takiliyor: 64 karakterlik hex, ve anahtar adi `_sha256` ile bitiyor.
+
+Yol degil deger bazinda: dosyanin tamami muaf tutulsa oraya konacak gercek bir
+sir de gorunmez olurdu, ve bu dosya her devre degisikliginde yeniden uretiliyor.
+
+Degeri degistirerek cozulemez, ki ptau onbellek anahtarinda oyle cozulmustu:
+orada anahtarin bicimi tesadufiydi, burada degerin kendisi kayit."""
+regexTarget = "line"
+regexes = ['''"zkey_sha256":\s*"[0-9a-f]{64}"''']
