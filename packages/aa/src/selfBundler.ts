@@ -27,6 +27,7 @@ import {
   waitForTransactionReceipt,
   writeContract,
 } from "viem/actions";
+import { callGasLimitFromTransactionEstimate } from "./callGasLimit.js";
 import { ENTRY_POINT_V07 } from "./constants.js";
 import {
   CallSimulationRevertedError,
@@ -142,7 +143,12 @@ export function createSelfBundler(parameters: CreateSelfBundlerParameters): Self
 
   async function estimateCallGas(sender: Address, callData: Hex): Promise<bigint> {
     try {
-      return await estimateGas(publicClient, { account: entryPointAddress, to: sender, data: callData });
+      const estimate = await estimateGas(publicClient, {
+        account: entryPointAddress,
+        to: sender,
+        data: callData,
+      });
+      return callGasLimitFromTransactionEstimate(estimate, callData);
     } catch (error) {
       if (!isExecutionRevert(error)) throw error;
       throw new CallSimulationRevertedError({ sender, callData, data: revertDataOf(error), cause: error as Error });
