@@ -39,9 +39,18 @@ export interface GatewayAppOptions {
   settlement?: SettlementMode;
 }
 
+export const BEFORE_HANDLER_UNSUPPORTED =
+  'settlement: "before-handler" is not supported. The upfront payment flow makes the resource server accept the payload ' +
+  "without calling the facilitator's verify, and every replay-ledger operation this package owns lives in the verify hooks: " +
+  "the authorization would be neither checked against the ledger nor written to it, and a successful payment would leave no row. " +
+  'Use the default settlement: "after-handler".';
+
 export function createPaidRoutes(options: PaidRoutesOptions): MiddlewareHandler {
   const asset = options.asset ?? ARC_TESTNET_USDC;
   const settlement = options.settlement ?? "after-handler";
+  if (settlement === "before-handler") {
+    throw new Error(`createPaidRoutes: ${BEFORE_HANDLER_UNSUPPORTED}`);
+  }
   const payTo = getAddress(options.payTo);
   const server = new x402ResourceServer(options.facilitator).register(
     options.network,
@@ -56,7 +65,6 @@ export function createPaidRoutes(options: PaidRoutesOptions): MiddlewareHandler 
         network: options.network,
         price: usdcAsset(route.price, asset),
         ...(route.maxTimeoutSeconds !== undefined ? { maxTimeoutSeconds: route.maxTimeoutSeconds } : {}),
-        ...(settlement === "before-handler" ? { extra: { paymentFlow: "upfront" } } : {}),
       },
       mimeType: route.mimeType ?? "application/json",
       ...(route.description !== undefined ? { description: route.description } : {}),

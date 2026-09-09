@@ -3,6 +3,7 @@ import type { SqlClient } from "./sql.js";
 
 export interface RateLimitStore {
   increment(bucket: string, windowStart: number): Promise<number>;
+  prune?(olderThanMs: number): Promise<void>;
 }
 
 export interface RateLimitDecision {
@@ -42,27 +43,53 @@ export function rateLimiter<Ctx>(store: RateLimitStore, options: RateLimiterOpti
   };
 }
 
-export function memoryRateLimitStore(): RateLimitStore {
+export interface MemoryRateLimitStore extends RateLimitStore {
+  prune(olderThanMs: number): Promise<void>;
+  size(): number;
+}
+
+export interface MemoryRateLimitStoreOptions {
+  maxEntries?: number | undefined;
+}
+
+export const MEMORY_RATE_LIMIT_MAX_ENTRIES = 10_000;
+
+export function memoryRateLimitStore(options: MemoryRateLimitStoreOptions = {}): MemoryRateLimitStore {
+  const maxEntries = Math.max(1, options.maxEntries ?? MEMORY_RATE_LIMIT_MAX_ENTRIES);
   const windows = new Map<string, { windowStart: number; count: number }>();
+  const touch = (bucket: string, window: { windowStart: number; count: number }): void => {
+    windows.delete(bucket);
+    windows.set(bucket, window);
+  };
+  const evictLeastRecentlyUsed = (): void => {
+    while (windows.size > maxEntries) {
+      const oldest = windows.keys().next();
+      if (oldest.done === true) return;
+      windows.delete(oldest.value);
+    }
+  };
   return {
     async increment(bucket, windowStart) {
       const current = windows.get(bucket);
       if (current !== undefined && current.windowStart === windowStart) {
         current.count += 1;
+        touch(bucket, current);
         return current.count;
       }
-      windows.set(bucket, { windowStart, count: 1 });
+      touch(bucket, { windowStart, count: 1 });
+      evictLeastRecentlyUsed();
       return 1;
+    },
+    async prune(olderThanMs) {
+      for (const [bucket, window] of windows) {
+        if (window.windowStart < olderThanMs) windows.delete(bucket);
+      }
+    },
+    size() {
+      return windows.size;
     },
   };
 }
-
-export const RATE_LIMIT_TABLE_SQL = `create table if not exists rate_limits (
-  bucket text not null,
-  window_start timestamptz not null,
-  count integer not null,
-  primary key (bucket, window_start)
-)`;
 
 const RATE_LIMIT_INCREMENT_SQL = `insert into rate_limits (bucket, window_start, count)
 values ($1, $2::timestamptz, 1)

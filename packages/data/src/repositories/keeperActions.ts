@@ -75,3 +75,8 @@ export async function recent(db: Database, chainId: number, limit = 100): Promis
     createdAt: row.created_at,
   }));
 }
+
+export async function sweep(db: Database): Promise<number> {
+  const { rowCount } = await db.query("delete from keeper_actions where created_at < now() - interval '90 days'");
+  return rowCount;
+}

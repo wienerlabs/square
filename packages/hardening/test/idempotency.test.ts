@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   hashRequest,
   idempotencyMiddleware,
+  idempotencyScope,
   memoryIdempotencyStore,
   postgresIdempotencyStore,
   withIdempotency,
@@ -31,11 +32,11 @@ describe("hashRequest", () => {
 });
 
 describe("withIdempotency", () => {
-  const request = { key: "k1", requestHash: "h1" };
+  const request = { scope: "orders", key: "k1", requestHash: "h1" };
 
   it("runs the handler once and replays the stored response for the same key and hash", async () => {
     const handler = vi.fn(async (): Promise<HandlerResponse> => ({ status: 201, body: { id: 7 } }));
-    const execute = withIdempotency(memoryIdempotencyStore(), "orders", handler);
+    const execute = withIdempotency(memoryIdempotencyStore(), handler);
     expect(await execute(request)).toEqual({ source: "handler", status: 201, body: { id: 7 } });
     expect(await execute(request)).toEqual({ source: "replay", status: 201, body: { id: 7 } });
     expect(handler).toHaveBeenCalledTimes(1);
@@ -43,9 +44,9 @@ describe("withIdempotency", () => {
 
   it("answers 409 when the key is reused with a different hash", async () => {
     const handler = vi.fn(async (): Promise<HandlerResponse> => ({ status: 201, body: { id: 7 } }));
-    const execute = withIdempotency(memoryIdempotencyStore(), "orders", handler);
+    const execute = withIdempotency(memoryIdempotencyStore(), handler);
     await execute(request);
-    expect(await execute({ key: "k1", requestHash: "h2" })).toEqual({
+    expect(await execute({ scope: "orders", key: "k1", requestHash: "h2" })).toEqual({
       source: "conflict",
       status: 409,
       body: { error: "idempotency_key_reused" },
@@ -56,7 +57,7 @@ describe("withIdempotency", () => {
   it("re-processes once the stored entry has expired", async () => {
     let clock = 1_000;
     const handler = vi.fn(async (): Promise<HandlerResponse> => ({ status: 200, body: { at: clock } }));
-    const execute = withIdempotency(memoryIdempotencyStore({ now: () => clock }), "orders", handler, { ttlMs: 500 });
+    const execute = withIdempotency(memoryIdempotencyStore({ now: () => clock }), handler, { ttlMs: 500 });
     await execute(request);
     clock += 499;
     expect((await execute(request)).source).toBe("replay");
@@ -71,7 +72,7 @@ describe("withIdempotency", () => {
       calls += 1;
       return calls === 1 ? { status: 500, body: { error: "boom" } } : { status: 201, body: { id: 1 } };
     };
-    const execute = withIdempotency(memoryIdempotencyStore(), "orders", handler);
+    const execute = withIdempotency(memoryIdempotencyStore(), handler);
     expect((await execute(request)).status).toBe(500);
     expect(await execute(request)).toEqual({ source: "handler", status: 201, body: { id: 1 } });
     expect((await execute(request)).source).toBe("replay");
@@ -86,7 +87,7 @@ describe("withIdempotency", () => {
       await gate;
       return { status: 201, body: { id: 1 } };
     });
-    const execute = withIdempotency(memoryIdempotencyStore(), "orders", handler);
+    const execute = withIdempotency(memoryIdempotencyStore(), handler);
     const both = Promise.all([execute(request), execute(request)]);
     await Promise.resolve();
     release?.();
@@ -106,9 +107,9 @@ describe("withIdempotency", () => {
         return { status: "exists", stored };
       },
     };
-    const execute = withIdempotency(store, "orders", async () => ({ status: 201, body: { winner: "me" } }));
+    const execute = withIdempotency(store, async () => ({ status: 201, body: { winner: "me" } }));
     expect(await execute(request)).toEqual({ source: "replay", status: 200, body: { winner: "other-process" } });
-    expect(await execute({ key: "k1", requestHash: "h2" })).toMatchObject({ source: "conflict", status: 409 });
+    expect(await execute({ scope: "orders", key: "k1", requestHash: "h2" })).toMatchObject({ source: "conflict", status: 409 });
   });
 });
 
@@ -171,20 +172,25 @@ describe("idempotencyMiddleware", () => {
   function build(store: IdempotencyStore, required = false) {
     const app = new Hono();
     let counter = 0;
-    app.use("/orders", idempotencyMiddleware(store, { scope: "orders", required }));
+    app.use("/orders", idempotencyMiddleware(store, { scope: "orders", required, actorOf: (c) => c.req.header("x-tenant") }));
     app.post("/orders", async (c) => {
       const body = await c.req.json<{ item: string }>();
       counter += 1;
       return c.json({ id: counter, item: body.item }, 201);
     });
     app.get("/orders", (c) => c.json({ list: true }));
-    const post = (key: string | undefined, body: unknown) =>
+    const postAs = (tenant: string | undefined, key: string | undefined, body: unknown) =>
       app.request("/orders", {
         method: "POST",
-        headers: { "content-type": "application/json", ...(key === undefined ? {} : { "idempotency-key": key }) },
+        headers: {
+          "content-type": "application/json",
+          ...(tenant === undefined ? {} : { "x-tenant": tenant }),
+          ...(key === undefined ? {} : { "idempotency-key": key }),
+        },
         body: JSON.stringify(body),
       });
-    return { app, post };
+    const post = (key: string | undefined, body: unknown) => postAs("tenant-a", key, body);
+    return { app, post, postAs };
   }
 
   it("replays the first response for a repeated key and hash and answers 409 on reuse with another body", async () => {
@@ -206,6 +212,45 @@ describe("idempotencyMiddleware", () => {
 
     const fresh = await post("k2", { item: "coffee" });
     expect(await fresh.json()).toEqual({ id: 2, item: "coffee" });
+  });
+
+  it("gives each caller its own namespace: the same key and body never crosses tenants", async () => {
+    const { postAs } = build(memoryIdempotencyStore());
+    const a = await postAs("tenant-a", "1", { item: "tea" });
+    const b = await postAs("tenant-b", "1", { item: "tea" });
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(201);
+    expect(b.headers.get("idempotent-replayed")).toBeNull();
+    expect(await a.json()).toEqual({ id: 1, item: "tea" });
+    expect(await b.json()).toEqual({ id: 2, item: "tea" });
+
+    const replayA = await postAs("tenant-a", "1", { item: "tea" });
+    expect(replayA.headers.get("idempotent-replayed")).toBe("true");
+    expect(await replayA.json()).toEqual({ id: 1, item: "tea" });
+  });
+
+  it("does not let one caller's key make another caller's key conflict", async () => {
+    const { postAs } = build(memoryIdempotencyStore());
+    await postAs("tenant-a", "1", { item: "tea" });
+    const b = await postAs("tenant-b", "1", { item: "coffee" });
+    expect(b.status).toBe(201);
+    expect(await b.json()).toEqual({ id: 2, item: "coffee" });
+  });
+
+  it("stores under a scope that carries the actor", async () => {
+    const store = memoryIdempotencyStore();
+    const { postAs } = build(store);
+    await postAs("tenant-a", "k1", { item: "tea" });
+    expect(await store.get(idempotencyScope("orders", "tenant-a"), "k1")).toBeDefined();
+    expect(await store.get("orders", "k1")).toBeUndefined();
+    expect(await store.get(idempotencyScope("orders", "tenant-b"), "k1")).toBeUndefined();
+  });
+
+  it("refuses a keyed request whose caller actorOf cannot name", async () => {
+    const { postAs } = build(memoryIdempotencyStore());
+    const anonymous = await postAs(undefined, "k1", { item: "tea" });
+    expect(anonymous.status).toBe(400);
+    expect(await anonymous.json()).toEqual({ error: "idempotency_actor_unknown" });
   });
 
   it("lets requests without a key through unless the key is required", async () => {

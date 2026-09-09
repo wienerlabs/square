@@ -1,4 +1,5 @@
 import type { Address, Hex } from "viem";
+import { x402Payments, type Database } from "@squaresdk/data";
 
 export type ReplayStatus = "accepted" | "settled" | "failed";
 
@@ -23,11 +24,18 @@ export interface ReplayRecord extends ReplayEntry {
   createdAt: Date;
 }
 
+export interface UnsettledPayment extends ReplayKey {
+  txHash: Hex | null;
+  validBefore: bigint;
+}
+
 export interface ReplayStore {
   insertAccepted(entry: ReplayEntry): Promise<boolean>;
-  markSettled(key: ReplayKey, txHash: Hex): Promise<void>;
-  markFailed(key: ReplayKey, reason: string): Promise<void>;
+  markPending(key: ReplayKey, txHash: Hex): Promise<boolean>;
+  markSettled(key: ReplayKey, txHash: Hex): Promise<boolean>;
+  markFailed(key: ReplayKey, reason: string): Promise<boolean>;
   has(key: ReplayKey): Promise<boolean>;
+  listUnsettled(limit?: number): Promise<UnsettledPayment[]>;
 }
 
 export interface MemoryReplayStore extends ReplayStore {
@@ -35,30 +43,11 @@ export interface MemoryReplayStore extends ReplayStore {
   size(): number;
 }
 
-export interface SqlDatabase {
-  query(text: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }>;
-}
-
 export const REPLAY_STATUS_CODE: Record<ReplayStatus, number> = {
-  accepted: 1,
-  settled: 2,
-  failed: 3,
+  accepted: x402Payments.X402_STATUS.accepted,
+  settled: x402Payments.X402_STATUS.settled,
+  failed: x402Payments.X402_STATUS.failed,
 };
-
-export const X402_PAYMENTS_DDL = `create table if not exists x402_payments (
-  chain_id bigint not null,
-  asset bytea not null,
-  payer bytea not null,
-  nonce bytea not null,
-  amount numeric not null,
-  pay_to bytea not null,
-  resource text not null,
-  tx_hash bytea,
-  status smallint not null,
-  valid_before bigint not null,
-  created_at timestamptz not null default now(),
-  primary key (chain_id, asset, payer, nonce)
-);`;
 
 export function replayKeyString(key: ReplayKey): string {
   return `${key.chainId}:${key.asset.toLowerCase()}:${key.payer.toLowerCase()}:${key.nonce.toLowerCase()}`;
@@ -66,6 +55,10 @@ export function replayKeyString(key: ReplayKey): string {
 
 export function memoryReplayStore(): MemoryReplayStore {
   const records = new Map<string, ReplayRecord>();
+  const accepted = (key: ReplayKey): ReplayRecord | undefined => {
+    const record = records.get(replayKeyString(key));
+    return record?.status === "accepted" ? record : undefined;
+  };
   return {
     async insertAccepted(entry) {
       const id = replayKeyString(entry);
@@ -75,22 +68,44 @@ export function memoryReplayStore(): MemoryReplayStore {
       records.set(id, { ...entry, status: "accepted", createdAt: new Date() });
       return true;
     },
+    async markPending(key, txHash) {
+      const record = accepted(key);
+      if (record === undefined) return false;
+      record.txHash = txHash;
+      return true;
+    },
     async markSettled(key, txHash) {
-      const record = records.get(replayKeyString(key));
-      if (record) {
-        record.status = "settled";
-        record.txHash = txHash;
-      }
+      const record = accepted(key);
+      if (record === undefined) return false;
+      record.status = "settled";
+      record.txHash = txHash;
+      return true;
     },
     async markFailed(key, reason) {
-      const record = records.get(replayKeyString(key));
-      if (record && record.status !== "settled") {
-        record.status = "failed";
-        record.reason = reason;
-      }
+      const record = accepted(key);
+      if (record === undefined) return false;
+      record.status = "failed";
+      record.reason = reason;
+      return true;
     },
     async has(key) {
       return records.has(replayKeyString(key));
+    },
+    async listUnsettled(limit = 100) {
+      const unsettled: UnsettledPayment[] = [];
+      for (const record of records.values()) {
+        if (unsettled.length >= limit) break;
+        if (record.status !== "accepted") continue;
+        unsettled.push({
+          chainId: record.chainId,
+          asset: record.asset,
+          payer: record.payer,
+          nonce: record.nonce,
+          txHash: record.txHash ?? null,
+          validBefore: record.validBefore,
+        });
+      }
+      return unsettled;
     },
     get(key) {
       return records.get(replayKeyString(key));
@@ -101,54 +116,33 @@ export function memoryReplayStore(): MemoryReplayStore {
   };
 }
 
-function hexToBytes(hex: string): Buffer {
-  return Buffer.from(hex.startsWith("0x") ? hex.slice(2) : hex, "hex");
-}
-
-function keyParams(key: ReplayKey): unknown[] {
-  return [key.chainId, hexToBytes(key.asset), hexToBytes(key.payer), hexToBytes(key.nonce)];
-}
-
-const KEY_WHERE = "chain_id = $1 and asset = $2 and payer = $3 and nonce = $4";
-
-export function postgresReplayStore(db: SqlDatabase): ReplayStore {
+export function postgresReplayStore(db: Database): ReplayStore {
   return {
-    async insertAccepted(entry) {
-      const result = await db.query(
-        `insert into x402_payments
-           (chain_id, asset, payer, nonce, amount, pay_to, resource, status, valid_before, created_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
-         on conflict do nothing`,
-        [
-          ...keyParams(entry),
-          entry.amount.toString(),
-          hexToBytes(entry.payTo),
-          entry.resource,
-          REPLAY_STATUS_CODE.accepted,
-          entry.validBefore.toString(),
-        ]
-      );
-      return result.rowCount === 1;
+    insertAccepted(entry) {
+      return x402Payments.insertAccepted(db, entry);
     },
-    async markSettled(key, txHash) {
-      await db.query(
-        `update x402_payments set status = $5, tx_hash = $6 where ${KEY_WHERE}`,
-        [...keyParams(key), REPLAY_STATUS_CODE.settled, hexToBytes(txHash)]
-      );
+    markPending(key, txHash) {
+      return x402Payments.recordSettlementAttempt(db, key, txHash);
     },
-    async markFailed(key, reason) {
-      void reason;
-      await db.query(
-        `update x402_payments set status = $5 where ${KEY_WHERE} and status <> ${REPLAY_STATUS_CODE.settled}`,
-        [...keyParams(key), REPLAY_STATUS_CODE.failed]
-      );
+    markSettled(key, txHash) {
+      return x402Payments.markSettled(db, key, txHash);
     },
-    async has(key) {
-      const result = await db.query(
-        `select 1 from x402_payments where ${KEY_WHERE} limit 1`,
-        keyParams(key)
-      );
-      return result.rows.length > 0 || (result.rowCount ?? 0) > 0;
+    markFailed(key, reason) {
+      return x402Payments.markFailed(db, key, { reason });
+    },
+    has(key) {
+      return x402Payments.exists(db, key);
+    },
+    async listUnsettled(limit = 100) {
+      const rows = await x402Payments.listAccepted(db, limit);
+      return rows.map((row) => ({
+        chainId: row.chainId,
+        asset: row.asset as Address,
+        payer: row.payer as Address,
+        nonce: row.nonce as Hex,
+        txHash: row.txHash as Hex | null,
+        validBefore: row.validBefore,
+      }));
     },
   };
 }
