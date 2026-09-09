@@ -8,9 +8,10 @@ import { StatusPill, phaseTone } from "@/components/StatusPill";
 import { formatCountdown, formatTimestamp } from "@/lib/format";
 import { walletInbox, walletJobCount } from "@/lib/inbox";
 import { jobPhase, PHASE_LABELS, type JobSummary } from "@/lib/square";
+import { deployment } from "@/lib/wagmi";
 
 export function ActionInbox({ jobs, address, now, scanned }: { jobs: JobSummary[]; address: Address; now: number; scanned: number }) {
-  const groups = walletInbox(jobs, address, now);
+  const groups = walletInbox(jobs, address, deployment.keeperEvaluator, now);
   const mine = walletJobCount(jobs, address);
   const pending = groups.reduce((sum, group) => sum + group.jobs.length, 0);
 
