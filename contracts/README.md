@@ -129,7 +129,21 @@ rather than reverting. It replaced the contract snarkjs generates, which carries
 that tool's GPL-3.0 licence; the reasoning is in
 [docs/decisions/groth16-verifier-license.md](../docs/decisions/groth16-verifier-license.md).
 The verifying key constants are data from the trusted setup and are regenerated
-with `script/verifier-constants.mjs` when the ceremony (#16) produces a new key.
+with `script/verifier-constants.mjs`.
+
+**The ceremony is not the only thing that invalidates them.** Any change to
+`payment.circom` or to what it includes changes the constraint system, and a
+verifier from the old key rejects every proof from the new circuit. Regenerate
+the constants **and** `test/fixtures/proofs.json` together, from the same key —
+they are the two halves of one artifact, and `_provenance.zkey_sha256` in the
+fixtures records which key that was.
+
+`script/check-verifier-ic.mjs` catches the case where somebody forgets. It runs
+in `circuits.yml` against the key that job just built and compares `IC0..IC8`,
+the only constants derived from the circuit rather than from the powers of tau.
+Regenerating the fixtures alone turns `forge test` red, which is loud; changing
+the circuit and regenerating **neither** used to leave everything green, which
+was not.
 
 It replaces 2,407 lines of Rust. `alt_bn128` is EVM's bn128, so the pairing the
 Solana verifier reached through syscalls is the precompiles here, all three

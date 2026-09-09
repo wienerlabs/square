@@ -87,6 +87,35 @@ range check a field element near the modulus would pass.
 Everything in the right-hand column stays private. An auditor learns that the
 checks ran, not what the operator's limits or lists were.
 
+### Rule 5 binds nobody, and the reason is structural
+
+**`payment_category` is the operator's own statement about what a payment was
+for, and the circuit cannot check it against anything.** Every other rule tests a
+value that is either a public signal — rules 1, 2, 3, 4 and 6 read `amount`,
+`daily_spent_before`, `token`, `recipient` and `current_unix_timestamp` — or one
+committed inside `policy_data_hash`. Rule 5's key is in **neither**. It is a
+private input (`payment.circom:95`), it is not among the eight public outputs,
+and it is not among the eight Poseidon inputs.
+
+An honest prover fails rule 5 on a disallowed category, and
+`test/payment.test.js` asserts that. What rule 5 cannot do is constrain somebody
+who builds a witness by hand: nothing outside the circuit ever sees the category,
+so nothing can contradict it.
+
+Exposing it as a ninth public signal was considered and **not** done. There is
+nothing in the system to compare it against — no category field on chain, no
+category parameter in `IComplianceModule.checkRelease`, and the prover receives
+the category and the list of allowed categories from the same caller. "What was
+this payment for" is inherently the payer's assertion. A public signal nothing
+can check costs calldata on every verification and buys a binding that does not
+exist.
+
+This is fixed by [#16](https://github.com/wienerlabs/square/issues/16): the
+ceremony freezes the circuit, so a ninth signal cannot be added afterwards. The
+decision is recorded here rather than left to be discovered from the signal
+list. Read rule 5 as "the operator declared a category and it was on their own
+list", not as "this payment was for what it says".
+
 ## Rule 6 and why it stayed in the circuit
 
 The time window's timestamp decomposition used to be under-constrained: it

@@ -15,6 +15,7 @@
 //
 // The artifacts are payment.wasm and payment.zkey — see circuits/README.md.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,13 +57,43 @@ const CASES = {
   blocked: { payment_recipient: BLOCKED },
 };
 
-const out = {};
+// Which key these proofs came from.
+//
+// square#121: the committed constants and the committed fixtures both descend
+// from one zkey, and nothing recorded which. The zkey is gitignored — 2.8 MB of
+// generated output — so its digest is the only way to say afterwards that a
+// verifier and a set of fixtures belong together. `null` here means the file was
+// not present when this ran, which is worth seeing rather than papering over.
+const artifacts = process.env.PROVER_ARTIFACTS_DIR
+  ? path.resolve(process.env.PROVER_ARTIFACTS_DIR)
+  : path.resolve(ROOT, '..', 'services', 'prover', 'artifacts');
+const zkey = path.join(artifacts, 'payment.zkey');
+const zkeySha256 = fs.existsSync(zkey)
+  ? crypto.createHash('sha256').update(fs.readFileSync(zkey)).digest('hex')
+  : null;
+
+const proofs = {};
 for (const [name, overrides] of Object.entries(CASES)) {
   const result = await generateProof({ ...BASE, ...overrides });
-  out[name] = { is_compliant: result.is_compliant, ...result.solidity };
+  proofs[name] = { is_compliant: result.is_compliant, ...result.solidity };
   process.stdout.write(`${name.padEnd(10)} is_compliant=${result.is_compliant}\n`);
 }
 
+const out = {
+  _provenance: {
+    zkey_sha256: zkeySha256,
+    generated_at: new Date().toISOString(),
+    note:
+      'The verifier in src/Groth16Verifier.sol must come from this same key. '
+      + 'Regenerate both together: a verifier from one key rejects every proof '
+      + 'from another.',
+  },
+  ...proofs,
+};
+
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, `${JSON.stringify(out, null, 2)}\n`);
-process.stdout.write(`\nwrote ${path.relative(ROOT, OUT)}\n`);
+process.stdout.write(
+  `\nwrote ${path.relative(ROOT, OUT)}\n`
+  + `zkey sha256 ${zkeySha256 ?? '(the key was not on disk; recorded as null)'}\n`,
+);

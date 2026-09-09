@@ -1,4 +1,8 @@
 {
+  "_provenance": {
+    "zkey_sha256": null,
+    "note": "Not recorded. These fixtures and src/Groth16Verifier.sol predate square#121, which added the recording; the key they came from is gitignored and no longer on any machine, so its digest cannot be recovered honestly and is left null rather than guessed. That the two belong together is still established: forge test verifies these proofs against that verifier, and a verifier from a different key rejects every proof from another. script/regenerate-fixtures.mjs records the digest from now on, and square#16 produces the next key."
+  },
   "compliant": {
     "is_compliant": true,
     "a": [

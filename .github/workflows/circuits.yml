@@ -26,6 +26,8 @@ on:
     paths:
       - "circuits/**"
       - "services/prover/**"
+      - "contracts/src/Groth16Verifier.sol"
+      - "contracts/script/check-verifier-ic.mjs"
       - ".github/actions/circom/**"
       - ".github/scripts/vitest-summary.mjs"
       - ".github/workflows/circuits.yml"
@@ -96,6 +98,20 @@ jobs:
       # phase 2, until square#16's ceremony runs.
       - name: What the proving key's setup actually is
         run: node scripts/inspect-zkey-setup.mjs build/payment.zkey
+
+      # square#121: the committed verifier's IC points are the only group bound
+      # to the circuit, and nothing checked them against a circuit that had just
+      # compiled. contracts.yml runs forge test on the committed verifier and
+      # committed fixtures; this job builds the circuit. Neither looked at the
+      # other's output, so an edit to payment.circom left a verifier behind for
+      # a circuit that no longer exists.
+      #
+      # ALPHA and BETA are already pinned by the ptau fingerprint, GAMMA is a
+      # constant, and DELTA cannot be reproduced while build.mjs draws fresh
+      # entropy per build — see the script for why that leaves IC.
+      - name: The committed verifier is keyed to this circuit
+        working-directory: contracts
+        run: node script/check-verifier-ic.mjs ../circuits/build/payment_vk.json
 
       - name: Tests
         run: npm test -- --reporter=default --reporter=json --outputFile.json=/tmp/circuits.json
