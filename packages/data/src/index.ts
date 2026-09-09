@@ -1,7 +1,16 @@
 export type { Database, QueryResult } from "./database.js";
 export { pgDatabase, type PgDatabaseOptions } from "./pg.js";
 export { pgliteDatabase, type PgliteDatabaseOptions } from "./pglite.js";
-export { migrate, migrationStatus, MIGRATIONS_DIR, type MigrationDirection, type MigrationResult, type MigrationStatus } from "./migrate.js";
+export {
+  migrate,
+  migrationStatus,
+  MigrationConflictError,
+  MIGRATIONS_DIR,
+  type MigrationDirection,
+  type MigrationResult,
+  type MigrationStatus,
+} from "./migrate.js";
+export { sweepAll, DEFAULT_RATE_LIMIT_WINDOW_MS, type SweepOptions, type SweepResult } from "./retention.js";
 export { hexToBytes, bytesToHex, type Hex, type Json } from "./codec.js";
 export type { IndexedContract } from "./contracts.js";
 export * as jobs from "./repositories/jobs.js";

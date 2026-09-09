@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { migrate, migrationStatus, MIGRATIONS_DIR } from "../src/migrate.js";
+import { migrate, migrationStatus, MigrationConflictError, MIGRATIONS_DIR } from "../src/migrate.js";
 import { pgliteDatabase } from "../src/pglite.js";
 import type { Database } from "../src/database.js";
 
@@ -67,6 +67,38 @@ describe("migrations", () => {
 
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(ALL);
       expect(await schemaSnapshot(db)).toEqual(first);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("names the fix when a table it creates already exists, instead of stalling the chain", async () => {
+    const db = await pgliteDatabase();
+    try {
+      await db.query(`create table x402_payments (
+        chain_id bigint not null, asset bytea not null, payer bytea not null, nonce bytea not null,
+        amount numeric not null, pay_to bytea not null, resource text not null, tx_hash bytea,
+        status smallint not null, valid_before bigint not null, created_at timestamptz not null default now(),
+        primary key (chain_id, asset, payer, nonce))`);
+
+      const failure = await migrate(db, MIGRATIONS_DIR, "up").then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(MigrationConflictError);
+      const conflict = failure as MigrationConflictError;
+      expect(conflict.migration).toBe("0003_x402");
+      expect(conflict.message).toContain('relation "x402_payments" already exists');
+      expect(conflict.message).toContain("insert into schema_migrations (name) values ('0003_x402')");
+      expect(conflict.message).toContain("square-data migrate up");
+
+      const status = await migrationStatus(db, MIGRATIONS_DIR);
+      expect(status.applied).toEqual(["0001_indexer", "0002_hardening"]);
+      expect(status.pending).toEqual(["0003_x402", "0004_hosted_agents", "0005_keeper"]);
+
+      await db.query("insert into schema_migrations (name) values ('0003_x402')");
+      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0004_hosted_agents", "0005_keeper"]);
+      expect(await tableNames(db)).toContain("keeper_actions");
     } finally {
       await db.close();
     }
