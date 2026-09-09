@@ -150,6 +150,22 @@ template PaymentCompliance(MAX_WHITELIST, MAX_BLOCKED, MAX_CATEGORIES) {
     component daily_spent_bits = Num2Bits(64);
     daily_spent_bits.in <== daily_spent_before;
 
+    // The ceilings are the other operand of the same two comparators, and they
+    // were not bounded. square#119: a comparator bounds the difference of its
+    // operands, so an unconstrained ceiling near the modulus makes rule 1 or
+    // rule 2 answer about a value that is not the one it appears to be. The
+    // direction is closed — the comparator can only reject wrongly, never
+    // accept wrongly, so no proof of compliance came out of it — but the
+    // invariant rules.js relies on ("the circuit range-checks both operands")
+    // was simply not built, and everything else feeding these comparators is
+    // bounded. PolicyRegistry.sol applies the same reasoning on chain, refusing
+    // a dailyLimit above uint64 with LimitExceedsProofRange.
+    component max_per_tx_bits = Num2Bits(64);
+    max_per_tx_bits.in <== max_per_tx;
+
+    component max_daily_bits = Num2Bits(64);
+    max_daily_bits.in <== max_daily;
+
     // ============================================================ Lookup keys
     // The three values looked up in the policy lists must be non-zero, because
     // zero is what padding slots hold. This is what lets the mask arrays go: a

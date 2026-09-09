@@ -85,7 +85,11 @@ export const openapiSpec = {
       TimeRestriction: {
         type: 'object',
         description:
-          'Optional window the payment must fall inside. Only the first entry is read.',
+          'Optional window the payment must fall inside. Only the first entry is read. '
+          + 'The three fields below are required when a restriction is given: there are no '
+          + 'defaults, because a missing day list means every weekday forbidden and missing '
+          + 'hours mean a window of 00:00 to 00:59, and neither is what an omission means.',
+        required: ['allowed_days', 'allowed_hours_start', 'allowed_hours_end'],
         properties: {
           allowed_days: {
             type: 'array',

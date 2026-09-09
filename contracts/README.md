@@ -173,16 +173,28 @@ is not bound to a job is a proof of somebody else's payment.
 | | |
 |---|---|
 | Network | Arc Testnet (`5042002`) |
-| `Groth16Verifier` | [`0x35d7B65BDDf5C19DE107B1f90110B1FB381F7Ae1`](https://testnet.arcscan.app/address/0x35d7B65BDDf5C19DE107B1f90110B1FB381F7Ae1) |
+| `Groth16Verifier` | [`0x35d7B65BDDf5C19DE107B1f90110B1FB381F7Ae1`](https://testnet.arcscan.app/address/0x35d7B65BDDf5C19DE107B1f90110B1FB381F7Ae1) — **superseded**, see below |
 | Deployment tx | [`0xc16ff2be…`](https://testnet.arcscan.app/tx/0xc16ff2be8a7a460d4bafac577bcf863b29d673306e7c89083695ec5cd5995c20) |
 | Block | 60,844,632 (2026-09-07) |
 
-**This address is temporary.** The verifier is bound to a proving key and is
-valid only for that key, and the key behind this one is a development key —
-real phase 1 (Perpetual Powers of Tau contribution 80) but a single-contribution
-phase 2 with no beacon, because the ceremony has not run.
-[#16](https://github.com/wienerlabs/square/issues/16) produces a different key,
-which means a different verifier at a different address. See
+**That deployment is superseded and is not being replaced.**
+[#119](https://github.com/wienerlabs/square/issues/119) added two range checks to
+`payment.circom`, which changed the constraint system, which changed the key,
+which changed 22 of the 32 constants in this file — the four `DELTA` values and
+all eighteen `IC` coordinates. `ALPHA`, `BETA` and `GAMMA` did not move: they
+come from the powers of tau and from a fixed generator, not from the circuit.
+The contract at that address now rejects every proof this repository produces,
+which is the correct behaviour and the reason a stale verifier fails loudly
+rather than quietly.
+
+Redeploying would not help. `circuits/scripts/build.mjs` draws fresh phase-2
+entropy on every build, so a verifier deployed today is already wrong for
+tomorrow's build; every deployment before the ceremony has a lifetime of one
+`npm run build`. [#16](https://github.com/wienerlabs/square/issues/16) fixes one
+key, and that is the one worth an address. Until then
+`script/verify-on-arc.mjs` with no `--address` puts this contract's bytecode on
+Arc for a single `eth_call` — the real chain and the real precompiles, keyed to
+the build in front of you. See
 [docs/disclosure/zk-setup-status.md](../docs/disclosure/zk-setup-status.md).
 
 ## Measured cost
@@ -219,7 +231,7 @@ Reproduce:
 
 ```bash
 forge test --match-test test_gas_verifyProof -vv                  # local
-node script/verify-on-arc.mjs --address 0x35d7B65BDDf5C19DE107B1f90110B1FB381F7Ae1
+node script/verify-on-arc.mjs   # state override; --address needs a verifier built from the same key
 ```
 
 That is the pairing alone. What a compliance-gated release costs end to end —

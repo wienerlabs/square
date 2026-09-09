@@ -2,6 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as snarkjs from 'snarkjs';
 import {
+  assertWithinCircuitMaximum,
   padAddressList,
   padCategoryList,
   addressToField,
@@ -76,6 +77,62 @@ function validateRequest(req) {
       throw new Error(`${key}: must be an array`);
     }
   }
+
+  // The list lengths, before anything hashes them.
+  //
+  // padCategoryList used to Poseidon-hash every entry and only then discover the
+  // list was too long. The cap is 8 and the only other limit is the 256 kb body,
+  // which holds roughly 65,400 single-character categories at ~100 microseconds
+  // each — about six seconds of hashing on a fast machine, longer on a small
+  // vCPU, all of it thrown away by the length check that follows. It also blocks
+  // the event loop outright: `await` on an already-resolved value queues a
+  // microtask, and Node drains the microtask queue before returning to the loop,
+  // so /health and /metrics stop answering for the duration.
+  //
+  // Checking here costs one comparison and makes the work impossible to start.
+  // The message deliberately does not echo how many were sent.
+  for (const [key, max] of [
+    ['allowed_endpoint_categories', MAX_CATEGORIES],
+    ['blocked_addresses', MAX_BLOCKED],
+    ['token_whitelist', MAX_WHITELIST],
+  ]) {
+    assertWithinCircuitMaximum(req[key].length, max, key);
+  }
+
+  // time_restrictions gets the same treatment as the three lists above.
+  //
+  // It did not, and the consequence was quiet: a value that is not an array was
+  // discarded, time_active became 0, and rule 6 in the circuit is
+  // `1 - time_active + time_active * compliant`, which is exactly 1 when
+  // time_active is 0. The window stopped being enforced. Nothing in the response
+  // showed it, because the off-circuit evaluator short-circuits on the same
+  // field, so rules_agree stayed true and violated_rules stayed empty.
+  //
+  // hash.js already takes the opposite position two files over, and says why:
+  // it throws on an unknown weekday name "so a restriction is never silently
+  // downgraded". A malformed record is a larger downgrade than a misspelt day.
+  if (req.time_restrictions !== undefined && req.time_restrictions !== null) {
+    if (!Array.isArray(req.time_restrictions)) {
+      throw new Error('time_restrictions: must be an array');
+    }
+    for (const restriction of req.time_restrictions) {
+      if (typeof restriction !== 'object' || restriction === null || Array.isArray(restriction)) {
+        throw new Error('time_restrictions: each entry must be an object');
+      }
+      // No defaults. `?? []` on the days meant an empty mask — every weekday
+      // forbidden — and `?? 0` on the hours meant a window of 00:00 to 00:59.
+      // Both are policies somebody might mean and nobody would mean by accident,
+      // so a caller has to say them.
+      for (const field of ['allowed_days', 'allowed_hours_start', 'allowed_hours_end']) {
+        if (restriction[field] === undefined || restriction[field] === null) {
+          throw new Error(`time_restrictions.${field}: required when a restriction is given`);
+        }
+      }
+      if (!Array.isArray(restriction.allowed_days)) {
+        throw new Error('time_restrictions.allowed_days: must be an array');
+      }
+    }
+  }
 }
 
 // Shape an incoming HTTP payload into the witness inputs the circuit expects.
@@ -102,13 +159,16 @@ export async function buildCircuitInput(request) {
   if (tr && tr.timezone && tr.timezone !== 'UTC') {
     throw new Error("time_restrictions.timezone: only 'UTC' is supported");
   }
+  // No `??` fallbacks any more: validateRequest requires all three when a
+  // restriction is present, so a missing field is an error rather than a window
+  // of 00:00 to 00:59 with every weekday forbidden.
   const timeActive = tr ? '1' : '0';
-  const timeDaysBitmask = tr ? String(daysToBitmask(tr.allowed_days ?? [])) : '0';
+  const timeDaysBitmask = tr ? String(daysToBitmask(tr.allowed_days)) : '0';
   const timeStartHourUtc = tr
-    ? toFieldString(tr.allowed_hours_start ?? 0, 'time_restrictions.allowed_hours_start')
+    ? toFieldString(tr.allowed_hours_start, 'time_restrictions.allowed_hours_start')
     : '0';
   const timeEndHourUtc = tr
-    ? toFieldString(tr.allowed_hours_end ?? 0, 'time_restrictions.allowed_hours_end')
+    ? toFieldString(tr.allowed_hours_end, 'time_restrictions.allowed_hours_end')
     : '0';
 
   return {

@@ -15,9 +15,17 @@
 // Where this can still differ from the circuit:
 //
 //   * Rules 1 and 2 use LessEqThan(64) and LessEqThan(65) in circom. The
-//     circuit now range-checks both operands to 64 bits, so an out-of-range
-//     amount fails witness generation rather than reaching either comparison.
-//     For everything the circuit accepts, exact BigInt comparison agrees.
+//     circuit range-checks all four operands to 64 bits — the two payment
+//     values, and, since square#119, the two policy ceilings — so an
+//     out-of-range value fails witness generation rather than reaching either
+//     comparison. For everything the circuit accepts, exact BigInt comparison
+//     agrees.
+//
+//     The ceilings were not bounded before that, and this note claimed they
+//     were. It mattered less than it reads: a comparator given an out-of-range
+//     operand can only reject wrongly, so the failure was closed and no proof
+//     of compliance ever came out of it. But an invariant asserted here and not
+//     built in the circuit is exactly what the next reader relies on.
 //   * Rule 6's decomposition is constrained in the circuit as of #14, so this
 //     module and the circuit compute the same weekday for the same timestamp.
 //     Before that fix a dishonest prover could choose the weekday and only this

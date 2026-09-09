@@ -122,19 +122,42 @@ Escrow and payment paths use the 6-decimal ERC-20 interface, not native value:
 
 ### Deployments
 
-| Contract | Address |
-|---|---|
-| `Groth16Verifier` | [`0x35d7B65BDDf5C19DE107B1f90110B1FB381F7Ae1`](https://testnet.arcscan.app/address/0x35d7B65BDDf5C19DE107B1f90110B1FB381F7Ae1) |
+| Contract | Address | Status |
+|---|---|---|
+| `Groth16Verifier` | [`0x35d7B65BDDf5C19DE107B1f90110B1FB381F7Ae1`](https://testnet.arcscan.app/address/0x35d7B65BDDf5C19DE107B1f90110B1FB381F7Ae1) | **superseded** — keyed to the circuit before [#119][i119], rejects every proof this repository now produces |
 
-A proof from the prover service verifies against it on chain:
+That contract is left standing rather than replaced, because replacing it would
+not help: `circuits/scripts/build.mjs` draws fresh phase-2 entropy on every
+build, so any verifier deployed today is already wrong for tomorrow's build.
+Every deployment before [#16][i16] has a lifetime of one `npm run build`. The
+ceremony fixes one key, and that is the one worth an address.
+
+A proof from the prover service still verifies against Arc — the same contract
+source, the same precompiles, keyed to the build that produced the proof, put on
+chain for one `eth_call` with a state override:
 
 ```console
-$ node contracts/script/verify-on-arc.mjs --address 0x35d7B65BDDf5C19DE107B1f90110B1FB381F7Ae1
+$ node contracts/script/verify-on-arc.mjs
+rpc      https://rpc.testnet.arc.io
+chain id 5042002
+
+verifier state override at a scratch address (nothing deployed)
+
+a proof the prover service produced
   ok    compliant proof verifies
   ok    non-compliant proof also verifies, is_compliant is a signal, not a gate
+
+tampering is rejected
   ok    flipped is_compliant
   ok    altered amount
+
+Arc gas for one verification: 281596
+
+All checks passed against Arc.
 ```
+
+[i16]: https://github.com/wienerlabs/square/issues/16
+[i119]: https://github.com/wienerlabs/square/issues/119
 
 Measured on Arc: **281,596 gas** for a whole verification call and
 **714,837** to deploy, 0.0062 and 0.0158 USDC at 22 gwei. The verifier is
