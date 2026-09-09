@@ -323,3 +323,12 @@ async function main() {
 }
 
 await main();
+
+// snarkjs leaves a worker pool up after fullProve and does not tear it down, so
+// this finishes its work and then sits there. The failure path already exits;
+// without this the success path does not, and the job runs to whatever ceiling
+// is above it — six hours before timeout-minutes was added, fifteen minutes
+// after. Both times the log showed every check passing and then nothing, which
+// is what made it look like a hang rather than a process that had simply not
+// returned.
+process.exit(0);
