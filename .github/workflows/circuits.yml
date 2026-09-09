@@ -63,7 +63,7 @@ jobs:
 
       - run: npm ci
 
-      # 9.5 MB from S3 on every run otherwise. Keyed on fetch-ptau.mjs, which is
+      # 19 MB from S3 on every run otherwise. Keyed on fetch-ptau.mjs, which is
       # where the adoption record lives — filename, size and both digests — so
       # adopting a different powers of tau misses the cache instead of reusing
       # the old file. fetch-ptau.mjs re-verifies the bytes on every run either
@@ -71,7 +71,7 @@ jobs:
       - name: Cache the phase-1 powers of tau
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: circuits/build/ppot_0080_13.ptau
+          path: circuits/build/ppot_0080_14.ptau
           key: ptau-${{ hashFiles('circuits/scripts/fetch-ptau.mjs') }}
 
       - name: Compile the circuits and build a development proving key
@@ -142,7 +142,7 @@ jobs:
       - name: Cache the phase-1 powers of tau
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: circuits/build/ppot_0080_13.ptau
+          path: circuits/build/ppot_0080_14.ptau
           key: ptau-${{ hashFiles('circuits/scripts/fetch-ptau.mjs') }}
 
       - name: Build the circuit and a development proving key

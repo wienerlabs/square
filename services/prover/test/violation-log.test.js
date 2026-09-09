@@ -45,6 +45,7 @@ const SECRET = {
 function requestWithSecrets() {
   return {
     policy_id: SECRET.policyId,
+    policy_salt: '7777777777777777777777777777777777777777777777777777777777777',
     operator_id: SECRET.operator,
     max_daily_spend: SECRET.maxDaily,
     max_per_transaction: SECRET.maxPerTx,

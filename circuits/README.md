@@ -28,7 +28,7 @@ verifier. Changing it is a breaking change that needs a new ceremony.
 | # | Signal | Meaning |
 |---|---|---|
 | 0 | `is_compliant` | `1` when all six rules pass, `0` otherwise. |
-| 1 | `policy_data_hash` | Poseidon commitment to the whole policy. The hook compares it against the registry. |
+| 1 | `policy_data_hash` | Commitment to the whole policy, openable one field at a time. The hook compares it against the registry. See [The policy commitment](#the-policy-commitment). |
 | 2 | `recipient` | Payee address as a field element. The hook compares it against the job's provider. |
 | 3 | `amount` | Payment amount in USDC base units, 6 decimals. Compared against the job's net payment. |
 | 4 | `token` | Token address as a field element. |
@@ -72,6 +72,66 @@ The circuit enforces the bound with `Num2Bits(64)` on `amount` and
 `daily_spent_before` rather than assuming it. circomlib's comparator constrains
 the difference of its operands, not the operands themselves, so without the
 range check a field element near the modulus would pass.
+
+## The policy commitment
+
+`policy_data_hash`, public signal 1, is what the registry holds and the hook
+compares. Since [#45][i45] it is built so that it can be opened one field at a
+time:
+
+```
+leaf[i] = Poseidon(3)(i, salt[i], value[i])
+root    = Poseidon(8)(leaf[0] … leaf[7])
+```
+
+The eight values, in the order they are hashed — the order is part of the
+commitment, since `i` goes into its own leaf:
+
+| i | field |
+|---|---|
+| 0 | `max_daily` |
+| 1 | `max_per_tx` |
+| 2 | `operator_id` |
+| 3 | `policy_id` |
+| 4 | `allowed_categories`, as a Poseidon image of the padded list |
+| 5 | `blocked_addresses`, likewise |
+| 6 | `token_whitelist`, likewise |
+| 7 | `time_window`, or `0` when no window is set |
+
+**Selective disclosure.** To prove one field to an auditor, hand over `(i,
+value, salt)` and the seven sibling leaves. The auditor recomputes leaf `i`,
+recomputes the root, and compares it to
+`PolicyRegistry.commitmentOf(institution)`. A disclosure that verifies is a
+statement about the policy that institution registered, not about one assembled
+for the occasion. `services/prover/src/commitment.js` is the implementation, and
+`open()` / `verifyDisclosure()` are the two calls.
+
+**The salts are why this discloses selectively.** Without them the siblings are
+Poseidon images of guessable values: `max_daily` is published on chain as
+`PolicyRegistry.dailyLimit`, the time field has fewer than 150,000 possible
+values, and an empty list has a well-known image. An auditor shown seven
+"hidden" siblings could search for six of them over a coffee. That was
+[#98][i98], and this construction closes it — `test/disclosure.test.js`
+demonstrates the difference rather than asserting it, by finding an unsalted
+leaf in a two-thousand-value search and failing to find the salted one.
+
+**The salts come from the caller, not from here.** They derive from one
+`policy_salt` the operator keeps with the policy, because a policy has to
+produce the same commitment every time it is proved — a salt this circuit or the
+prover invented would change the commitment on every call and never match the
+registry. They are unconstrained private inputs; what pins them is that a
+different salt is a different commitment, and the registry holds one.
+
+**The index is inside the leaf**, so a leaf cannot be replayed in another
+position. Aperture's tree, which this replaces, sorted each pair before hashing
+and so discarded position entirely, hashed leaves and internal nodes the same
+way — letting an internal node be presented as a leaf — and duplicated the last
+leaf on an odd count, which lets two different leaf sets share a root. None of
+those apply here: one level, position inside the leaf, and a leaf is a
+`Poseidon(3)` while the root is a `Poseidon(8)`.
+
+[i45]: https://github.com/wienerlabs/square/issues/45
+[i98]: https://github.com/wienerlabs/square/issues/98
 
 ## The six rules
 
@@ -212,7 +272,7 @@ npm test
 ```
 
 `circom` and `snarkjs` must be on `PATH`; `scripts/build.mjs` says so plainly if
-they are not. The first full build downloads the adopted powers of tau (9.5 MB)
+they are not. The first full build downloads the adopted powers of tau (19 MB)
 and refuses to continue if it does not hash to the adopted file, so a proving
 key cannot end up standing on an unidentified tau.
 

@@ -46,6 +46,8 @@ const TIMESTAMP = '1788356730';
 function request(overrides = {}) {
   return {
     policy_id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
+    // square#45: the secret the eight leaf salts derive from.
+    policy_salt: '7777777777777777777777777777777777777777777777777777777777777',
     operator_id: ADDR.operator,
     max_daily_spend: '100000000',
     max_per_transaction: '10000000',
@@ -119,7 +121,11 @@ describe.skipIf(!HAVE_CIRCUIT)('the prover agrees with the circuit', () => {
         input.time_start_hour_utc, input.time_end_hour_utc,
       ]);
 
-    const expected = await poseidon([
+    // square#45: eight salted, position-separated leaves, and the root is the
+    // commitment. Written out here rather than imported from
+    // src/commitment.js on purpose — a test that shares an implementation with
+    // the thing it is testing shows only that the code equals itself.
+    const values = [
       input.max_daily,
       input.max_per_tx,
       input.operator_id_field,
@@ -128,7 +134,12 @@ describe.skipIf(!HAVE_CIRCUIT)('the prover agrees with the circuit', () => {
       await poseidon(input.blocked_addresses),
       await poseidon(input.token_whitelist),
       timeField,
-    ]);
+    ];
+    const leaves = [];
+    for (let i = 0; i < 8; i++) {
+      leaves.push(await poseidon([String(i), input.policy_salts[i], values[i]]));
+    }
+    const expected = await poseidon(leaves);
 
     expect(signals.policy_data_hash).toBe(expected);
   });
