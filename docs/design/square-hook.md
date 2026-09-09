@@ -210,7 +210,7 @@ The limit has to fit the most expensive path, which is `complete`:
 |---|---|
 | Groth16 verification, 8 public signals, BN254 precompiles on Arc | ~250 000 (estimate from #17; the measured figure replaces this when #17 lands) |
 | `ClaimMarket.payeeOf` and split arithmetic | < 10 000 |
-| `giveFeedback` on the deployed ReputationRegistry (stores value, decimals, two tags, index) | ~110 000 (measured on Arc Testnet by the keeper acceptance test in #25; recorded in [docs/deploy/gas.md](../deploy/gas.md)) |
+| `giveFeedback` on the deployed ReputationRegistry (stores value, decimals, two tags, index) | ~110 000 (estimate; no run has isolated this call, and [docs/deploy/gas.md](../deploy/gas.md) carries no line for it. What that page does carry is the whole `finalize` around it, 465 486 gas on Arc against 417 852 with mock registries, so the two real registry writes together cost roughly 48 000 more than the mocks) |
 | `validationResponse` | ~60 000 |
 | Hook overhead, events, `try/catch` | < 30 000 |
 
