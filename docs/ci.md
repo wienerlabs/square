@@ -26,6 +26,7 @@ pull request.
 | `cli` | The resolver and the CLI build; the CLI's exit codes are unchanged. Hermetic. |
 | `did-aip-driver (unit)` | The driver's config parsing and envelope construction. |
 | `did-aip-driver image` | The container answers, and a malformed DID is still a 400 rather than a 500. |
+| `local stack (make up)` | The four Dockerfiles build, the whole stack comes up on a runner, and every service answers `/health` with a passing status. Also asserts the contracts have bytecode on the chain and that the prover returns a real proof. |
 | `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. |
 
 Three are **not** required to merge. Each one's red is a statement about Arc
@@ -219,6 +220,7 @@ a2a
 cli
 did-aip-driver (unit)
 did-aip-driver image
+local stack (make up)
 secret scan
 forbidden strings
 ```
