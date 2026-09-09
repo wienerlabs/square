@@ -75,6 +75,16 @@ export class EventNotFoundError extends Error {
   }
 }
 
+export class TransactionRevertedError extends Error {
+  constructor(
+    readonly hash: Hex,
+    readonly receipt: TransactionReceipt,
+  ) {
+    super(`transaction ${hash} was mined in block ${receipt.blockNumber} and reverted, so it changed nothing`);
+    this.name = "TransactionRevertedError";
+  }
+}
+
 type WriteArgs<TAbi extends Abi, TName extends ContractFunctionName<TAbi, "nonpayable" | "payable">> = {
   abi: TAbi;
   address: Address;
@@ -120,6 +130,7 @@ export class SquareClient {
     } as never);
     const hash = await wallet.writeContract(simulation.request as never);
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status !== "success") throw new TransactionRevertedError(hash, receipt);
     return { hash, receipt, events: decodeSquareLogs(receipt.logs, this.deployment) };
   }
 

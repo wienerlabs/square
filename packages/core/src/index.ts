@@ -47,6 +47,7 @@ export {
   EventNotFoundError,
   JobStatus,
   SquareClient,
+  TransactionRevertedError,
   WalletRequiredError,
   type CreateJobParams,
   type JobStatusValue,
