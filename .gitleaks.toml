@@ -26,3 +26,17 @@ paths = [
   '''^contracts/script/DeployLocal\.s\.sol$''',
   '''^packages/core/test/fork\.test\.ts$''',
 ]
+
+[[allowlists]]
+description = """proofs.json'daki `zkey_sha256`: fixture'lari ureten zkey'in
+ozeti. square#121 onu oraya koydu, cunku commit'lenmis verifier ile
+fixture'larin ayni anahtardan geldigi baska turlu soylenemiyor. generic-api-key
+kuralina takiliyor: 64 karakterlik hex, ve anahtar adi `_sha256` ile bitiyor.
+
+Yol degil deger bazinda: dosyanin tamami muaf tutulsa oraya konacak gercek bir
+sir de gorunmez olurdu, ve bu dosya her devre degisikliginde yeniden uretiliyor.
+
+Degeri degistirerek cozulemez, ki ptau onbellek anahtarinda oyle cozulmustu:
+orada anahtarin bicimi tesadufiydi, burada degerin kendisi kayit."""
+regexTarget = "line"
+regexes = ['''"zkey_sha256":\s*"[0-9a-f]{64}"''']

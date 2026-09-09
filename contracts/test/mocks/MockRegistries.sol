@@ -91,14 +91,18 @@ contract MockValidationRegistry is IValidationRegistry {
 
     mapping(bytes32 => Response) public responses;
     mapping(bytes32 => address) public requestValidator;
+    mapping(bytes32 => uint256) public requestAgent;
     bool public shouldRevert;
 
     function setShouldRevert(bool value) external {
         shouldRevert = value;
     }
 
-    function validationRequest(address validatorAddress, uint256, string calldata, bytes32 requestHash) external {
+    function validationRequest(address validatorAddress, uint256 agentId, string calldata, bytes32 requestHash)
+        external
+    {
         requestValidator[requestHash] = validatorAddress;
+        requestAgent[requestHash] = agentId;
     }
 
     function validationResponse(bytes32 requestHash, uint8 response, string calldata, bytes32, string calldata tag)
@@ -115,6 +119,6 @@ contract MockValidationRegistry is IValidationRegistry {
         returns (address, uint256, uint8, bytes32, string memory, uint256)
     {
         Response storage r = responses[requestHash];
-        return (r.validator, 0, r.response, bytes32(0), r.tag, 0);
+        return (requestValidator[requestHash], requestAgent[requestHash], r.response, bytes32(0), r.tag, 0);
     }
 }

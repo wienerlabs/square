@@ -17,7 +17,8 @@ contract MaliciousHook is IACPHook, IPayoutResolver, ERC165 {
         Loop,
         BadPayee,
         BadSplit,
-        StealPayout
+        StealPayout,
+        ResolverReverts
     }
 
     ISquareJob public immutable kernel;
@@ -45,14 +46,16 @@ contract MaliciousHook is IACPHook, IPayoutResolver, ERC165 {
             || super.supportsInterface(interfaceId);
     }
 
-    function payoutMarket() external pure returns (address) {
-
+    function payoutMarket() external view returns (address) {
+        if (mode == Mode.Loop) {
+            uint256 x;
+            while (true) x = uint256(keccak256(abi.encode(x)));
+        }
         return address(0);
-
     }
 
-
     function resolvePayout(uint256 jobId, bytes calldata) external view returns (address, uint16) {
+        if (mode == Mode.ResolverReverts) revert HookSaysNo();
         if (mode == Mode.BadPayee) return (address(0), 10_000);
         if (mode == Mode.BadSplit) return (kernel.getJobRecord(jobId).provider, 10_001);
         if (mode == Mode.StealPayout) return (thief, 10_000);

@@ -85,6 +85,8 @@ Design notes, each the record of a decision:
 - [x402: own facilitator versus Circle Gateway](docs/decisions/x402-facilitator.md)
 - [ERC-4337: is sponsorship needed](docs/decisions/erc4337-sponsorship.md)
 - [The daily ceiling is public, the policy behind it is not](docs/decisions/public-daily-ceiling.md)
+- [A hook informs, it never vetoes, on the way out of escrow](docs/decisions/hook-failure-modes.md)
+- [A lapsed dispute returns the bond](docs/decisions/lapsed-bond.md)
 - [Gas, measured](docs/deploy/gas.md)
 
 ## Provenance
@@ -202,11 +204,11 @@ still the deployer; a Safe takes over before mainnet.
 
 | Contract | Address |
 |---|---|
-| `SquareJob` | [`0x32E642084dbE5C5673d7A7E5F69b6A8260e4f3da`](https://testnet.arcscan.app/address/0x32E642084dbE5C5673d7A7E5F69b6A8260e4f3da) |
-| `KeeperEvaluator` | [`0xD9f9137fC9B316b92762792Ad64760B4C5dD29C3`](https://testnet.arcscan.app/address/0xD9f9137fC9B316b92762792Ad64760B4C5dD29C3) |
-| `Arbitration` | [`0x0Ad6268d7e420Bd7c2BDBb6e1078b99CDf5c07cC`](https://testnet.arcscan.app/address/0x0Ad6268d7e420Bd7c2BDBb6e1078b99CDf5c07cC) |
-| `ClaimMarket` | [`0x32eD0Ef1AD401DD6E622775283624438716730c0`](https://testnet.arcscan.app/address/0x32eD0Ef1AD401DD6E622775283624438716730c0) |
-| `SquareHook` | [`0xE61f869806Ca6121d33Ed2c9441a5449cF249198`](https://testnet.arcscan.app/address/0xE61f869806Ca6121d33Ed2c9441a5449cF249198) |
+| `SquareJob` | [`0x76E8690cEa9d94df810eE6b1F453866f0ee68c7B`](https://testnet.arcscan.app/address/0x76E8690cEa9d94df810eE6b1F453866f0ee68c7B) |
+| `KeeperEvaluator` | [`0x08100b5211463861f26aC8Bc73Df32A8A2f6ebbD`](https://testnet.arcscan.app/address/0x08100b5211463861f26aC8Bc73Df32A8A2f6ebbD) |
+| `Arbitration` | [`0x1c6Be0d4a84a8F0770341269393EaB13098866C2`](https://testnet.arcscan.app/address/0x1c6Be0d4a84a8F0770341269393EaB13098866C2) |
+| `ClaimMarket` | [`0x54cd26490dF9212DC6187C73CC07132cd39A1a36`](https://testnet.arcscan.app/address/0x54cd26490dF9212DC6187C73CC07132cd39A1a36) |
+| `SquareHook` | [`0xb44aCCBb8d1eae0e2D2e8B33CEC32f1fD613e7e6`](https://testnet.arcscan.app/address/0xb44aCCBb8d1eae0e2D2e8B33CEC32f1fD613e7e6) |
 
 `@squaresdk/core` carries these addresses (`deployments[5042002]`). The five
 settlement paths were run against them with real USDC and a provider registered

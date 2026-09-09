@@ -21,6 +21,7 @@ import {
 } from "viem/account-abstraction";
 import { estimateGas, getChainId, getCode, readContract } from "viem/actions";
 import { simpleAccountAbi, simpleAccountFactoryAbi } from "./abi.js";
+import { callGasLimitFromTransactionEstimate } from "./callGasLimit.js";
 import { ENTRY_POINT_V07, SIMPLE_ACCOUNT_FACTORY_V07 } from "./constants.js";
 import { CallSimulationRevertedError, isExecutionRevert, revertDataOf } from "./errors.js";
 
@@ -110,7 +111,7 @@ export async function toSimpleSmartAccount(
           },
         ],
       });
-      return estimate + SIMPLE_ACCOUNT_PROXY_DISPATCH_GAS;
+      return callGasLimitFromTransactionEstimate(estimate + SIMPLE_ACCOUNT_PROXY_DISPATCH_GAS, callData);
     } catch (error) {
       if (!isExecutionRevert(error)) return undefined;
       throw new CallSimulationRevertedError({ sender, callData, data: revertDataOf(error), cause: error as Error });

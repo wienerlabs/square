@@ -43,10 +43,14 @@ export {
 } from "./events.js";
 export { agentFromDid, UnsupportedDidError, type AgentReference } from "./agent.js";
 export {
+  AgentIdMismatchError,
   createSquareClient,
+  DeploymentChainMismatchError,
+  DidScopeMismatchError,
   EventNotFoundError,
   JobStatus,
   SquareClient,
+  TransactionRevertedError,
   WalletRequiredError,
   type CreateJobParams,
   type JobStatusValue,
