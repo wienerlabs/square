@@ -72,6 +72,7 @@ Design notes, each the record of a decision:
 - [ERC-4337: is sponsorship needed](docs/decisions/erc4337-sponsorship.md)
 - [The daily ceiling is public, the policy behind it is not](docs/decisions/public-daily-ceiling.md)
 - [Gas, measured](docs/deploy/gas.md)
+- [End to end: a policy, a proof built from it, and Arc accepting it](docs/deploy/end-to-end-5042002.md)
 
 ## Provenance
 

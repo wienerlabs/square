@@ -18,6 +18,7 @@ pull request.
 | `verifies on Arc Testnet` | A proof the prover produced verifies against Arc's own `0x06`/`0x07`/`0x08`, not revm's. |
 | `circuits` | `payment.circom` compiles, a proving key builds, and 49 constraint tests ran against them. |
 | `prover (real proving key)` | The prover agrees with the circuit, and its Solidity calldata matches `snarkjs`. |
+| `end-to-end (policy → proof → Arc)` | A policy, a proof built from it, and Arc accepting that proof — not from a fixture. **Not required**, see below. |
 | `services/prover (hermetic)` | The rule evaluator and the encoding with no artifacts — a contributor's `npm test`. |
 | `packages/data`, `packages/hardening`, `packages/observability` | Hermetic package suites. |
 | `packages/x402 (anvil)`, `services/indexer (anvil)`, `services/keeper (anvil)` | Against a local chain the job starts itself: anvil plus `DeployLocal.s.sol`, asserted before the suites run. |
@@ -28,13 +29,14 @@ pull request.
 | `did-aip-driver image` | The container answers, and a malformed DID is still a 400 rather than a 500. |
 | `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. |
 
-Three are **not** required to merge. Each one's red is a statement about Arc
+Four are **not** required to merge. Each one's red is a statement about Arc
 Testnet being reachable, or about a funded account, rather than about the change,
 and a young testnet having a bad afternoon should not block unrelated work.
 
 | Check | Why it is not required |
 |---|---|
 | `end-to-end (Arc Testnet)` | Resolves the permanent smoke agents against the live registry. |
+| `end-to-end (policy → proof → Arc)` | New, and it reaches Arc. Promote it once it has run without flaking, the way `verifies on Arc Testnet` was. Adding it to the required set means re-applying `branch-protection.json`, in the same order: merge first, then the command. |
 | `packages/aa (anvil)` | Named for a local chain, but `test/globalSetup.ts` calls `startAnvilFork()`, which defaults to `https://rpc.testnet.arc.io` (`scripts/fork.ts:144`) with no override and no fallback, and rethrows on failure. Arc being down would block a documentation pull request. |
 | `acceptance (Arc Testnet, funded key)` | Spends real testnet gas, needs a secret, does not run on fork pull requests, and lives in its own path-filtered workflow. |
 
