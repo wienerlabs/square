@@ -8,7 +8,7 @@ const STACK: MarqueeItem[] = [
   { name: "ERC-4337 v0.7", detail: "SimpleAccount" },
   { name: "x402 v2", detail: "HTTP payments" },
   { name: "Groth16 on BN254", detail: "precompiles 0x06 to 0x08" },
-  { name: "Foundry", detail: "111 contract tests" },
+  { name: "Foundry", detail: "unit, fuzz and invariant tests" },
 ];
 
 export function StandardsSection() {

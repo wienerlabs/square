@@ -17,8 +17,15 @@
 </p>
 
 An institution commits a private spending mandate on-chain. Identified agents execute
-against it. Every release out of escrow must first prove, in zero knowledge, that it
-fits the mandate. The receivable created during the challenge window is discountable.
+against it. The hook that releases escrow carries a compliance slot: with a module
+installed, a release must first prove, in zero knowledge, that it fits the mandate.
+The receivable created during the challenge window is discountable.
+
+The slot is empty on the deployed hook, so no release is proof gated on Arc Testnet
+today: `SquareHook.complianceModule()` returns the zero address, and the app's
+[network page](https://square-wienerlabs.vercel.app/network) reads it live. The
+circuit, the prover and the on-chain verifier are live (#14, #18, #17); wiring the
+check into settlement is [#27](https://github.com/wienerlabs/square/issues/27).
 
 ---
 
@@ -31,7 +38,7 @@ replace. Nothing carries an assurance claim.
 | Layer | State |
 |---|---|
 | Identity: `did:aip` v2, agent card, CLI, Universal Resolver driver | live against ERC-8004 on Arc Testnet ([docs/smoke](docs/smoke/)) |
-| Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | deployed on Arc Testnet, 163 Foundry tests including a bond-solvency invariant suite, the five settlement paths run on the testnet with real USDC and the deployed ERC-8004 registries ([docs/deploy/lifecycle-5042002.md](docs/deploy/lifecycle-5042002.md)) |
+| Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | deployed on Arc Testnet, covered by the Foundry suite including a bond-solvency invariant, the five settlement paths run on the testnet with real USDC and the deployed ERC-8004 registries ([docs/deploy/lifecycle-5042002.md](docs/deploy/lifecycle-5042002.md)) |
 | Services: indexer, keeper, x402 gateway, data layer, observability | implemented and tested against the local stack |
 | Compliance: circuit, prover, Groth16 verifier, `ComplianceHook` | circuit, prover and verifier live (#14, #18, #17); the hook slot is open (#27) |
 | Website (`site/`) | live at [square-protocol.vercel.app](https://square-protocol.vercel.app), adapted from an MIT template with Square's own copy and surfaces, every button leads to the app |
@@ -40,9 +47,16 @@ replace. Nothing carries an assurance claim.
 > The ZK trusted setup inherited from the prior work is a **demo setup**, not a
 > ceremony, in **both phases**: phase 2 carries a single contribution and no
 > beacon, and phase 1 was generated locally. Either half on its own lets that
-> machine forge a proof for any statement, so a ceremony covering both is
-> planned. Until it completes, nothing here carries an assurance claim of any
-> kind. Evidence and wording: [docs/disclosure/](docs/disclosure/), check it with
+> machine forge a proof for any statement.
+>
+> A key built in this repository is a different artifact. Its **phase 1 is
+> real**, the Perpetual Powers of Tau contribution 80 adopted in [#15][i15] and
+> verified by hash ([docs/ceremony/phase1-ptau.md](docs/ceremony/phase1-ptau.md)),
+> and its **phase 2 is still a development one**, a single contribution with no
+> beacon. [#16][i16] is the public phase-2 ceremony and it has not been held.
+> Until it completes, nothing here carries an assurance claim of any kind.
+> Evidence and wording: [docs/disclosure/](docs/disclosure/); read either phase
+> out of any key with
 > [`circuits/scripts/inspect-zkey-setup.mjs`](circuits/scripts/inspect-zkey-setup.mjs).
 
 ## Design
@@ -90,7 +104,7 @@ is not ported.
 
 ```
 contracts/   Foundry: SquareJob, KeeperEvaluator, Arbitration, ClaimMarket, SquareHook,
-             PolicyRegistry, deploy scripts, 147 tests
+             PolicyRegistry, deploy scripts and the test suite
 circuits/    Circom payment-compliance circuit + ceremony scripts
 packages/    did-resolver, cli, did-aip-driver, core (SDK, embedded ABIs), data (Postgres
              access layer + migrations), hardening (SSRF, idempotency, rate limit, RPC
@@ -159,6 +173,7 @@ Arc gas for one verification: 281596
 All checks passed against Arc.
 ```
 
+[i15]: https://github.com/wienerlabs/square/issues/15
 [i16]: https://github.com/wienerlabs/square/issues/16
 [i119]: https://github.com/wienerlabs/square/issues/119
 
@@ -176,11 +191,16 @@ verifier at a different address. See
 
 ### Square contracts
 
-Deployed on 2026-09-07 from `0xaFF9CD31ae93e1bdD70FFDf0763C2e010037c65c` with
-`contracts/script/DeploySettlement.s.sol`. Testnet parameters: challenge window
-120 s, dispute window 300 s, evaluator fee 0.5 %, platform fee 1 %, bond 10 %
-with a 1 USDC floor, three arbiters with threshold 2. The owner is still the
-deployer; a Safe takes over before mainnet.
+First deployed on 2026-09-07 with `contracts/script/DeploySettlement.s.sol`, then
+redeployed on 2026-09-08 with `contracts/script/deploy-arc-testnet.sh` after four
+findings changed storage layouts and constructor signatures. Both runs came from
+`0xaFF9CD31ae93e1bdD70FFDf0763C2e010037c65c`. **The addresses below are the
+redeploy's**; the superseded 2026-09-07 set, and what changed between the two,
+are in [docs/deploy/redeploy-2026-09-08.md](docs/deploy/redeploy-2026-09-08.md).
+Testnet parameters: challenge window 120 s, dispute window 300 s, finalize grace
+600 s (so `settlementHorizon()` reads 1020 s), evaluator fee 0.5 %, platform fee
+1 %, bond 10 % with a 1 USDC floor, three arbiters with threshold 2. The owner is
+still the deployer; a Safe takes over before mainnet.
 
 | Contract | Address |
 |---|---|
@@ -198,7 +218,8 @@ as ERC-8004 agent `892531`; every transaction hash and the measured gas are in
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE). [NOTICE](NOTICE) carries the MIT notices
-of the code that came from the prior repositories.
+of the code that came from the prior repositories, and the SIL OFL 1.1 notice of
+the Open Runde typeface the app and the site are set in.
 
 Parts of the circuit, the prover and the client came from `wienerlabs/aperture`
 and `dr-wilson-empty/aip-beta`, both MIT; NOTICE says which parts and carries

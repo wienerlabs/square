@@ -21,18 +21,18 @@ export function LiveStats() {
           label={
             <>
               <UsdcMark className="size-3.5" />
-              USDC escrowed
+              USDC in escrow
             </>
           }
           loading={jobs.isPending}
           value={stats ? formatUsdc(stats.escrowed) : unavailable ?? "0"}
-          hint={stats ? `Across the ${stats.scanned} most recent jobs` : undefined}
+          hint={stats ? `Still held on funded and submitted jobs, of the ${stats.scanned} most recent` : undefined}
         />
         <MetricCard
           label="Settled"
           loading={jobs.isPending}
           value={stats ? `${stats.completed} ${stats.completed === 1 ? "job" : "jobs"}` : unavailable ?? "0"}
-          hint={stats ? `${formatUsdc(stats.settled)} USDC released through the hook` : undefined}
+          hint={stats ? `${formatUsdc(stats.settled)} USDC released to payees, net of the fees snapshotted at funding` : undefined}
         />
         <MetricCard
           label="Last activity"

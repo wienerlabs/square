@@ -11,8 +11,18 @@ export interface LiveStats {
   scanned: number;
 }
 
+const BPS = 10_000n;
+
 function latest(job: JobSummary): number {
   return Math.max(job.createdAt, job.fundedAt, job.submittedAt);
+}
+
+export function released(job: JobSummary): bigint {
+  const platformFee = (job.budget * BigInt(job.platformFeeBP)) / BPS;
+  const evaluatorFee = (job.budget * BigInt(job.evaluatorFeeBP)) / BPS;
+  const net = job.budget - platformFee - evaluatorFee;
+  const providerBps = job.providerBps > 0 ? BigInt(job.providerBps) : BPS;
+  return (net * providerBps) / BPS;
 }
 
 export function liveStats(snapshot: JobsSnapshot): LiveStats {
@@ -22,12 +32,15 @@ export function liveStats(snapshot: JobsSnapshot): LiveStats {
   let active = 0;
   let lastActivity: number | null = null;
   for (const job of snapshot.jobs) {
-    if (job.fundedAt > 0) escrowed += job.budget;
+    const inEscrow = job.status === JobStatus.Funded || job.status === JobStatus.Submitted;
+    if (inEscrow) {
+      escrowed += job.budget;
+      active += 1;
+    }
     if (job.status === JobStatus.Completed) {
-      settled += job.budget;
+      settled += released(job);
       completed += 1;
     }
-    if (job.status === JobStatus.Funded || job.status === JobStatus.Submitted) active += 1;
     const seen = latest(job);
     if (seen > 0 && (lastActivity === null || seen > lastActivity)) lastActivity = seen;
   }

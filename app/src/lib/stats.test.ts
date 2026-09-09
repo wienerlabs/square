@@ -1,12 +1,13 @@
 import { JobStatus } from "@squaresdk/core";
 import { describe, expect, it } from "vitest";
 import type { JobSummary } from "./square";
-import { liveStats, matchesQuery, relativeTime } from "./stats";
+import { liveStats, matchesQuery, relativeTime, released } from "./stats";
 
 const job = (over: Partial<JobSummary>): JobSummary => ({
   id: 1n,
   client: "0x00000000000000000000000000000000000000Aa",
   provider: "0x00000000000000000000000000000000000000Bb",
+  evaluator: "0x00000000000000000000000000000000000000Cc",
   budget: 1_000_000n,
   status: JobStatus.Open,
   createdAt: 1_000,
@@ -22,17 +23,46 @@ const job = (over: Partial<JobSummary>): JobSummary => ({
 });
 
 describe("liveStats", () => {
-  it("sums escrow, settlement and activity over the snapshot", () => {
+  it("counts as escrowed only what the kernel still holds, and as settled only what it released", () => {
     const stats = liveStats({
       counter: 12n,
       scanned: 3,
       jobs: [
-        job({ id: 12n, status: JobStatus.Completed, fundedAt: 1_100, submittedAt: 1_200, budget: 3_000_000n }),
+        job({ id: 12n, status: JobStatus.Completed, fundedAt: 1_100, submittedAt: 1_200, budget: 3_000_000n, providerBps: 10_000 }),
         job({ id: 11n, status: JobStatus.Funded, fundedAt: 1_500 }),
         job({ id: 10n }),
       ],
     });
-    expect(stats).toEqual({ totalJobs: 12n, escrowed: 4_000_000n, settled: 3_000_000n, completed: 1, active: 1, lastActivity: 1_500, scanned: 3 });
+    expect(stats).toEqual({ totalJobs: 12n, escrowed: 1_000_000n, settled: 2_955_000n, completed: 1, active: 1, lastActivity: 1_500, scanned: 3 });
+  });
+
+  it("drops a refunded job out of the escrow total instead of keeping it there for ever", () => {
+    const jobs = [
+      job({ id: 3n, status: JobStatus.Submitted, fundedAt: 1_100, submittedAt: 1_200, budget: 5_000_000n }),
+      job({ id: 2n, status: JobStatus.Expired, fundedAt: 1_050, budget: 7_000_000n }),
+      job({ id: 1n, status: JobStatus.Rejected, fundedAt: 1_000, budget: 9_000_000n }),
+    ];
+    const stats = liveStats({ counter: 3n, scanned: 3, jobs });
+    expect(stats.escrowed).toBe(5_000_000n);
+    expect(stats.settled).toBe(0n);
+    expect(stats.active).toBe(1);
+  });
+
+  it("takes the fees and the arbiters' split off the settled total", () => {
+    const stats = liveStats({
+      counter: 1n,
+      scanned: 1,
+      jobs: [job({ id: 1n, status: JobStatus.Completed, fundedAt: 1_100, submittedAt: 1_200, budget: 1_000_000n, providerBps: 4_000 })],
+    });
+    expect(stats.settled).toBe(394_000n);
+  });
+});
+
+describe("released", () => {
+  it("agrees with SquareJob.complete on the deployed fee basis points", () => {
+    expect(released(job({ budget: 1_000_000n, platformFeeBP: 100, evaluatorFeeBP: 50, providerBps: 10_000 }))).toBe(985_000n);
+    expect(released(job({ budget: 1_000_000n, platformFeeBP: 100, evaluatorFeeBP: 50, providerBps: 0 }))).toBe(985_000n);
+    expect(released(job({ budget: 1_000_000n, platformFeeBP: 0, evaluatorFeeBP: 0, providerBps: 10_000 }))).toBe(1_000_000n);
   });
 });
 

@@ -19,6 +19,7 @@ const job = (over: Partial<JobSummary>): JobSummary => ({
   id: 1n,
   client: "0x0000000000000000000000000000000000000001",
   provider: "0x0000000000000000000000000000000000000002",
+  evaluator: "0x0000000000000000000000000000000000000003",
   budget: 1_000_000n,
   status: JobStatus.Open,
   createdAt: 1_000,

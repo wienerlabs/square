@@ -13,6 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { zeroAddress, type Address } from "viem";
 import { useWalletClient } from "wagmi";
+import { keeperEvaluates } from "./actions";
 import { activeChain, deployment, publicClient } from "./wagmi";
 
 export const POLL_MS = 10_000;
@@ -49,6 +50,7 @@ export interface JobSummary {
   id: bigint;
   client: Address;
   provider: Address;
+  evaluator: Address;
   budget: bigint;
   status: number;
   createdAt: number;
@@ -72,13 +74,14 @@ async function readJobSummary(id: bigint): Promise<JobSummary> {
   const record = await readOnlyClient.getJobRecord(id);
   let challengeEnd = 0;
   let disputed = false;
-  if (record.status === JobStatus.Submitted) {
+  if (record.status === JobStatus.Submitted && keeperEvaluates(record, deployment.keeperEvaluator)) {
     [challengeEnd, disputed] = await Promise.all([readOnlyClient.challengeEndsAt(id), readOnlyClient.isDisputed(id)]);
   }
   return {
     id,
     client: record.client,
     provider: record.provider,
+    evaluator: record.evaluator,
     budget: record.budget,
     status: record.status,
     createdAt: record.createdAt,
@@ -134,9 +137,10 @@ export function useJob(id: bigint | null) {
       const counter = await readOnlyClient.jobCounter();
       if (id < 1n || id > counter) return null;
       const record = await readOnlyClient.getJobRecord(id);
+      const keeperHoldsTheWindow = keeperEvaluates(record, deployment.keeperEvaluator);
       const [challengeEnd, disputed, keeperDispute, dispute, listing, netPayout, payee, agentId, expiryRecorded, bond] =
         await Promise.all([
-          readOnlyClient.challengeEndsAt(id),
+          keeperHoldsTheWindow ? readOnlyClient.challengeEndsAt(id) : Promise.resolve(0),
           readOnlyClient.isDisputed(id),
           publicClient.readContract({
             abi: keeperEvaluatorAbi,

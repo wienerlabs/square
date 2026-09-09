@@ -1,4 +1,11 @@
+Copyright 2023 Laurids Kern (Open Runde, https://github.com/lauridskern/open-runde)
 Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
+
+The font files beside this notice are Open Runde, a rounded derivative of Inter.
+The first line is the copyright statement Open Runde's own files carry in their
+name table; Inter's line follows it because Open Runde derives from Inter.
+Upstream ships this licence file with Inter's line alone, which is why the first
+line is added here rather than quoted from it.
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
