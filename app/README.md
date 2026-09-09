@@ -96,6 +96,7 @@ src/components/     Design system components (PrimaryButton, GhostButton, Chip, 
 src/lib/wagmi.ts    Chain definitions, wagmi config, the read-only public client
 src/lib/square.ts   useSquare() and every chain read hook
 src/lib/actions.ts  The gates the kernel enforces, shared by the job page, the inbox and the form
+src/lib/clock.ts    The offset between the chain and the browser clock, and the skew notice threshold
 src/lib/indexer.ts  Optional indexer read API client
 src/lib/format.ts   USDC, address, timestamp and duration formatting
 src/lib/tx.tsx      Transaction runner and toast state
@@ -129,6 +130,14 @@ The wallet button discovers every wallet extension in the browser through EIP-69
 ## Spec editor
 
 The JSON spec on the new job page is edited in a highlighted editor: keys, strings, numbers and literals are coloured, lines are numbered, the line a parse error points at is marked, Tab inserts two spaces, and the canonical form that is hashed can be shown beside the typed form with both sizes in bytes.
+
+## Clock
+
+Every time gate on screen comes from the chain, not from the browser. `useNetwork` reads the latest block next to the job counter and keeps the offset between its timestamp and `Date.now()` at the moment of the read; `useNow` still ticks once a second off the local clock and adds that offset, so countdowns move smoothly while the second they name is the chain's. The dispute and finalize buttons, the refund gate, the dashboard inbox, the timeline and the settlement clock all derive from it.
+
+The size of the windows is the reason. The deployed `KeeperEvaluator` runs a challenge window of 120 seconds, so a browser two minutes fast would judge the window closed the instant the provider submitted and would never draw the dispute button at all, on a chain that was still accepting the dispute. The opposite direction is harmless: the SDK simulates every write before sending it, so an action offered too early fails in simulation without spending gas.
+
+When the two clocks differ by 30 seconds or more, a line above every page names the difference and its direction. The threshold sits well above the few seconds of block time and round trip that separate an accurate machine from the last block, and well below the 120 second window it exists to protect.
 
 ## Brand assets
 

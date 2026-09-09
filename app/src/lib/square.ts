@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import { zeroAddress, type Address } from "viem";
 import { useWalletClient } from "wagmi";
 import { keeperEvaluates } from "./actions";
+import { chainClockOffset, chainNow } from "./clock";
 import { activeChain, deployment, publicClient } from "./wagmi";
 
 export const POLL_MS = 10_000;
@@ -199,6 +200,7 @@ export function useJob(id: bigint | null) {
 
 export interface NetworkInfo {
   blockNumber: bigint;
+  chainOffset: number;
   jobCounter: bigint;
   settlementHorizon: number;
   window: KeeperWindow;
@@ -226,7 +228,7 @@ export function useNetwork() {
       const arbitration = { abi: arbitrationAbi, address: deployment.arbitration } as const;
       const hook = { abi: squareHookAbi, address: deployment.squareHook } as const;
       const [
-        blockNumber,
+        block,
         jobCounter,
         settlementHorizon,
         window,
@@ -240,7 +242,7 @@ export function useNetwork() {
         bondParameters,
         complianceModule,
       ] = await Promise.all([
-        publicClient.getBlockNumber(),
+        publicClient.getBlock(),
         readOnlyClient.jobCounter(),
         readOnlyClient.settlementHorizon(),
         publicClient.readContract({ ...keeper, functionName: "currentWindow" }),
@@ -261,7 +263,8 @@ export function useNetwork() {
       });
       const [bondBps, minBond] = bondParameters;
       return {
-        blockNumber,
+        blockNumber: block.number,
+        chainOffset: chainClockOffset(Number(block.timestamp), Date.now()),
         jobCounter,
         settlementHorizon,
         window: {
@@ -310,12 +313,17 @@ export function usePositions(address: Address | undefined) {
 }
 
 export function useNow(intervalMs = 1000): number {
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  const offset = useNetwork().data?.chainOffset ?? 0;
+  const [tick, setTick] = useState(() => Date.now());
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), intervalMs);
+    const timer = window.setInterval(() => setTick(Date.now()), intervalMs);
     return () => window.clearInterval(timer);
   }, [intervalMs]);
-  return now;
+  return chainNow(offset, tick);
+}
+
+export function useClockSkew(): number {
+  return useNetwork().data?.chainOffset ?? 0;
 }
 
 export { countVotes, jobPhase, LISTING_LABELS, OUTCOME_LABELS, PHASE_LABELS } from "./phase";

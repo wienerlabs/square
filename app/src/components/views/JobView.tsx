@@ -17,7 +17,7 @@ import { GhostButton } from "@/components/GhostButton";
 import { PanelCard } from "@/components/PanelCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { StatusPill, listingTone, outcomeTone, phaseTone } from "@/components/StatusPill";
-import { keeperEvaluates as evaluatedByKeeper, refundAvailable } from "@/lib/actions";
+import { challengeWindowClosed, disputeAvailable, keeperEvaluates as evaluatedByKeeper, refundAvailable } from "@/lib/actions";
 import { chartColors, formatCompactUsdc, payoutSplit, settlementClock } from "@/lib/charts";
 import { formatBps, formatCountdown, formatDuration, formatTimestamp, formatUsdc, isZeroAddress, parseUsdc, shortHash, statusLabel } from "@/lib/format";
 import {
@@ -388,7 +388,7 @@ export function JobView() {
   const isProvider = sameAddress(address, record.provider);
   const keeperEvaluates = evaluatedByKeeper(record, deployment.keeperEvaluator);
   const hookIsSquare = isAddressEqual(record.hook, deployment.squareHook);
-  const windowClosed = detail.challengeEnd > 0 && now >= detail.challengeEnd;
+  const windowClosed = challengeWindowClosed(detail.challengeEnd, now);
   const neverDisputed = detail.keeperDispute.disputedAt === 0;
   const disputeOpen = detail.dispute.disputedAt !== 0 && detail.dispute.outcome === 0;
   const isArbiter = address !== undefined && detail.arbiters.some((arbiter) => isAddressEqual(arbiter, address));
@@ -402,7 +402,10 @@ export function JobView() {
   const showFund = record.status === JobStatus.Open && isClient && record.budget > 0n && !isZeroAddress(record.provider) && now < record.expiredAt;
   const showSubmit = record.status === JobStatus.Funded && isProvider && now < record.expiredAt;
   const showFinalize = record.status === JobStatus.Submitted && keeperEvaluates && neverDisputed && windowClosed;
-  const showDispute = record.status === JobStatus.Submitted && keeperEvaluates && isClient && neverDisputed && !windowClosed;
+  const showDispute =
+    isClient &&
+    neverDisputed &&
+    disputeAvailable({ evaluator: record.evaluator, status: record.status, challengeEnd: detail.challengeEnd }, deployment.keeperEvaluator, now);
   const showVote = disputeOpen && isArbiter;
   const showLapse = disputeOpen && now >= detail.dispute.resolveBy;
   const showFinalizeDecided =
