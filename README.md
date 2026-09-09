@@ -192,11 +192,14 @@ verifier at a different address. See
 ### Square contracts
 
 First deployed on 2026-09-07 with `contracts/script/DeploySettlement.s.sol`, then
-redeployed on 2026-09-08 with `contracts/script/deploy-arc-testnet.sh` after four
-findings changed storage layouts and constructor signatures. Both runs came from
-`0xaFF9CD31ae93e1bdD70FFDf0763C2e010037c65c`. **The addresses below are the
-redeploy's**; the superseded 2026-09-07 set, and what changed between the two,
-are in [docs/deploy/redeploy-2026-09-08.md](docs/deploy/redeploy-2026-09-08.md).
+redeployed with `contracts/script/deploy-arc-testnet.sh` on 2026-09-08 after four
+findings and again on 2026-09-09 after the second review round changed the job
+record, the market's `buy` signature and the hook's constructor. All three runs
+came from `0xaFF9CD31ae93e1bdD70FFDf0763C2e010037c65c`. **The addresses below
+are the 2026-09-09 redeploy's**; the superseded sets, what changed each time and
+the sweep of the balances they held are in
+[docs/deploy/redeploy-2026-09-08.md](docs/deploy/redeploy-2026-09-08.md) and
+[docs/deploy/redeploy-2026-09-09.md](docs/deploy/redeploy-2026-09-09.md).
 Testnet parameters: challenge window 120 s, dispute window 300 s, finalize grace
 600 s (so `settlementHorizon()` reads 1020 s), evaluator fee 0.5 %, platform fee
 1 %, bond 10 % with a 1 USDC floor, three arbiters with threshold 2. The owner is
