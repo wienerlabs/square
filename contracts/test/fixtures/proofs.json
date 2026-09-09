@@ -1,31 +1,32 @@
 {
   "_provenance": {
-    "zkey_sha256": null,
-    "note": "Not recorded. These fixtures and src/Groth16Verifier.sol predate square#121, which added the recording; the key they came from is gitignored and no longer on any machine, so its digest cannot be recovered honestly and is left null rather than guessed. That the two belong together is still established: forge test verifies these proofs against that verifier, and a verifier from a different key rejects every proof from another. script/regenerate-fixtures.mjs records the digest from now on, and square#16 produces the next key."
+    "zkey_sha256": "aa6c64c7c5f50f4e75ba4e035e8faa649a2ac911e0b8cc8a1b4392efb32ed359",
+    "generated_at": "2026-09-09T13:30:36.380Z",
+    "note": "The verifier in src/Groth16Verifier.sol must come from this same key. Regenerate both together: a verifier from one key rejects every proof from another."
   },
   "compliant": {
     "is_compliant": true,
     "a": [
-      "0x0b584df6e5bbbe9fc6cd0440eeab7a99e794b587e9bf2596e83beb3ace1e85c8",
-      "0x2efff5e251e286d07c174be54feb19a628c41947b7259a5e529ec39cc479db21"
+      "0x0d3b34fba1d908175f4ec9d27b369c9560370e2b453cbaef4316671372dc641b",
+      "0x07d5bcb13c700960712f90778dc7e06c88094c7ac5a4c78bda06555177154ad5"
     ],
     "b": [
       [
-        "0x17dbf6179b5fdc658530ef2bdd29bb915335cda12f2c3c6156fa37520f4db483",
-        "0x19ab683b748916d41c60becdf554f66467d0a9fbc83fa6730d894c66b4ddf0a1"
+        "0x1aeb2b54c94f938c93e341db424977e6210b9b261469895469af3076cb8d8520",
+        "0x22a2450af395f92dc601193e3b4848127e0f9ee2eb6adb01f2b4c06cb0a8c2d6"
       ],
       [
-        "0x04df2dc089264800a0e6f6c6e0ac384088dac90a7bcbe1d174129ad5495e32ce",
-        "0x2b2dce953087c6f849a1b580fd987fb5e9cfca0a5af896ec99744c9b46f94ddf"
+        "0x0236b6677a6b773a58529906b4cb3dc8b00d98d17669c54f39001dfb8a5b910d",
+        "0x22690464df621d211c0410eb4d5879b2eca599c559df24e6c571244a4305d617"
       ]
     ],
     "c": [
-      "0x1470588c02d27879ce312388b6be923992b08b1dfc54a80b0b1d0bf0b91e0dcb",
-      "0x26189298e3c18b16a84411d1f0ad852ada5b55c40e0a4d7dc2da624c784e3ef7"
+      "0x2ec00be0c65da82fac7da97fb66d603993d93c1e587e0413651921ba639f7525",
+      "0x2834c99531127bae7c5391162ab67ec81c527e78a2ad04935c9524ccf552d57c"
     ],
     "input": [
       "0x0000000000000000000000000000000000000000000000000000000000000001",
-      "0x1a1d4c707dd245fc41b53e019dcc8f3fe47cf3e732218b3cf5235f4caf2361c9",
+      "0x1609f1c034cd93771030cdf76d5d5ff474397d8417da33ded98698aa5fbb02c3",
       "0x0000000000000000000000001111111111111111111111111111111111111111",
       "0x00000000000000000000000000000000000000000000000000000000004c4b40",
       "0x0000000000000000000000003600000000000000000000000000000000000000",
@@ -37,26 +38,26 @@
   "blocked": {
     "is_compliant": false,
     "a": [
-      "0x06f243c11070ff2a467aafd283cffe6a945336552f819ebe16d64917bd5cf3a1",
-      "0x101c126a5ea1366a924cc5fc04bc16bdaf0365ca186354ce6113c83e54f79c0f"
+      "0x27726f7e2f3a4e13549fe11100d55daee17b0c32fae3e99228f7ea1a7bed0186",
+      "0x0e4410c0602349346fc687af5433c0a4a0e7c6d7221a0cb435935b870cdf863b"
     ],
     "b": [
       [
-        "0x2372a13d6e646be01da73070ef1b561af8fd6bf5f22069a9571e0780aadb2259",
-        "0x2d1369d4a8943889121eb1c8cd51a978f0b22617f19ad2dfaccb665efd5cba8c"
+        "0x0b56897736af10b180e20ad7eddbc018a58cb9e885741aa368650af342c00af3",
+        "0x2cfe0ab765c6f84e4fd397d2fe2e6d49e93b7eaefe6d266e0578a09f3a1ff554"
       ],
       [
-        "0x08decb3010e51dc1be3732aadb7d0b78a590b909b90db8b0251ace1e65a05aa3",
-        "0x0ff3cd68355fc469d6fdea173488be03d475d0c49ae0a6b34da89abfc871aa4f"
+        "0x16db54a1c51279fa2442212f487dcbf9f9e7439ec90b58a58d3d96b3c302493d",
+        "0x0e1d9278a6ed7b305f0aaa299c7960ce3de68d0403eb16978bfb46360ab0546f"
       ]
     ],
     "c": [
-      "0x0ad8af12145c26722a082bdeab33597a13839fd0bb6fcae0fcc86c7ec12c9558",
-      "0x15cd2f636d0ba443d782017fc427db2208a81fa6a6082420dc8f1ee6e4ac0477"
+      "0x28d8e1d9c2faa57ef7da306f17588f86ac775c2b29ab627c97a09d0d38381bfd",
+      "0x0e7147f2b24cad7541841ad07a76523572246219596c4ac08ab4c6ddeb331a98"
     ],
     "input": [
       "0x0000000000000000000000000000000000000000000000000000000000000000",
-      "0x1a1d4c707dd245fc41b53e019dcc8f3fe47cf3e732218b3cf5235f4caf2361c9",
+      "0x1609f1c034cd93771030cdf76d5d5ff474397d8417da33ded98698aa5fbb02c3",
       "0x0000000000000000000000002222222222222222222222222222222222222222",
       "0x00000000000000000000000000000000000000000000000000000000004c4b40",
       "0x0000000000000000000000003600000000000000000000000000000000000000",
