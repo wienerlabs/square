@@ -4,7 +4,7 @@ import { agentFromDid, hashDeliverable, JobStatus, Outcome, specHashFromDescript
 import { InvalidDidError } from "@squaresdk/did-resolver";
 import { useSearchParams } from "next/navigation";
 import { useMemo, useState, type ReactNode } from "react";
-import { isAddressEqual, type Address } from "viem";
+import { getAddress, isAddress, isAddressEqual, type Address } from "viem";
 import { useAccount } from "wagmi";
 import { AddressLink } from "@/components/AddressLink";
 import { AmountUsdc } from "@/components/AmountUsdc";
@@ -17,6 +17,7 @@ import { GhostButton } from "@/components/GhostButton";
 import { PanelCard } from "@/components/PanelCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { StatusPill, listingTone, outcomeTone, phaseTone } from "@/components/StatusPill";
+import { keeperEvaluates as evaluatedByKeeper, refundAvailable } from "@/lib/actions";
 import { chartColors, formatCompactUsdc, payoutSplit, settlementClock } from "@/lib/charts";
 import { formatBps, formatCountdown, formatDuration, formatTimestamp, formatUsdc, isZeroAddress, parseUsdc, shortHash, statusLabel } from "@/lib/format";
 import {
@@ -101,6 +102,40 @@ function SimpleAction({
       onClick={() => void ctx.run(label, () => send(ctx.square))}
       ctx={ctx}
     />
+  );
+}
+
+function SetProviderAction({ ctx }: { ctx: ActionContext }) {
+  const [value, setValue] = useState("");
+  const valid = isAddress(value) && !isZeroAddress(value);
+  return (
+    <ActionCard
+      title="Set provider"
+      description="The job was opened without a provider, so funding reverts with ProviderNotSet. Only the client may name one, only while the job is open, and only once."
+      buttonLabel="Set provider"
+      disabled={!valid}
+      onClick={() => {
+        if (valid) void ctx.run("Set provider", () => ctx.square.setProvider(ctx.id, getAddress(value)));
+      }}
+      ctx={ctx}
+    >
+      <Field
+        label="Provider address"
+        htmlFor="provider"
+        hint="An agent's wallet on this chain. It is fixed once set."
+        error={value.length > 0 && !valid ? "Enter a 0x address of 40 hex characters." : null}
+      >
+        <input
+          id="provider"
+          className={`${inputClass} font-mono text-[13px]`}
+          value={value}
+          onChange={(event) => setValue(event.target.value.trim())}
+          placeholder="0x"
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </Field>
+    </ActionCard>
   );
 }
 
@@ -350,7 +385,7 @@ export function JobView() {
   const specHash = specHashFromDescription(record.description);
   const isClient = sameAddress(address, record.client);
   const isProvider = sameAddress(address, record.provider);
-  const keeperEvaluates = isAddressEqual(record.evaluator, deployment.keeperEvaluator);
+  const keeperEvaluates = evaluatedByKeeper(record, deployment.keeperEvaluator);
   const hookIsSquare = isAddressEqual(record.hook, deployment.squareHook);
   const windowClosed = detail.challengeEnd > 0 && now >= detail.challengeEnd;
   const neverDisputed = detail.keeperDispute.disputedAt === 0;
@@ -361,6 +396,7 @@ export function JobView() {
   const reason = address === undefined ? "Connect a wallet to send this transaction." : chainId !== activeChain.id ? `Switch the wallet to ${activeChain.name}.` : null;
   const ctx: ActionContext = { square, id, busy, canSend, reason, run };
 
+  const showSetProvider = record.status === JobStatus.Open && isClient && isZeroAddress(record.provider);
   const showSetBudget = record.status === JobStatus.Open && (isClient || isProvider);
   const showFund = record.status === JobStatus.Open && isClient && record.budget > 0n && !isZeroAddress(record.provider) && now < record.expiredAt;
   const showSubmit = record.status === JobStatus.Funded && isProvider && now < record.expiredAt;
@@ -379,12 +415,13 @@ export function JobView() {
   const showCancel = listing.status === 1 && sameAddress(address, listing.seller);
   const showReject = record.status === JobStatus.Open && isClient;
   const expired = now >= record.expiredAt;
-  const showClaimRefund = expired && (record.status === JobStatus.Funded || (record.status === JobStatus.Submitted && !keeperEvaluates));
+  const showClaimRefund = refundAvailable(record, deployment.keeperEvaluator, now);
   const expiryHeldByKeeper = expired && record.status === JobStatus.Submitted && keeperEvaluates;
   const withdrawable = positions.data?.withdrawable ?? 0n;
   const bondWithdrawable = positions.data?.bondWithdrawable ?? 0n;
   const showRecordExpiry = record.status === JobStatus.Expired && detail.agentId !== 0n && !detail.expiryRecorded;
   const anyAction =
+    showSetProvider ||
     showSetBudget ||
     showFund ||
     showSubmit ||
@@ -608,6 +645,7 @@ export function JobView() {
       >
         {anyAction ? (
           <div className="grid gap-4 md:grid-cols-2">
+            {showSetProvider ? <SetProviderAction ctx={ctx} /> : null}
             {showSetBudget ? <SetBudgetAction ctx={ctx} detail={detail} /> : null}
             {showFund ? (
               <SimpleAction
