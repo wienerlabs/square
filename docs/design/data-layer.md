@@ -158,9 +158,17 @@ create table arbiter_sets (
 ```
 
 `job_events` is what makes restart safe: the primary key is the log's chain
-position, so replaying a block twice inserts nothing and the reducer is
-idempotent per event. `indexer_checkpoints.last_block` advances only after every
-log of that block is in `job_events` and reduced, inside one transaction.
+position, so replaying a block twice inserts nothing and the reducer never sees
+the same log twice. The reducer itself is not idempotent per event, `credit` adds
+and `WindowsConfigured` appends, so the guard is the journal and not the reducer:
+the indexer applies a batch to a copy of its in-memory state and adopts that copy
+only after the transaction commits, so a rolled-back batch leaves nothing behind
+to be applied a second time on the retry. `indexer_checkpoints.last_block`
+advances only after every log of that block is in `job_events` and reduced,
+inside one transaction. A single log that cannot be journalled or reduced is
+rolled back to its own savepoint, counted in
+`square_indexer_quarantined_events_total` and listed on the indexer's
+`/quarantine`, and the rest of the batch still commits.
 
 ### Security layer (#44)
 
