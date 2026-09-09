@@ -5,8 +5,8 @@
 # keeper and the application. It returns only once every one of them reports
 # healthy, so a zero exit status is the evidence that the stack is up.
 #
-# Nothing but Docker has to be installed. circom, snarkjs and forge all run in
-# containers; see circuits/Dockerfile and compose.yaml.
+# Docker, git and make are the whole prerequisite. circom, snarkjs and forge
+# run in containers; see circuits/Dockerfile and compose.yaml.
 
 COMPOSE ?= docker compose
 SERVICES := prover indexer keeper app
@@ -17,7 +17,7 @@ SERVICES := prover indexer keeper app
 # health checks to wait on: the deployer, the migration and the circuit build
 # are one shots that the four below already depend on, and compose starts them
 # first and waits for a clean exit before it starts anything that needs them.
-up: .env
+up: .env contracts/lib/forge-std/src/Script.sol
 	$(COMPOSE) up --build --detach --wait $(SERVICES)
 	@$(MAKE) --no-print-directory health
 
@@ -47,3 +47,11 @@ health:
 .env:
 	@cp .env.example .env
 	@echo "wrote .env from .env.example"
+
+# forge-std and openzeppelin-contracts are submodules, and `git clone` without
+# --recursive leaves them empty, which the deployer only discovers when it
+# fails to compile. One command means one command, so fetch them here. Named
+# after a file rather than the directory because an empty submodule directory
+# exists and would satisfy make.
+contracts/lib/forge-std/src/Script.sol:
+	git submodule update --init --recursive

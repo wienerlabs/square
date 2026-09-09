@@ -8,8 +8,11 @@ make up
 ```
 
 It returns only once every service reports healthy, so a zero exit status is
-the claim and the health output below is the evidence. Nothing but Docker has
-to be installed: circom, snarkjs and forge all run in containers.
+the claim and the health output below is the evidence. Docker, git and make are
+the whole prerequisite: circom, snarkjs and forge run in containers, and the
+Foundry submodules are fetched by `make up` itself, since `git clone` without
+`--recursive` leaves them empty and the deployer only finds out when it fails
+to compile.
 
 | | |
 |---|---|

@@ -94,8 +94,9 @@ make up
 
 That brings up anvil, deploys the contracts to it, migrates Postgres, builds
 the circuit artifacts, and starts the prover, the indexer, the keeper and the
-application, returning only once all four report healthy. Nothing but Docker
-has to be installed. [docs/deploy/local-stack.md](docs/deploy/local-stack.md)
+application, returning only once all four report healthy. Docker, git and
+make are the whole prerequisite.
+[docs/deploy/local-stack.md](docs/deploy/local-stack.md)
 has the ports, the measured start-up time and how to point the same stack at
 Arc testnet.
 
