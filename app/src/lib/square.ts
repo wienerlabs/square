@@ -151,7 +151,7 @@ export function useJob(id: bigint | null) {
           }),
           readOnlyClient.disputeOf(id),
           readOnlyClient.listing(id),
-          readOnlyClient.netPayout(id).catch(() => 0n),
+          readOnlyClient.netPayout(id),
           readOnlyClient.payeeOf(id),
           readOnlyClient.agentOf(id),
           publicClient.readContract({
