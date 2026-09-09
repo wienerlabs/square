@@ -27,6 +27,8 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     IValidationRegistry private immutable _validationRegistry;
 
     IComplianceModule private _complianceModule;
+    address private _trustedEvaluator;
+    uint64 private _minReputationBudget;
     mapping(uint256 jobId => uint256) private _agentOf;
     mapping(uint256 jobId => bytes32) private _validationOf;
     mapping(uint256 jobId => bool) private _recorded;
@@ -39,9 +41,16 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     event ValidationRecorded(uint256 indexed jobId, bytes32 indexed requestHash, uint8 response);
     event ValidationWriteFailed(uint256 indexed jobId, bytes32 indexed requestHash, bytes reason);
     event ComplianceModuleUpdated(address indexed module);
+    event ComplianceCheckFailed(uint256 indexed jobId, bytes reason);
+    event ReputationPolicyUpdated(address indexed trustedEvaluator, uint64 minReputationBudget);
+    event ReputationSkipped(uint256 indexed jobId, uint256 indexed agentId, bytes32 reason);
+
+    bytes32 private constant SKIP_UNTRUSTED_EVALUATOR = "untrusted evaluator";
+    bytes32 private constant SKIP_BUDGET_BELOW_MINIMUM = "budget below minimum";
 
     error OnlyKernel();
     error AgentNotOwnedByProvider(uint256 agentId, address provider);
+    error ValidationRequestMismatch(bytes32 requestHash);
     error NotExpired();
     error AlreadyRecorded();
     error NoAgentBound();
@@ -57,18 +66,25 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         address identityRegistry_,
         address reputationRegistry_,
         address validationRegistry_,
-        address initialOwner
+        address initialOwner,
+        address trustedEvaluator_,
+        uint64 minReputationBudget_
     ) Ownable(initialOwner) {
         _squareJob = ISquareJob(squareJob_);
         _claimMarket = IClaimMarket(claimMarket_);
         _identityRegistry = IIdentityRegistry(identityRegistry_);
         _reputationRegistry = IReputationRegistry(reputationRegistry_);
         _validationRegistry = IValidationRegistry(validationRegistry_);
+        _setReputationPolicy(trustedEvaluator_, minReputationBudget_);
     }
 
     function setComplianceModule(address module) external onlyOwner {
         _complianceModule = IComplianceModule(module);
         emit ComplianceModuleUpdated(module);
+    }
+
+    function setReputationPolicy(address trustedEvaluator_, uint64 minReputationBudget_) external onlyOwner {
+        _setReputationPolicy(trustedEvaluator_, minReputationBudget_);
     }
 
     function resolvePayout(uint256 jobId, bytes calldata data)
@@ -88,6 +104,9 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
             (uint256 agentId, bytes32 requestHash) = abi.decode(optParams, (uint256, bytes32));
             address provider = _squareJob.getJobRecord(jobId).provider;
             if (!_ownsAgent(provider, agentId)) revert AgentNotOwnedByProvider(agentId, provider);
+            if (requestHash != bytes32(0) && !_requestBelongsTo(requestHash, agentId)) {
+                revert ValidationRequestMismatch(requestHash);
+            }
             _agentOf[jobId] = agentId;
             _validationOf[jobId] = requestHash;
             emit AgentBound(jobId, agentId, requestHash);
@@ -103,9 +122,13 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         uint256 amount = (_squareJob.netPayout(jobId) * providerBps) / FULL_BPS;
         bool verified;
         if (address(_complianceModule) != address(0)) {
-            verified = _complianceModule.checkRelease(
+            try _complianceModule.checkRelease(
                 jobId, payee, amount, _squareJob.paymentToken(), _squareJob.getJobRecord(jobId).client, proof
-            );
+            ) returns (bool ok) {
+                verified = ok;
+            } catch (bytes memory reason) {
+                emit ComplianceCheckFailed(jobId, reason);
+            }
         }
         _proofVerified = verified;
         emit ComplianceChecked(jobId, payee, amount, verified);
@@ -115,9 +138,12 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         if (selector == COMPLETE_SELECTOR) {
             (bytes32 reason,) = abi.decode(data, (bytes32, bytes));
             _writeReputation(jobId, 1, "completed", reason);
-            if (_proofVerified) {
-                _proofVerified = false;
+            bool verified = _proofVerified;
+            _proofVerified = false;
+            if (verified) {
                 _writeValidation(jobId, 100);
+            } else if (address(_complianceModule) != address(0)) {
+                _writeValidation(jobId, 0);
             }
         } else if (selector == REJECT_SELECTOR) {
             if (_squareJob.getJobRecord(jobId).submittedAt == 0) return;
@@ -142,6 +168,14 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
 
     function complianceModule() external view returns (address) {
         return address(_complianceModule);
+    }
+
+    function trustedEvaluator() external view returns (address) {
+        return _trustedEvaluator;
+    }
+
+    function minReputationBudget() external view returns (uint64) {
+        return _minReputationBudget;
     }
 
     function agentOf(uint256 jobId) external view returns (uint256) {
@@ -182,10 +216,32 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         }
     }
 
+    function _requestBelongsTo(bytes32 requestHash, uint256 agentId) private view returns (bool) {
+        (address validator, uint256 requestedAgent,,,,) = _validationRegistry.getValidationStatus(requestHash);
+        return validator == address(this) && requestedAgent == agentId;
+    }
+
+    function _setReputationPolicy(address trustedEvaluator_, uint64 minReputationBudget_) private {
+        _trustedEvaluator = trustedEvaluator_;
+        _minReputationBudget = minReputationBudget_;
+        emit ReputationPolicyUpdated(trustedEvaluator_, minReputationBudget_);
+    }
+
     function _writeReputation(uint256 jobId, int128 value, string memory tag2, bytes32 feedbackHash) private {
         uint256 agentId = _agentOf[jobId];
         if (agentId == 0 || _recorded[jobId]) return;
         _recorded[jobId] = true;
+        if (value > 0) {
+            ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
+            if (job.evaluator != _trustedEvaluator) {
+                emit ReputationSkipped(jobId, agentId, SKIP_UNTRUSTED_EVALUATOR);
+                return;
+            }
+            if (job.budget < _minReputationBudget) {
+                emit ReputationSkipped(jobId, agentId, SKIP_BUDGET_BELOW_MINIMUM);
+                return;
+            }
+        }
         uint8 outcome = value > 0 ? 1 : value < 0 ? 2 : 3;
         try _reputationRegistry.giveFeedback(agentId, value, 0, TAG1, tag2, "", "", feedbackHash) {
             emit ReputationRecorded(jobId, agentId, outcome, value);

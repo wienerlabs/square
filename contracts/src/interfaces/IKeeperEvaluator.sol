@@ -8,6 +8,7 @@ interface IKeeperEvaluator is ISettlementHorizon {
         uint48 effectiveFrom;
         uint48 challengeWindow;
         uint48 disputeWindow;
+        uint48 finalizeGrace;
     }
 
     struct DisputeRef {
@@ -39,6 +40,7 @@ interface IKeeperEvaluator is ISettlementHorizon {
     error OnlyArbitration();
     error ArbitrationAlreadySet();
     error ArbitrationNotSet();
+    error SplitNeedsAPayoutResolver();
 
     function finalize(uint256 jobId, bytes calldata complianceProof) external;
     function dispute(uint256 jobId, bytes32 evidence) external;
