@@ -37,6 +37,13 @@ function row(operation: "setBudget" | "submit", path: MeasurementRow["path"], re
   };
 }
 
+function highestEffectiveGasPrice(rows: readonly MeasurementRow[]): bigint {
+  let highest = 0n;
+  for (const entry of rows) if (entry.effectiveGasPrice > highest) highest = entry.effectiveGasPrice;
+  if (highest === 0n) throw new Error("no receipt carried an effective gas price");
+  return highest;
+}
+
 async function main(): Promise<void> {
   const deployment = JSON.parse(readFileSync(join(contractsDir, "deployments", `${chainId}.json`), "utf8")) as SquareDeployment;
   const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
@@ -101,7 +108,7 @@ async function main(): Promise<void> {
       const found = rows.find((r) => r.operation === operation && r.path === path);
       if (!found) throw new Error(`no ${path} row for ${operation}`);
       const gas = found.gasUsed - baseline.gasUsed;
-      overhead.push({ operation, path, gas, usdc: usdcAtObservedPrice(gas, estimated.maxFeePerGas) });
+      overhead.push({ operation, path, gas, usdc: usdcAtObservedPrice(gas, found.effectiveGasPrice) });
     }
   }
   const measurement: Measurement = {
@@ -109,7 +116,8 @@ async function main(): Promise<void> {
     forkBlock: startBlock,
     entryPoint: ENTRY_POINT_V07,
     factory: SIMPLE_ACCOUNT_FACTORY_V07,
-    gasPriceWei: estimated.maxFeePerGas,
+    gasPriceWei: highestEffectiveGasPrice(rows),
+    maxFeePerGasWei: fees.maxFeePerGas,
     rows,
     overhead,
     measuredAt: new Date().toISOString(),
