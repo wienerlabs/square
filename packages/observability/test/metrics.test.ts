@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { createMetrics, renderMetrics, metricNames } from "../src/metrics.js";
+import {
+  createMetrics,
+  renderMetrics,
+  metricNames,
+  endpointLabel,
+  PROOF_FAILURE_REASONS,
+  UNPARSABLE_ENDPOINT_LABEL,
+} from "../src/metrics.js";
 
 interface MetricValue {
   value: number;
@@ -42,6 +49,12 @@ describe("metric names", () => {
       "square_dispute_resolution_seconds",
       "square_keeper_actions_total",
       "square_keeper_fee_earned_usdc",
+      "square_keeper_last_tick_timestamp_seconds",
+      "square_finalize_gas_used",
+      "square_finalize_gas_gap",
+      "square_hook_write_failures_total",
+      "square_alert_dispatch_failures_total",
+      "square_indexer_quarantined_events_total",
     ]);
   });
 
@@ -86,7 +99,7 @@ describe("helpers update the registry", () => {
     metrics.recordProofFailure("timeout");
     metrics.recordVerificationRejection("per_tx_ceiling");
     const { registry, names } = metrics;
-    expect(await valueOf(registry, names.proofFailures, { reason: "witness" })).toBe(2);
+    expect(await valueOf(registry, names.proofFailures, { reason: "witness_failed" })).toBe(2);
     expect(await valueOf(registry, names.proofFailures, { reason: "timeout" })).toBe(1);
     expect(await valueOf(registry, names.verificationRejections, { rule: "per_tx_ceiling" })).toBe(1);
     expect(metrics.snapshot().proofFailures).toBe(3);
@@ -111,10 +124,10 @@ describe("helpers update the registry", () => {
     expect(ok.success()).toBeGreaterThanOrEqual(0);
     expect(ok.success()).toBeGreaterThanOrEqual(0);
     const failed = metrics.startProof();
-    failed.failure("snarkjs");
+    failed.failure("witness calculation failed");
     expect(metrics.snapshot()).toMatchObject({ proofAttempts: 2, proofFailures: 1 });
     expect(await valueOf(metrics.registry, `${metrics.names.proofDuration}_count`)).toBe(2);
-    expect(await valueOf(metrics.registry, metrics.names.proofFailures, { reason: "snarkjs" })).toBe(1);
+    expect(await valueOf(metrics.registry, metrics.names.proofFailures, { reason: "witness_failed" })).toBe(1);
   });
 
   it("tracks keeper actions, failures, failovers, disputes and fees", async () => {
@@ -122,7 +135,7 @@ describe("helpers update the registry", () => {
     metrics.recordKeeperAction("finalize", "success");
     metrics.recordKeeperAction("finalize", "failure");
     metrics.recordKeeperAction("recordExpiry", "skipped");
-    metrics.recordRpcFailover("a", "b");
+    metrics.recordRpcFailover("https://primary.example.com/v2/key", "https://fallback.example.com/rpc?apikey=token");
     metrics.setDisputesOpen(4);
     metrics.addKeeperFeeUsdc(0.5);
     metrics.addKeeperFeeUsdc(0.25);
@@ -135,7 +148,7 @@ describe("helpers update the registry", () => {
     });
     const { registry, names } = metrics;
     expect(await valueOf(registry, names.keeperActions, { action: "finalize", result: "failure" })).toBe(1);
-    expect(await valueOf(registry, names.rpcFailover, { from: "a", to: "b" })).toBe(1);
+    expect(await valueOf(registry, names.rpcFailover, { from: "primary.example.com", to: "fallback.example.com" })).toBe(1);
     expect(await valueOf(registry, names.keeperFeeEarned)).toBe(0.75);
     expect(await valueOf(registry, names.disputesOpen)).toBe(4);
   });
@@ -166,5 +179,86 @@ describe("helpers update the registry", () => {
     metrics.setFinalizePending(9);
     expect(first.finalizePending).toBe(0);
     expect(metrics.snapshot().finalizePending).toBe(9);
+  });
+});
+
+describe("labels stay bounded", () => {
+  it("maps every proof failure message onto the published reason set", async () => {
+    const metrics = createMetrics({ service: "prover", defaultMetrics: false });
+    const messages = [
+      "budget_cents: must be a whole number",
+      "Missing required field(s): operator_id, policy",
+      "ENOENT: no such file or directory, open 'artifacts/payment.zkey'",
+      "Circuit produced 4 public signals, expected 6 - circuit and prover service are out of sync.",
+      "lookup key is zero; the circuit rejects this witness",
+      "request timed out after 30000ms",
+      "JavaScript heap out of memory",
+      "something nobody has seen before",
+    ];
+    for (const message of messages) metrics.recordProofFailure(message);
+    for (let i = 0; i < 200; i += 1) metrics.recordProofFailure(`snarkjs exploded at offset ${i}`);
+    const json = (await metrics.registry.getMetricsAsJSON()) as MetricJson[];
+    const failures = json.find((m) => m.name === metrics.names.proofFailures);
+    const reasons = [...new Set((failures?.values ?? []).map((v) => String(v.labels.reason)))].sort();
+    expect(reasons).toEqual([
+      "artifacts_missing",
+      "circuit_mismatch",
+      "invalid_field",
+      "missing_field",
+      "out_of_memory",
+      "timeout",
+      "unknown",
+      "witness_failed",
+    ]);
+    for (const reason of reasons) expect(PROOF_FAILURE_REASONS).toContain(reason);
+    expect(metrics.snapshot().proofFailures).toBe(208);
+  });
+
+  it("reduces failover endpoints to a host and never carries a credential", async () => {
+    const metrics = createMetrics({ service: "keeper", defaultMetrics: false });
+    metrics.recordRpcFailover("https://arc-mainnet.example.com/v2/SECRET_API_KEY_abc123", "https://fallback.example.com/rpc?apikey=SECRET_TOKEN_xyz");
+    metrics.recordRpcFailover("not a url", "also not a url");
+    const text = await renderMetrics(metrics.registry);
+    expect(text).not.toContain("SECRET_API_KEY_abc123");
+    expect(text).not.toContain("SECRET_TOKEN_xyz");
+    expect(await valueOf(metrics.registry, metrics.names.rpcFailover, { from: "arc-mainnet.example.com", to: "fallback.example.com" })).toBe(1);
+    expect(
+      await valueOf(metrics.registry, metrics.names.rpcFailover, {
+        from: UNPARSABLE_ENDPOINT_LABEL,
+        to: UNPARSABLE_ENDPOINT_LABEL,
+      }),
+    ).toBe(1);
+    expect(endpointLabel("https://user:pass@node.example.com:8545/path")).toBe("node.example.com:8545");
+  });
+});
+
+describe("progress and failure signals the alerting reads", () => {
+  it("stamps the last completed keeper tick and starts from process start", async () => {
+    const metrics = createMetrics({ service: "keeper", defaultMetrics: false });
+    expect(metrics.snapshot().lastKeeperTickAt).toBeGreaterThan(0);
+    metrics.recordKeeperTick(1_700_000_000_000);
+    expect(metrics.snapshot().lastKeeperTickAt).toBe(1_700_000_000_000);
+    expect(await valueOf(metrics.registry, metrics.names.keeperLastTick)).toBe(1_700_000_000);
+  });
+
+  it("measures the gap between the configured finalize gas and the receipt", async () => {
+    const metrics = createMetrics({ service: "keeper", defaultMetrics: false });
+    metrics.recordFinalizeGas("finalize", 450_000n, 465_486n);
+    expect(metrics.snapshot().finalizeGasGap).toBe(-15_486);
+    expect(await valueOf(metrics.registry, metrics.names.finalizeGasUsed, { action: "finalize" })).toBe(465_486);
+    expect(await valueOf(metrics.registry, metrics.names.finalizeGasGap, { action: "finalize" })).toBe(-15_486);
+  });
+
+  it("counts hook write failures, alert dispatch failures and quarantined events", async () => {
+    const metrics = createMetrics({ service: "indexer", defaultMetrics: false });
+    metrics.recordHookWriteFailure("reputation");
+    metrics.recordHookWriteFailure("validation");
+    metrics.recordAlertDispatchFailure("indexerLagging", "notify");
+    metrics.recordQuarantinedEvent("SquareJob", "JobDescribed");
+    expect(metrics.snapshot()).toMatchObject({ hookWriteFailures: 2, alertDispatchFailures: 1, quarantinedEvents: 1 });
+    const { registry, names } = metrics;
+    expect(await valueOf(registry, names.hookWriteFailures, { kind: "reputation" })).toBe(1);
+    expect(await valueOf(registry, names.alertDispatchFailures, { rule: "indexerLagging", stage: "notify" })).toBe(1);
+    expect(await valueOf(registry, names.quarantinedEvents, { contract: "SquareJob", event: "JobDescribed" })).toBe(1);
   });
 });

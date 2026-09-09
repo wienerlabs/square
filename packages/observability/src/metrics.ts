@@ -4,6 +4,25 @@ export const DEFAULT_PREFIX = "square";
 
 export type KeeperActionResult = "success" | "failure" | "skipped";
 
+export type HookWriteKind = "reputation" | "validation";
+
+export type AlertDispatchStage = "evaluate" | "notify";
+
+export const PROOF_FAILURE_REASONS = [
+  "timeout",
+  "out_of_memory",
+  "artifacts_missing",
+  "circuit_mismatch",
+  "witness_failed",
+  "missing_field",
+  "invalid_field",
+  "unknown",
+] as const;
+
+export type ProofFailureReason = (typeof PROOF_FAILURE_REASONS)[number];
+
+export const UNPARSABLE_ENDPOINT_LABEL = "unparsable";
+
 export interface MetricsOptions {
   service: string;
   prefix?: string;
@@ -31,6 +50,11 @@ export interface MetricsSnapshot {
   keeperActions: number;
   keeperFailures: number;
   keeperFeeEarnedUsdc: number;
+  lastKeeperTickAt: number;
+  finalizeGasGap: number;
+  hookWriteFailures: number;
+  alertDispatchFailures: number;
+  quarantinedEvents: number;
 }
 
 export interface MetricNames {
@@ -47,6 +71,12 @@ export interface MetricNames {
   disputeResolution: string;
   keeperActions: string;
   keeperFeeEarned: string;
+  keeperLastTick: string;
+  finalizeGasUsed: string;
+  finalizeGasGap: string;
+  hookWriteFailures: string;
+  alertDispatchFailures: string;
+  quarantinedEvents: string;
 }
 
 export interface Metrics {
@@ -67,6 +97,11 @@ export interface Metrics {
   observeDisputeResolution(seconds: number): void;
   recordKeeperAction(action: string, result: KeeperActionResult): void;
   addKeeperFeeUsdc(amount: number): void;
+  recordKeeperTick(at?: number): void;
+  recordFinalizeGas(action: string, assumedGas: number | bigint, usedGas: number | bigint): void;
+  recordHookWriteFailure(kind: HookWriteKind): void;
+  recordAlertDispatchFailure(rule: string, stage: AlertDispatchStage): void;
+  recordQuarantinedEvent(contract: string, event: string): void;
   snapshot(): MetricsSnapshot;
 }
 
@@ -91,6 +126,12 @@ export function metricNames(prefix: string = DEFAULT_PREFIX): MetricNames {
     disputeResolution: `${prefix}_dispute_resolution_seconds`,
     keeperActions: `${prefix}_keeper_actions_total`,
     keeperFeeEarned: `${prefix}_keeper_fee_earned_usdc`,
+    keeperLastTick: `${prefix}_keeper_last_tick_timestamp_seconds`,
+    finalizeGasUsed: `${prefix}_finalize_gas_used`,
+    finalizeGasGap: `${prefix}_finalize_gas_gap`,
+    hookWriteFailures: `${prefix}_hook_write_failures_total`,
+    alertDispatchFailures: `${prefix}_alert_dispatch_failures_total`,
+    quarantinedEvents: `${prefix}_indexer_quarantined_events_total`,
   };
 }
 
@@ -104,6 +145,33 @@ function finite(value: number): boolean {
 
 function label(value: string): string {
   return String(value).slice(0, MAX_LABEL_LENGTH);
+}
+
+export function classifyProofFailure(reason: string): ProofFailureReason {
+  const text = String(reason).toLowerCase();
+  if (/timed out|timeout|etimedout|aborted/.test(text)) return "timeout";
+  if (/out of memory|heap limit|enomem/.test(text)) return "out_of_memory";
+  if (/enoent|no such file|artifact|\.zkey|\.wasm/.test(text)) return "artifacts_missing";
+  if (/public signals|out of sync|verification key|verifier/.test(text)) return "circuit_mismatch";
+  if (/witness|constraint|assert/.test(text)) return "witness_failed";
+  if (/missing|required/.test(text)) return "missing_field";
+  if (/must be|must not|not a valid|does not fit|exceeds|is supported|unknown weekday|invalid/.test(text)) {
+    return "invalid_field";
+  }
+  return "unknown";
+}
+
+export function endpointLabel(value: string): string {
+  try {
+    const host = new URL(String(value)).host;
+    return host.length === 0 ? UNPARSABLE_ENDPOINT_LABEL : label(host);
+  } catch {
+    return UNPARSABLE_ENDPOINT_LABEL;
+  }
+}
+
+function toCount(value: number | bigint): number {
+  return typeof value === "bigint" ? Number(value) : value;
 }
 
 function toBlock(block: number | bigint): number {
@@ -193,6 +261,41 @@ export function createMetrics(options: MetricsOptions): Metrics {
     help: "Evaluator fees the keeper collected, in USDC.",
     registers,
   });
+  const keeperLastTick = new Gauge({
+    name: names.keeperLastTick,
+    help: "Unix time of the last keeper tick that completed without throwing. Stops advancing when the keeper stops.",
+    registers,
+  });
+  const finalizeGasUsed = new Gauge({
+    name: names.finalizeGasUsed,
+    help: "Gas the last settlement transaction actually consumed, by action.",
+    labelNames: ["action"] as const,
+    registers,
+  });
+  const finalizeGasGap = new Gauge({
+    name: names.finalizeGasGap,
+    help: "Configured gas assumption minus the gas the last settlement transaction consumed, by action. Negative means the assumption is too low.",
+    labelNames: ["action"] as const,
+    registers,
+  });
+  const hookWriteFailures = new Counter({
+    name: names.hookWriteFailures,
+    help: "ERC-8004 registry writes the hook could not land, by kind. These should never fire.",
+    labelNames: ["kind"] as const,
+    registers,
+  });
+  const alertDispatchFailures = new Counter({
+    name: names.alertDispatchFailures,
+    help: "Alert evaluations or deliveries that failed, by rule and stage.",
+    labelNames: ["rule", "stage"] as const,
+    registers,
+  });
+  const quarantinedEvents = new Counter({
+    name: names.quarantinedEvents,
+    help: "Chain events the indexer could not journal or reduce and set aside, by contract and event.",
+    labelNames: ["contract", "event"] as const,
+    registers,
+  });
 
   const state: MetricsSnapshot = {
     finalizePending: 0,
@@ -208,6 +311,11 @@ export function createMetrics(options: MetricsOptions): Metrics {
     keeperActions: 0,
     keeperFailures: 0,
     keeperFeeEarnedUsdc: 0,
+    lastKeeperTickAt: Date.now(),
+    finalizeGasGap: 0,
+    hookWriteFailures: 0,
+    alertDispatchFailures: 0,
+    quarantinedEvents: 0,
   };
   let indexerHeadKnown = false;
   let chainHeadKnown = false;
@@ -226,7 +334,7 @@ export function createMetrics(options: MetricsOptions): Metrics {
 
   function recordProofFailure(reason: string): void {
     state.proofFailures += 1;
-    proofFailures.inc({ reason: label(reason) });
+    proofFailures.inc({ reason: classifyProofFailure(reason) });
   }
 
   return {
@@ -290,7 +398,7 @@ export function createMetrics(options: MetricsOptions): Metrics {
     },
     recordRpcFailover(from, to) {
       state.rpcFailovers += 1;
-      rpcFailover.inc({ from: label(from), to: label(to) });
+      rpcFailover.inc({ from: endpointLabel(from), to: endpointLabel(to) });
     },
     setDisputesOpen(count) {
       if (!finite(count)) return;
@@ -310,6 +418,31 @@ export function createMetrics(options: MetricsOptions): Metrics {
       if (!finite(amount) || amount < 0) return;
       state.keeperFeeEarnedUsdc += amount;
       keeperFeeEarned.inc(amount);
+    },
+    recordKeeperTick(at = Date.now()) {
+      if (!finite(at)) return;
+      state.lastKeeperTickAt = at;
+      keeperLastTick.set(at / 1000);
+    },
+    recordFinalizeGas(action, assumedGas, usedGas) {
+      const assumed = toCount(assumedGas);
+      const used = toCount(usedGas);
+      if (!finite(assumed) || !finite(used) || used <= 0) return;
+      state.finalizeGasGap = assumed - used;
+      finalizeGasUsed.set({ action: label(action) }, used);
+      finalizeGasGap.set({ action: label(action) }, assumed - used);
+    },
+    recordHookWriteFailure(kind) {
+      state.hookWriteFailures += 1;
+      hookWriteFailures.inc({ kind });
+    },
+    recordAlertDispatchFailure(rule, stage) {
+      state.alertDispatchFailures += 1;
+      alertDispatchFailures.inc({ rule: label(rule), stage });
+    },
+    recordQuarantinedEvent(contract, event) {
+      state.quarantinedEvents += 1;
+      quarantinedEvents.inc({ contract: label(contract), event: label(event) });
     },
     snapshot() {
       return { ...state };
