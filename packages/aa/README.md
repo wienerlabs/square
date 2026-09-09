@@ -81,12 +81,16 @@ the `receipt`, and `revertReason` when the operation was included but its call r
 
 ## Gas limits
 
-EntryPoint v0.7 charges the account a 10% penalty on unused execution gas, so a generous
-constant `callGasLimit` would quietly inflate what the account pays. The bundler estimates:
+EntryPoint v0.7 charges the account a 10% penalty on the execution gas an operation
+reserves and does not use, so a generous constant `callGasLimit` would quietly inflate
+what the account pays. Preventing that penalty is the whole reason the bundler estimates.
+An `eth_estimateGas` result is a whole-transaction figure, so it also carries the 21,000
+intrinsic and the calldata gas of the call, and `preVerificationGas` already charges both
+once; the bundler subtracts them and applies an explicit safety factor to what is left:
 
 | Field | How |
 |---|---|
-| `callGasLimit` | `eth_estimateGas` of the call data from the EntryPoint address to the account. For an undeployed account, `toSimpleSmartAccount` simulates with a state override that places the implementation code and the owner slot at the counterfactual address, plus 10,000 gas for the proxy dispatch. If the RPC has no state overrides, 300,000. |
+| `callGasLimit` | `eth_estimateGas` of the call data from the EntryPoint address to the account, minus the 21,000 intrinsic and the call's own calldata gas at 4 gas per zero byte and 16 per non-zero byte, times `CALL_GAS_LIMIT_SAFETY_PERCENT` (120, so 1.2). For an undeployed account, `toSimpleSmartAccount` simulates with a state override that places the implementation code and the owner slot at the counterfactual address, plus 10,000 gas for the proxy dispatch, and the same subtraction and factor apply to that figure. If the RPC has no state overrides, `DEFAULT_UNDEPLOYED_CALL_GAS_LIMIT` (300,000). |
 | `verificationGasLimit` | 150,000, plus the estimated `createAccount` gas when the operation deploys the account. Unused verification gas is not penalized. |
 | `preVerificationGas` | The eth-infinitism bundler formula: 21,000 fixed + 18,300 per operation + calldata bytes at 4/16 gas + 4 per word. It keeps the keeper whole: measured 4,300 to 4,800 gas ahead per operation. |
 
@@ -178,15 +182,15 @@ agent, is in the decision document linked above.
 
 ## Verified on Arc Testnet
 
-`npm run measure:live` ran on 2026-09-07 against the deployed stack (5042002), from block 60842683, gas price 26.17 gwei. The smart account accepted a real job with `setBudget` and submitted it, both through `EntryPoint.handleOps` sent by the keeper key; every row is a receipt on the chain.
+`npm run measure:live` ran on 2026-09-07 against the deployed stack (5042002), from block 60842683. All six receipts carry the same effective gas price, 22.1728 gwei, which is also what `actualGasCost / actualGasUsed` divides to exactly on each of the four UserOperation rows and what [`docs/deploy/gas.md`](../../docs/deploy/gas.md) records for the same acceptance run. The run set a fee cap of 26.1728 gwei; a cap is a ceiling and not a price, so it is kept in `measurements-5042002.json` as `maxFeePerGasWei` and no cost below is derived from it. The smart account accepted a real job with `setBudget` and submitted it, both through `EntryPoint.handleOps` sent by the keeper key; every row is a receipt on the chain.
 
 | Call | Path | Gas used | Cost (USDC) | Overhead vs EOA | Transaction |
 |---|---|---:|---:|---:|---|
-| `setBudget` | EOA transaction | 43,969 | 0.00115 | 0 | [0x66ff5df3...](https://testnet.arcscan.app/tx/0x66ff5df384097c5149e799af581ee7c18091c9f511be3980920e7f4709991d27) |
-| `submit` | EOA transaction | 82,538 | 0.00216 | 0 | [0xf29648fc...](https://testnet.arcscan.app/tx/0xf29648fc2c2415319d28d2af40d9be0945ad6011a6a4a948c3b8c86eb9bb0fc1) |
-| `setBudget` | UserOperation, first op deploys the account | 273,054 | 0.00715 | 229,085 | [0x16240302...](https://testnet.arcscan.app/tx/0x16240302620308138e444eac74592c3de8806201d4305d65df278ab4660d4d48) |
-| `submit` | UserOperation, account already deployed | 141,235 | 0.00370 | 58,697 | [0x9d971493...](https://testnet.arcscan.app/tx/0x9d971493ee9f19acb6ea5dfec7af41fc2cbdd50b7febb88cadef354a076756d0) |
-| `setBudget` | UserOperation, account already deployed | 102,630 | 0.00269 | 58,661 | [0x0238ac11...](https://testnet.arcscan.app/tx/0x0238ac1177752c007b12513b82c290dd9093b0070faea603366340b713b3c1f4) |
-| `submit` | UserOperation, first op deploys the account | 311,635 | 0.00816 | 229,097 | [0xa6fe3f12...](https://testnet.arcscan.app/tx/0xa6fe3f12ecc313d357f70574a8bae7c639008ce233612c4d1f1ff5fc9c44fdd2) |
+| `setBudget` | EOA transaction | 43,969 | 0.00097 | 0 | [0x66ff5df3...](https://testnet.arcscan.app/tx/0x66ff5df384097c5149e799af581ee7c18091c9f511be3980920e7f4709991d27) |
+| `submit` | EOA transaction | 82,538 | 0.00183 | 0 | [0xf29648fc...](https://testnet.arcscan.app/tx/0xf29648fc2c2415319d28d2af40d9be0945ad6011a6a4a948c3b8c86eb9bb0fc1) |
+| `setBudget` | UserOperation, first op deploys the account | 273,054 | 0.00605 | 229,085 | [0x16240302...](https://testnet.arcscan.app/tx/0x16240302620308138e444eac74592c3de8806201d4305d65df278ab4660d4d48) |
+| `submit` | UserOperation, account already deployed | 141,235 | 0.00313 | 58,697 | [0x9d971493...](https://testnet.arcscan.app/tx/0x9d971493ee9f19acb6ea5dfec7af41fc2cbdd50b7febb88cadef354a076756d0) |
+| `setBudget` | UserOperation, account already deployed | 102,630 | 0.00228 | 58,661 | [0x0238ac11...](https://testnet.arcscan.app/tx/0x0238ac1177752c007b12513b82c290dd9093b0070faea603366340b713b3c1f4) |
+| `submit` | UserOperation, first op deploys the account | 311,635 | 0.00691 | 229,097 | [0xa6fe3f12...](https://testnet.arcscan.app/tx/0xa6fe3f12ecc313d357f70574a8bae7c639008ce233612c4d1f1ff5fc9c44fdd2) |
 
-The fork measurement above and the chain agree within a few dozen gas per row. The account deployment premium is 229 085 gas (about 0.006 USDC at this price), the steady-state premium 58 661 to 58 697 gas per operation, and the keeper stayed ahead on every operation.
+The fork measurement above and the chain agree within a few dozen gas per row. The account deployment premium is 229 085 gas (about 0.005 USDC at this price), the steady-state premium 58 661 to 58 697 gas per operation, and the keeper stayed ahead on every operation.

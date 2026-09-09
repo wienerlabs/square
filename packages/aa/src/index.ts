@@ -16,6 +16,15 @@ export {
   DEFAULT_UNDEPLOYED_CALL_GAS_LIMIT,
 } from "./selfBundler.js";
 export {
+  callGasLimitFromTransactionEstimate,
+  executionGasOfTransactionEstimate,
+  intrinsicCalldataGas,
+  CALL_GAS_LIMIT_SAFETY_PERCENT,
+  INTRINSIC_CALLDATA_NON_ZERO_BYTE_GAS,
+  INTRINSIC_CALLDATA_ZERO_BYTE_GAS,
+  INTRINSIC_TRANSACTION_GAS,
+} from "./callGasLimit.js";
+export {
   CallSimulationRevertedError,
   EntryPointMismatchError,
   UserOperationEventNotFoundError,
