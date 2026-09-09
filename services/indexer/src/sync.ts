@@ -81,7 +81,8 @@ export class Indexer {
   private readonly addresses: Address[];
   private readonly quarantined: QuarantinedEvent[] = [];
   private cursor: bigint | null = null;
-  private lastHead = 0n;
+  private lastHead: bigint | null = null;
+  private syncedAt: number | null = null;
   private windowsMissing = 0;
 
   constructor(private readonly options: IndexerOptions) {
@@ -98,7 +99,15 @@ export class Indexer {
   }
 
   get chainHead(): bigint {
+    return this.lastHead ?? 0n;
+  }
+
+  get sampledChainHead(): bigint | null {
     return this.lastHead;
+  }
+
+  get lastSyncAt(): number | null {
+    return this.syncedAt;
   }
 
   get quarantinedEvents(): readonly QuarantinedEvent[] {
@@ -221,6 +230,7 @@ export class Indexer {
     const from = this.cursor === null ? this.options.startBlock : this.cursor + 1n;
     if (from > head) {
       this.options.metrics?.setIndexerHead(this.cursor ?? 0n);
+      this.syncedAt = Date.now();
       return null;
     }
     const to = from + this.options.batchBlocks - 1n < head ? from + this.options.batchBlocks - 1n : head;
@@ -228,6 +238,7 @@ export class Indexer {
     const events = decodeSquareLogs(logs, this.options.deployment);
     const batch = await this.applyBatch(events, to);
     this.cursor = to;
+    this.syncedAt = Date.now();
     this.options.metrics?.setIndexerHead(to);
     this.options.logger.info("indexer.synced", { blockNumber: Number(to), count: events.length, applied: batch.applied });
     return { fromBlock: from, toBlock: to, head, events: events.length, applied: batch.applied, quarantined: batch.quarantined };
