@@ -55,6 +55,13 @@ function parseV2(
   if (!DECIMAL_NO_LEADING_ZERO.test(chainId) || chainId === "0") {
     throw new InvalidDidError("chain-id must be a positive decimal without leading zeros");
   }
+  // Number() rounds above 2^53, so two different chain-id strings would parse
+  // to the same value and two unequal DIDs would name the same agent, which
+  // is the very thing the registry check below refuses to allow (spec §3.2).
+  // agent-id is a bigint and does not have this problem.
+  if (!Number.isSafeInteger(Number(chainId))) {
+    throw new InvalidDidError("chain-id must not exceed 2^53 - 1");
+  }
   if (!LOWER_HEX_40.test(registry)) {
     // Deliberately not normalised. DID Core equality is string equality, so
     // accepting a checksummed address here would let two unequal DIDs resolve

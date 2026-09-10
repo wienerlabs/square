@@ -77,4 +77,18 @@ describe("parse", () => {
     if (p.version !== 2) throw new Error("expected v2");
     expect(p.agentId.toString()).toBe(big);
   });
+
+  it("refuses a chainId that Number could not hold exactly", () => {
+    // Number("9007199254740993") is 9007199254740992: two unequal DIDs would
+    // have parsed to the same chain, which is the collision the registry
+    // check refuses by name. No real chain id is anywhere near 2^53; the
+    // point is that the parser never silently maps two strings to one agent.
+    const at = (chainId: string) => `did:aip:eip155:${chainId}:0x8004a818bfb912233c491871b3d84c89a494bd9e:1`;
+    expect(() => parseDid(at("9007199254740992"))).toThrow(/2\^53/);
+    expect(() => parseDid(at("9007199254740993"))).toThrow(/2\^53/);
+    expect(() => parseDid(at("99999999999999999999"))).toThrow(/2\^53/);
+    const p = parseDid(at("9007199254740991"));
+    if (p.version !== 2) throw new Error("expected v2");
+    expect(p.chainId).toBe(9007199254740991);
+  });
 });

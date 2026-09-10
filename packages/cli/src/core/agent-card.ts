@@ -65,10 +65,16 @@ export async function loadCardFromUri(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // The fetcher keeps the HTTP status and the network stack's words off the
+    // message, because a resolver relays that message to strangers. This is
+    // the operator's own URI, so both go into the hint here.
+    const detail = err instanceof AgentUriError
+      ? [err.status !== undefined ? `HTTP ${err.status}` : "", err.detail ?? ""].filter(Boolean).join("; ")
+      : "";
     throw new NetworkError(
       `Could not read the agent card at ${uri}`,
       err instanceof AgentUriError
-        ? `${message} Pass --no-card-check to register without reading it.`
+        ? `${message}${detail ? ` (${detail})` : ""}. Pass --no-card-check to register without reading it.`
         : message,
     );
   }

@@ -21,6 +21,8 @@ export interface DriverConfig {
   port: number;
   rpc: Record<number, string>;
   allowedRegistries: string[] | undefined;
+  /** Hosts a registration file may be fetched from, on every redirect hop. Undefined allows any public host. */
+  allowedAgentUriHosts: string[] | undefined;
   timeoutMs: number;
 }
 
@@ -77,12 +79,16 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): DriverConfig {
     );
   }
 
-  const allow = env.DRIVER_ALLOWED_REGISTRIES?.split(",").map((s) => s.trim()).filter(Boolean);
+  const list = (raw: string | undefined): string[] | undefined => {
+    const items = raw?.split(",").map((s) => s.trim()).filter(Boolean);
+    return items && items.length > 0 ? items : undefined;
+  };
 
   return {
     port: positiveInteger(env.DRIVER_PORT, "DRIVER_PORT", DEFAULT_PORT, 65_535),
     rpc,
-    allowedRegistries: allow && allow.length > 0 ? allow : undefined,
+    allowedRegistries: list(env.DRIVER_ALLOWED_REGISTRIES),
+    allowedAgentUriHosts: list(env.DRIVER_ALLOWED_AGENT_URI_HOSTS),
     timeoutMs: positiveInteger(env.DRIVER_TIMEOUT_MS, "DRIVER_TIMEOUT_MS", DEFAULT_TIMEOUT_MS),
   };
 }

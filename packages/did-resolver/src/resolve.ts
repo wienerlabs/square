@@ -1,4 +1,11 @@
-import { createPublicClient, http, type PublicClient } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
+  createPublicClient,
+  http,
+  type PublicClient,
+} from "viem";
 import { buildDidDocument, type RegistrationFile } from "./document.js";
 import { AgentUriError, defaultFetchAgentUri } from "./fetch.js";
 import { InvalidDidError, parseDid } from "./parse.js";
@@ -10,6 +17,12 @@ import type {
   ResolutionWarning,
   ResolverOptions,
 } from "./types.js";
+
+/** The contract answered, and the answer was a revert or empty data: the chain's own "no". */
+function chainSaidNo(err: unknown): boolean {
+  if (!(err instanceof BaseError)) return false;
+  return err.walk((e) => e instanceof ContractFunctionRevertedError || e instanceof ContractFunctionZeroDataError) !== null;
+}
 
 function failure(
   error: ResolutionErrorCode,
@@ -111,22 +124,33 @@ export class AipDidResolver {
     // Pin every read to one block. didDocumentMetadata.versionId claims to be
     // the block the state was read at, and reading the number afterwards would
     // make that a guess — a block can land between the reads and the report.
-    let blockNumber: bigint | undefined;
+    //
+    // Without the number there is no pin, and that is a failure, not a
+    // degraded success: three reads at `latest` can straddle a Transfer, so
+    // `owner` from before it and `agentWallet` or `tokenURI` from after it
+    // land in one document that belongs to no single moment, with no
+    // versionId to say so. The spec forbids exactly that document (§10.2),
+    // and a caller that gets networkError retries; one that got a quiet
+    // document would trust it.
+    let blockNumber: bigint;
     try {
       blockNumber = await client.getBlockNumber();
-    } catch { /* versionId is best-effort; the reads still work */ }
+    } catch (err) {
+      return failure("networkError", `block number read failed, so the reads could not be pinned: ${String(err)}`);
+    }
 
-    const contract = {
-      address: parsed.registry,
-      abi: IDENTITY_REGISTRY_ABI,
-      ...(blockNumber !== undefined ? { blockNumber } : {}),
-    } as const;
+    const contract = { address: parsed.registry, abi: IDENTITY_REGISTRY_ABI, blockNumber } as const;
 
     let owner: string;
     try {
       owner = (await client.readContract({ ...contract, functionName: "ownerOf", args: [parsed.agentId] })) as string;
-    } catch {
-      // ERC-721 ownerOf reverts for a token that was never minted or was burned.
+    } catch (err) {
+      // ERC-721 ownerOf reverts for a token that was never minted or was
+      // burned, and that is notFound. A transport failure, a timeout or a
+      // rate limit is not: the driver maps notFound to a cacheable 404 and
+      // networkError to a 502 that says "retry", and a flaky RPC must not
+      // turn into an authoritative "this agent does not exist".
+      if (!chainSaidNo(err)) return failure("networkError", `ownerOf could not be read: ${String(err)}`);
       return failure("notFound", `agent ${parsed.agentId} does not exist in ${parsed.registry}`);
     }
 
@@ -162,6 +186,8 @@ export class AipDidResolver {
           ?? ((u: string) => defaultFetchAgentUri(u, {
             ...(this.options.ipfsGateway !== undefined ? { ipfsGateway: this.options.ipfsGateway } : {}),
             ...(this.options.timeoutMs !== undefined ? { timeoutMs: this.options.timeoutMs } : {}),
+            ...(this.options.maxAgentUriBytes !== undefined ? { maxResponseBytes: this.options.maxAgentUriBytes } : {}),
+            ...(this.options.allowedAgentUriHosts !== undefined ? { allowedHosts: this.options.allowedAgentUriHosts } : {}),
           }));
         const doc = await fetcher(agentUri);
         if (typeof doc === "object" && doc !== null) {
@@ -189,7 +215,7 @@ export class AipDidResolver {
         ...(warnings.length ? { warnings } : {}),
       },
       didDocumentMetadata: {
-        ...(blockNumber !== undefined ? { versionId: blockNumber.toString() } : {}),
+        versionId: blockNumber.toString(),
         agentRegistry: parsed.agentRegistry,
         ...(inactive ? { deactivated: true, deactivationReason: "registrationInactive" as const } : {}),
         ...(registrationKnown ? {} : { registrationFile: "unavailable" as const }),

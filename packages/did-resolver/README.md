@@ -27,6 +27,10 @@ the agent has a registration file, one fetch. That is the whole method.
 **`resolve()` never throws.** Every failure is a code in `didResolutionMetadata.error`.
 Resolution gets embedded in agent-to-agent dispatch, where an exception takes down the
 caller rather than just the lookup. The predecessor made the same promise and it is kept.
+The codes mean what they say: `notFound` is the chain's own answer (`ownerOf` reverted, or
+the registry returned no data), and a transport failure, timeout or rate limit on that
+same read is `networkError`, which the driver maps to a retryable 502 rather than a
+cacheable 404.
 
 **An unreachable registration file is a warning, not a failure.** On-chain state is
 authoritative for identity; an identity that vanishes because an IPFS gateway is down is
@@ -58,8 +62,10 @@ from. The spec allows either choice (§9.2) and requires only that v1 is recogni
 | `allowedRegistries` | Registries to honour. Anyone can deploy the ERC-8004 interface, so resolving successfully is not the same as being trustworthy (spec §10.1). A DID outside the list returns `registryNotAllowed` — not `notFound`, because the agent may well exist and we simply declined to look. |
 | `v1Resolver` | Handler for the legacy Solana form. |
 | `fetchAgentUri` | Override the dereferencer. |
-| `ipfsGateway` | Default `https://ipfs.io/ipfs/`. |
-| `timeoutMs` | Default 10s. |
+| `ipfsGateway` | Default `https://ipfs.io/ipfs/`. `https` anywhere, or `http` on loopback for a local node. |
+| `timeoutMs` | Default 10s, for the whole fetch including redirects. |
+| `maxAgentUriBytes` | Largest registration file read. Default 1 MiB. |
+| `allowedAgentUriHosts` | Hosts a registration file may be fetched from, checked on every redirect hop. Omit to allow any public host. The gateway is exempt; where it redirects to is not. |
 
 The resolver verifies `eth_chainId` against the DID before reading. A misconfigured
 endpoint would otherwise return a valid document for a *different* agent under a
@@ -68,10 +74,46 @@ correct-looking DID, with no error anywhere (spec §10.4).
 `http://` agentURIs are refused. The registration file decides what a consumer believes
 about an agent; fetching it over a channel anyone can rewrite makes that belief worthless.
 
+The agentURI is chosen by the agent's owner and dereferenced by a public service, so the
+default fetcher treats it as hostile all the way down, not only at the scheme:
+
+- **Redirects are followed by hand**, at most five, and every hop is held to the same rule
+  as the first. Node's `redirect: "follow"` would have taken an https URL to plain http on
+  a single 302, because mixed-content blocking is a browser policy and not part of fetch.
+- **A literal non-public address is refused before any connection is made**: loopback,
+  private, link-local, CGNAT, multicast and reserved ranges, in IPv4 and IPv6, including
+  the mapped, NAT64 and 6to4 forms that embed an IPv4 address, and `localhost`. The URL
+  parser canonicalises octal, hex, decimal and short IPv4 forms first, so `0177.0.0.1`
+  and `2130706433` are `127.0.0.1` by the time they are checked.
+- **The body is read through a byte cap**, declared length first and then the stream
+  itself. The timeout bounds seconds; a fast host can send a great deal in ten of them.
+- **An `ipfs://` remainder must be a CID followed by plain path segments**, and the URL it
+  builds must stay under the gateway's own path. `ipfs://../../admin` used to reach
+  `https://ipfs.io/admin`, which on an operator's private gateway is whatever else that
+  host serves.
+- **Errors say why and never where.** `AgentUriError.message` carries no URL, host or
+  status, because the resolver relays it to whoever asked as a warning; the status and
+  the network stack's own words are on `AgentUriError.status` and `.detail` for a caller
+  that owns the URI, such as the CLI checking a card before registering it.
+
+One thing this does not do: resolve hostnames. The module runs in browsers as well as in
+Node, so a name that points at a private address is not caught. A deployment that needs
+that guarantee runs the driver behind an egress policy, or injects a `fetchAgentUri` built
+on `@squaresdk/hardening`, whose `safeFetch` pins resolved addresses and closes DNS
+rebinding. That package is not a dependency here on purpose: it carries `undici` and
+`@squaresdk/data`, and this package is imported by the browser app and the CLI.
+
 Every chain read is pinned to one block, and that block is what
 `didDocumentMetadata.versionId` reports. Reading the number afterwards would make it a
 guess: a block can land between the reads and the report, and on a sub-second chain it
 routinely would.
+
+The guarantee has one way to fail, and it fails loudly: if the block number itself cannot
+be read, resolution returns `networkError` rather than reading at `latest`. Three unpinned
+reads can straddle a `Transfer`, giving a document whose `owner` is from before it and
+whose `agentWallet` is from after, with no `versionId` to say so; the driver maps
+`networkError` to 502, which tells the caller to retry, and a retry is the right answer to
+an RPC that dropped one call.
 
 ## Tests
 

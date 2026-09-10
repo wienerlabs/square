@@ -37,39 +37,53 @@ function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/^-+|-+$/g, "") || "service";
 }
 
+/** DID Core wants `serviceEndpoint` to be a URI. An absolute one, so a scheme is required. */
+function isUri(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Turn the registration file's `services[]` into DID Document service entries.
  *
  * Entries that are not objects, or lack a usable name or endpoint, are dropped
  * rather than failing the resolution: the file is owner-controlled input and a
- * malformed entry in it must not take the identity down with it.
+ * malformed entry in it must not take the identity down with it. "Usable"
+ * includes the endpoint parsing as a URI, since a document with a
+ * `serviceEndpoint` that is not one is not a conforming document.
  *
  * A `DID` entry pointing at the DID being resolved is a self-reference. It is
  * omitted — it carries nothing, and a consumer that follows service endpoints
  * would loop on it.
+ *
+ * Ids are made unique against the ids already produced, not against the base
+ * slugs. Counting slugs let "agent", "agent" and "agent 2" produce `#agent-2`
+ * twice, which the file's owner could arrange by choosing names, and DID Core
+ * requires ids within a document to be unique.
  */
 export function buildServices(did: string, file: RegistrationFile | null): ServiceEntry[] {
   if (!file || !Array.isArray(file.services)) return [];
 
   const out: ServiceEntry[] = [];
-  const used = new Map<string, number>();
+  const used = new Set<string>();
 
   for (const raw of file.services) {
     if (typeof raw !== "object" || raw === null) continue;
     const entry = raw as RegistrationService;
     const name = typeof entry.name === "string" ? entry.name.trim() : "";
     const endpoint = typeof entry.endpoint === "string" ? entry.endpoint.trim() : "";
-    if (!name || !endpoint) continue;
+    if (!name || !endpoint || !isUri(endpoint)) continue;
     if (name.toUpperCase() === "DID" && endpoint === did) continue;
 
     const base = slugify(name);
-    const seen = (used.get(base) ?? 0) + 1;
-    used.set(base, seen);
-    out.push({
-      id: `${did}#${seen === 1 ? base : `${base}-${seen}`}`,
-      type: name,
-      serviceEndpoint: endpoint,
-    });
+    let fragment = base;
+    for (let n = 2; used.has(fragment); n += 1) fragment = `${base}-${n}`;
+    used.add(fragment);
+    out.push({ id: `${did}#${fragment}`, type: name, serviceEndpoint: endpoint });
   }
   return out;
 }
