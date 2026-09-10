@@ -54,6 +54,11 @@ the one to be careful with: an unvalidated `DRIVER_TIMEOUT_MS=abc` would have re
 The three non-500 mappings matter operationally: a caller that sees 5xx retries, and only
 the upstream fault is worth retrying.
 
+The identifier in the path is decoded exactly once, by Express. A path that is not valid
+percent-encoding (`/1.0/identifiers/%`) is answered 400 in the same envelope, as
+`invalidDid`, rather than with Express's HTML page; and nothing in the route runs outside
+its `try`, so a malformed path cannot end the process.
+
 ## Permanent test identifier
 
 ```

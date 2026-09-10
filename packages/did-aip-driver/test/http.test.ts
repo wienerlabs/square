@@ -73,6 +73,59 @@ describe("driver HTTP", () => {
     server.close();
   });
 
+  it("decodes the identifier exactly once, so a percent-encoded colon stays a percent-encoded colon", async () => {
+    // Express decodes params itself. A second decodeURIComponent turned
+    // `%253A` into `:`, which added a segment: two request paths named the same
+    // DID, and the resolver saw a DID the client had not asked for. Segment
+    // count is what decides v1 from v2, so that is not a cosmetic difference.
+    let seen = "";
+    const { server, url } = await serveWith(async (d) => { seen = d; return failWith("invalidDid"); });
+    await fetch(`${url}/1.0/identifiers/did:aip:x%253Ay`);
+    expect(seen).toBe("did:aip:x%3Ay");
+    server.close();
+  });
+
+  it("answers %25 with a 400 envelope from the resolver, and stays up", async () => {
+    // `%25` decodes to `%` once, which is what Express does. The second
+    // decodeURIComponent the route used to run turned that `%` into a URIError
+    // outside the try, in an async handler: an unhandled rejection, and the
+    // process exited. Three characters took the driver down and the client got
+    // no response at all. The real resolver is used here on purpose: `%` fails
+    // to parse before any RPC is touched, so no network is needed to show the
+    // whole path answering.
+    const app = createApp(CONFIG);
+    const server = createServer(app);
+    await new Promise<void>((res) => server.listen(0, () => res()));
+    const addr = server.address();
+    const url = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+    const r = await fetch(`${url}/1.0/identifiers/%25`);
+    expect(r.status).toBe(400);
+    expect(r.headers.get("content-type")).toContain("application/did+ld+json");
+    const body = await r.json();
+    expect(body.didDocument).toBeNull();
+    expect(body.didResolutionMetadata.error).toBe("invalidDid");
+    expect((await fetch(`${url}/health`)).status).toBe(200);
+    server.close();
+  });
+
+  it("answers a path Express itself cannot decode with a 400 envelope, not an HTML page", async () => {
+    // A lone `%` is not valid percent-encoding, so Express's own parameter
+    // decoding fails before the route runs. That error carries status 400 and
+    // used to fall through to the default handler's HTML. The error handler
+    // maps it to invalidDid in the envelope, and the process is still here
+    // afterwards. (An unhandled rejection inside this run would also fail the
+    // suite by itself.)
+    const { server, url } = await serveWith(async (d) => okFor(d));
+    const r = await fetch(`${url}/1.0/identifiers/%`);
+    expect(r.status).toBe(400);
+    expect(r.headers.get("content-type")).toContain("application/did+ld+json");
+    const body = await r.json();
+    expect(body.didDocument).toBeNull();
+    expect(body.didResolutionMetadata.error).toBe("invalidDid");
+    expect((await fetch(`${url}/health`)).status).toBe(200);
+    server.close();
+  });
+
   it("maps a v1 DID to 501, not 400", async () => {
     const { server, url } = await serveWith(async () => failWith("unsupportedVersion"));
     const r = await fetch(`${url}/1.0/identifiers/did:aip:7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU:scribe`);
