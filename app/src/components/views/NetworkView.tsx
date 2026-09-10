@@ -169,7 +169,11 @@ export function NetworkView() {
                       {indexerUrl}; last indexed block {indexer.data.lastIndexedBlock ?? "unknown"} of {indexer.data.chainHead}; {indexer.data.jobs} jobs
                     </span>
                   ) : indexer.isError ? (
-                    <span className="text-magenta">{indexerUrl} did not answer: {describeError(indexer.error)}</span>
+                    <span className="text-magenta">
+                      {indexer.error instanceof TypeError
+                        ? `The browser could not read ${indexerUrl}: ${describeError(indexer.error)}. The request never completed, so the indexer is either unreachable or its answer was dropped for a missing CORS header; the browser console says which.`
+                        : `${indexerUrl} answered with an error: ${describeError(indexer.error)}`}
+                    </span>
                   ) : (
                     "Loading"
                   )
