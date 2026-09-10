@@ -30,6 +30,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMain } from './entrypoint.mjs';
 import { ADOPTED, ensurePtau, verifyPtau } from './fetch-ptau.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -622,7 +623,7 @@ async function main(argv) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMain(import.meta.url)) {
   try {
     process.exit(await main(process.argv.slice(2)));
   } catch (error) {
