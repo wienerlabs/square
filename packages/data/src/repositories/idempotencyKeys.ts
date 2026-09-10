@@ -17,7 +17,7 @@ export interface IdempotencyInput {
   requestHash: Hex;
   status: number;
   response: Json;
-  expiresAt: Date;
+  ttlMs: number;
 }
 
 export type PutIfAbsentResult =
@@ -36,6 +36,18 @@ interface IdempotencyRow {
 }
 
 const COLUMNS = "scope, key, request_hash, status, response, created_at, expires_at";
+
+const CLAIM_SQL = `insert into idempotency_keys (scope, key, request_hash, status, response, expires_at)
+values ($1, $2, $3, $4, $5, now() + ($6::double precision * interval '1 millisecond'))
+on conflict (scope, key) do update set
+  request_hash = excluded.request_hash,
+  status = excluded.status,
+  response = excluded.response,
+  created_at = now(),
+  expires_at = excluded.expires_at
+where idempotency_keys.expires_at <= now()`;
+
+export const CLAIM_ATTEMPTS = 3;
 
 function rowToRecord(row: IdempotencyRow): IdempotencyRecord {
   return {
@@ -60,22 +72,23 @@ export async function get(db: Database, scope: string, key: string): Promise<Ide
 
 export async function putIfAbsent(db: Database, input: IdempotencyInput): Promise<PutIfAbsentResult> {
   const requestHash = hexToBytes(input.requestHash);
-  const { rowCount } = await db.query(
-    `insert into idempotency_keys (scope, key, request_hash, status, response, expires_at)
-     values ($1, $2, $3, $4, $5, $6)
-     on conflict (scope, key) do update set
-       request_hash = excluded.request_hash,
-       status = excluded.status,
-       response = excluded.response,
-       created_at = now(),
-       expires_at = excluded.expires_at
-     where idempotency_keys.expires_at <= now()`,
-    [input.scope, input.key, requestHash, input.status, jsonParam(input.response), input.expiresAt],
+  for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt += 1) {
+    const { rowCount } = await db.query(CLAIM_SQL, [
+      input.scope,
+      input.key,
+      requestHash,
+      input.status,
+      jsonParam(input.response),
+      input.ttlMs,
+    ]);
+    if (rowCount === 1) return { outcome: "stored" };
+    const existing = await get(db, input.scope, input.key);
+    if (existing === null) continue;
+    return existing.requestHash === bytesToHex(requestHash) ? { outcome: "replay", record: existing } : { outcome: "conflict", record: existing };
+  }
+  throw new Error(
+    `idempotency key ${input.scope}/${input.key} expired between the claim and the read ${CLAIM_ATTEMPTS} times in a row`,
   );
-  if (rowCount === 1) return { outcome: "stored" };
-  const existing = await get(db, input.scope, input.key);
-  if (existing === null) return putIfAbsent(db, input);
-  return existing.requestHash === bytesToHex(requestHash) ? { outcome: "replay", record: existing } : { outcome: "conflict", record: existing };
 }
 
 export async function sweepExpired(db: Database): Promise<number> {

@@ -26,13 +26,18 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     IReputationRegistry private immutable _reputationRegistry;
     IValidationRegistry private immutable _validationRegistry;
 
+    uint8 private constant CHECK_NOT_RUN = 0;
+    uint8 private constant CHECK_PASSED = 1;
+    uint8 private constant CHECK_FAILED = 2;
+
     IComplianceModule private _complianceModule;
     address private _trustedEvaluator;
     uint64 private _minReputationBudget;
     mapping(uint256 jobId => uint256) private _agentOf;
     mapping(uint256 jobId => bytes32) private _validationOf;
     mapping(uint256 jobId => bool) private _recorded;
-    bool private transient _proofVerified;
+    uint256 private transient _checkedJob;
+    uint8 private transient _checkOutcome;
 
     event AgentBound(uint256 indexed jobId, uint256 indexed agentId, bytes32 validationRequestHash);
     event ComplianceChecked(uint256 indexed jobId, address indexed payee, uint256 amount, bool verified);
@@ -120,31 +125,31 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         (uint16 providerBps, bytes memory proof) = _decodeComplete(optParams);
         address payee = _claimMarket.payeeOf(jobId);
         uint256 amount = (_squareJob.netPayout(jobId) * providerBps) / FULL_BPS;
-        bool verified;
+        uint8 outcome = CHECK_NOT_RUN;
         if (address(_complianceModule) != address(0)) {
             try _complianceModule.checkRelease(
                 jobId, payee, amount, _squareJob.paymentToken(), _squareJob.getJobRecord(jobId).client, proof
             ) returns (bool ok) {
-                verified = ok;
+                outcome = ok ? CHECK_PASSED : CHECK_FAILED;
             } catch (bytes memory reason) {
+                outcome = CHECK_FAILED;
                 emit ComplianceCheckFailed(jobId, reason);
             }
         }
-        _proofVerified = verified;
-        emit ComplianceChecked(jobId, payee, amount, verified);
+        _checkedJob = jobId;
+        _checkOutcome = outcome;
+        emit ComplianceChecked(jobId, payee, amount, outcome == CHECK_PASSED);
     }
 
     function afterAction(uint256 jobId, bytes4 selector, bytes calldata data) external onlyKernel {
         if (selector == COMPLETE_SELECTOR) {
             (bytes32 reason,) = abi.decode(data, (bytes32, bytes));
             _writeReputation(jobId, 1, "completed", reason);
-            bool verified = _proofVerified;
-            _proofVerified = false;
-            if (verified) {
-                _writeValidation(jobId, 100);
-            } else if (address(_complianceModule) != address(0)) {
-                _writeValidation(jobId, 0);
-            }
+            uint8 outcome = _checkedJob == jobId ? _checkOutcome : CHECK_NOT_RUN;
+            _checkedJob = 0;
+            _checkOutcome = CHECK_NOT_RUN;
+            if (outcome == CHECK_PASSED) _writeValidation(jobId, 100);
+            else if (outcome == CHECK_FAILED) _writeValidation(jobId, 0);
         } else if (selector == REJECT_SELECTOR) {
             if (_squareJob.getJobRecord(jobId).submittedAt == 0) return;
             (bytes32 reason,) = abi.decode(data, (bytes32, bytes));

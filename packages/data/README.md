@@ -48,7 +48,7 @@ service never imports `pg` directly:
 | `claimListings` | `upsert`, `get`, `listListed` |
 | `ledgerBalances` | `adjust` (by delta, returns the new amount), `get` |
 | `arbiterSets` | `upsert`, `get`, `latest` |
-| `idempotencyKeys` | `get`, `putIfAbsent` (returns `stored`, `replay` or `conflict`), `sweepExpired` |
+| `idempotencyKeys` | `get`, `putIfAbsent` (takes `ttlMs`, returns `stored`, `replay` or `conflict`), `sweepExpired` |
 | `rateLimits` | `increment(db, bucket, windowStart)` (returns the new count), `sweep(db, windowMs)` |
 | `x402Payments` | `insertAccepted` (false on replay), `markSettled`, `markFailed`, `recordSettlementAttempt`, `listAccepted`, `exists`, `get`, `sweep` |
 | `keeperActions` | `append`, `recent`, `sweep` |
@@ -57,6 +57,16 @@ service never imports `pg` directly:
 Mirror upserts (`jobs`, `disputes`, `claimListings`) only write when the incoming
 `updatedBlock` is at or after the stored one and return whether they wrote, so a replay of
 old blocks cannot regress a row.
+
+`idempotencyKeys` is the only implementation of the `idempotency_keys` table; `@squaresdk/hardening`
+exports the HTTP shape (`postgresIdempotencyStore`, `withIdempotency`, `idempotencyMiddleware`) and
+delegates every statement here, the way `@squaresdk/x402` delegates its replay ledger to
+`x402Payments`. `putIfAbsent` takes a `ttlMs` and writes `expires_at` as
+`now() + ($n::double precision * interval '1 millisecond')`, so the expiry is written on the same
+clock that `where expires_at <= now()` reads it back on and a caller whose own clock has drifted
+still gets the lifetime it asked for. When the claim is lost and the row has expired again before it
+can be read, `putIfAbsent` retries `CLAIM_ATTEMPTS` times and then throws rather than recursing
+without a bound.
 
 ### Type boundary
 

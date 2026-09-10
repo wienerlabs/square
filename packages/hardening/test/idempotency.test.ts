@@ -1,15 +1,58 @@
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
+import { migrate, MIGRATIONS_DIR, pgliteDatabase, type Database, type QueryResult } from "@squaresdk/data";
 import {
+  canonicalQuery,
   hashRequest,
   idempotencyMiddleware,
   idempotencyScope,
   memoryIdempotencyStore,
+  pathWithCanonicalQuery,
   postgresIdempotencyStore,
   withIdempotency,
 } from "../src/idempotency.js";
-import type { HandlerResponse, IdempotencyStore } from "../src/idempotency.js";
-import type { SqlClient } from "../src/sql.js";
+import type { HandlerResponse, IdempotencyMiddlewareOptions, IdempotencyStore } from "../src/idempotency.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function openKeyStore(): Promise<Database> {
+  const db = await pgliteDatabase();
+  await migrate(db, MIGRATIONS_DIR, "up");
+  return db;
+}
+
+function databaseWithClockAhead(db: Database, aheadMs: number): Database {
+  const realNow = Date.now;
+  const skewed = async <T>(body: () => Promise<T>): Promise<T> => {
+    Date.now = () => realNow.call(Date) + aheadMs;
+    try {
+      return await body();
+    } finally {
+      Date.now = realNow;
+    }
+  };
+  return {
+    query<T>(text: string, params?: unknown[]): Promise<QueryResult<T>> {
+      return skewed(() => db.query<T>(text, params));
+    },
+    transaction<T>(fn: (tx: Database) => Promise<T>): Promise<T> {
+      return skewed(() => db.transaction(fn));
+    },
+    close(): Promise<void> {
+      return db.close();
+    },
+  };
+}
+
+async function remainingLifetimeMs(db: Database, scope: string, key: string): Promise<number> {
+  const { rows } = await db.query<{ remaining_ms: string }>(
+    "select extract(epoch from (expires_at - now())) * 1000 as remaining_ms from idempotency_keys where scope = $1 and key = $2",
+    [scope, key]
+  );
+  const row = rows[0];
+  if (row === undefined) throw new Error(`no idempotency row for ${scope}/${key}`);
+  return Number(row.remaining_ms);
+}
 
 describe("hashRequest", () => {
   it("ignores key order and method case and yields sha256 hex", () => {
@@ -114,57 +157,163 @@ describe("withIdempotency", () => {
 });
 
 describe("postgresIdempotencyStore", () => {
-  function fakeDb(script: Array<Array<Record<string, unknown>>>) {
-    const calls: Array<{ text: string; params: unknown[] }> = [];
-    const db: SqlClient = {
-      async query(text, params) {
-        calls.push({ text, params });
-        return { rows: script.shift() ?? [] };
-      },
-    };
-    return { db, calls };
-  }
   const hash = "ab".repeat(32);
+  const otherHash = "cd".repeat(32);
 
-  it("claims with a single upsert guarded by expiry and reports stored", async () => {
-    const { db, calls } = fakeDb([[{ key: "k1" }]]);
-    const store = postgresIdempotencyStore(db, { now: () => 1_000 });
-    expect(await store.putIfAbsent("orders", "k1", hash, { status: 201, body: { id: 1 } }, 60_000)).toEqual({ status: "stored" });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.text).toMatch(/insert into idempotency_keys/);
-    expect(calls[0]?.text).toMatch(/decode\(\$3, 'hex'\)/);
-    expect(calls[0]?.text).toMatch(/on conflict \(scope, key\) do update/);
-    expect(calls[0]?.text).toMatch(/where idempotency_keys\.expires_at <= now\(\)/);
-    expect(calls[0]?.text).toMatch(/returning key/);
-    expect(calls[0]?.params).toEqual(["orders", "k1", hash, 201, JSON.stringify({ id: 1 }), new Date(61_000).toISOString()]);
+  it("stores a claim and replays it, and never overwrites a live row", async () => {
+    const db = await openKeyStore();
+    try {
+      const store = postgresIdempotencyStore(db);
+      expect(await store.putIfAbsent("orders", "k1", hash, { status: 201, body: { id: 1 } }, DAY_MS)).toEqual({
+        status: "stored",
+      });
+
+      const live = await store.get("orders", "k1");
+      expect(live).toMatchObject({ requestHash: hash, status: 201, body: { id: 1 } });
+      expect(live?.expiresAt).toBeGreaterThan(Date.now());
+
+      const again = await store.putIfAbsent("orders", "k1", hash, { status: 201, body: { id: 2 } }, DAY_MS);
+      expect(again).toEqual({ status: "exists", stored: live });
+
+      const reused = await store.putIfAbsent("orders", "k1", otherHash, { status: 201, body: { id: 3 } }, DAY_MS);
+      expect(reused).toEqual({ status: "exists", stored: live });
+      expect((await store.get("orders", "k1"))?.body).toEqual({ id: 1 });
+    } finally {
+      await db.close();
+    }
   });
 
-  it("reads the live row back when the claim conflicts", async () => {
-    const other = "cd".repeat(32);
-    const { db, calls } = fakeDb([
-      [],
-      [{ request_hash: Buffer.from(other, "hex"), status: 200, response: { ok: true }, expires_at: new Date(5_000) }],
-    ]);
-    const store = postgresIdempotencyStore(db);
-    expect(await store.putIfAbsent("orders", "k1", hash, { status: 201, body: null }, 1_000)).toEqual({
-      status: "exists",
-      stored: { requestHash: other, status: 200, body: { ok: true }, expiresAt: 5_000 },
-    });
-    expect(calls).toHaveLength(2);
-    expect(calls[1]?.text).toMatch(/expires_at > now\(\)/);
-    expect(calls[1]?.params).toEqual(["orders", "k1"]);
+  it("reclaims a row whose ttl has passed and hides it from reads in the meantime", async () => {
+    const db = await openKeyStore();
+    try {
+      const store = postgresIdempotencyStore(db);
+      expect(await store.putIfAbsent("orders", "k1", hash, { status: 201, body: { id: 1 } }, -1_000)).toEqual({
+        status: "stored",
+      });
+      expect(await store.get("orders", "k1")).toBeUndefined();
+      expect(await store.putIfAbsent("orders", "k1", otherHash, { status: 201, body: { id: 2 } }, DAY_MS)).toEqual({
+        status: "stored",
+      });
+      expect(await store.get("orders", "k1")).toMatchObject({ requestHash: otherHash, body: { id: 2 } });
+    } finally {
+      await db.close();
+    }
   });
 
-  it("maps raw driver values: hex-encoded bytea text, json text, string counts and ISO timestamps", async () => {
-    const { db } = fakeDb([[{ request_hash: `\\x${hash}`, status: "200", response: '{"ok":true}', expires_at: "1970-01-01T00:00:05.000Z" }]]);
-    const store = postgresIdempotencyStore(db);
-    expect(await store.get("orders", "k1")).toEqual({ requestHash: hash, status: 200, body: { ok: true }, expiresAt: 5_000 });
+  it("lets exactly one of two concurrent claims win, and hands the loser the winner's response", async () => {
+    const db = await openKeyStore();
+    try {
+      const store = postgresIdempotencyStore(db);
+      const results = await Promise.all([
+        store.putIfAbsent("orders", "k1", hash, { status: 201, body: { claim: "first" } }, DAY_MS),
+        store.putIfAbsent("orders", "k1", hash, { status: 201, body: { claim: "second" } }, DAY_MS),
+      ]);
+      expect(results.filter((result) => result.status === "stored")).toHaveLength(1);
+
+      const loser = results.find((result) => result.status === "exists");
+      expect(loser).toBeDefined();
+      const winner = await store.get("orders", "k1");
+      expect(loser).toEqual({ status: "exists", stored: winner });
+      expect(winner?.body).toEqual(results[0]?.status === "stored" ? { claim: "first" } : { claim: "second" });
+    } finally {
+      await db.close();
+    }
   });
 
-  it("returns undefined when there is no live row", async () => {
-    const { db, calls } = fakeDb([[]]);
-    expect(await postgresIdempotencyStore(db).get("orders", "missing")).toBeUndefined();
-    expect(calls[0]?.params).toEqual(["orders", "missing"]);
+  it.each([
+    ["equal to the database", 0],
+    ["25 hours behind the database", 25 * 60 * 60 * 1000],
+    ["1 hour behind the database", 60 * 60 * 1000],
+  ] as const)("measures the ttl on the database clock when the application clock is %s", async (_label, aheadMs) => {
+    const base = await openKeyStore();
+    try {
+      const db = databaseWithClockAhead(base, aheadMs);
+      const store = postgresIdempotencyStore(db);
+      expect(await store.putIfAbsent("orders", "k1", hash, { status: 201, body: { id: 1 } }, DAY_MS)).toEqual({
+        status: "stored",
+      });
+      expect(await store.get("orders", "k1")).toMatchObject({ body: { id: 1 } });
+      expect(await store.putIfAbsent("orders", "k1", hash, { status: 201, body: { id: 2 } }, DAY_MS)).toMatchObject({
+        status: "exists",
+      });
+      expect(Math.abs((await remainingLifetimeMs(db, "orders", "k1")) - DAY_MS)).toBeLessThan(5_000);
+    } finally {
+      await base.close();
+    }
+  });
+
+  it("runs the handler once across a full withIdempotency round trip", async () => {
+    const db = await openKeyStore();
+    try {
+      const handler = vi.fn(async (): Promise<HandlerResponse> => ({ status: 201, body: { id: 7 } }));
+      const execute = withIdempotency(postgresIdempotencyStore(db), handler);
+      const input = { scope: "orders", key: "k1", requestHash: hash };
+      expect(await execute(input)).toEqual({ source: "handler", status: 201, body: { id: 7 } });
+      expect(await execute(input)).toEqual({ source: "replay", status: 201, body: { id: 7 } });
+      expect(await execute({ ...input, requestHash: otherHash })).toEqual({
+        source: "conflict",
+        status: 409,
+        body: { error: "idempotency_key_reused" },
+      });
+      expect(handler).toHaveBeenCalledTimes(1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps each scope separate and reports an unknown key as absent", async () => {
+    const db = await openKeyStore();
+    try {
+      const store = postgresIdempotencyStore(db);
+      await store.putIfAbsent(idempotencyScope("orders", "tenant-a"), "k1", hash, { status: 201, body: null }, DAY_MS);
+      expect(await store.get(idempotencyScope("orders", "tenant-a"), "k1")).toBeDefined();
+      expect(await store.get(idempotencyScope("orders", "tenant-b"), "k1")).toBeUndefined();
+      expect(await store.get("orders", "missing")).toBeUndefined();
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("round-trips the column types the driver hands back: bytea hash, smallint status, jsonb body", async () => {
+    const db = await openKeyStore();
+    try {
+      const store = postgresIdempotencyStore(db);
+      const body = { nested: { list: [1, "two", null], flag: true } };
+      await store.putIfAbsent("orders", "k1", hash, { status: 202, body }, DAY_MS);
+      const stored = await store.get("orders", "k1");
+      expect(stored?.requestHash).toBe(hash);
+      expect(stored?.status).toBe(202);
+      expect(stored?.body).toEqual(body);
+      expect(Number.isFinite(stored?.expiresAt)).toBe(true);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe("canonicalQuery", () => {
+  it("orders parameters by name and then by value, so query order cannot change the hash", () => {
+    expect(canonicalQuery("?b=2&a=1")).toBe(canonicalQuery("?a=1&b=2"));
+    expect(canonicalQuery("?a=2&a=1")).toBe(canonicalQuery("?a=1&a=2"));
+    expect(canonicalQuery("")).toBe("");
+    expect(canonicalQuery("?b=2&a=1")).toBe("a=1&b=2");
+  });
+
+  it("keeps different parameter sets apart", () => {
+    expect(canonicalQuery("?a=1&b=2")).not.toBe(canonicalQuery("?a=1&b=3"));
+    expect(canonicalQuery("?a=1")).not.toBe(canonicalQuery("?b=1"));
+  });
+
+  it("leaves the path alone and drops an empty query", () => {
+    expect(pathWithCanonicalQuery("https://api.example/orders?b=2&a=1")).toBe("/orders?a=1&b=2");
+    expect(pathWithCanonicalQuery("https://api.example/orders")).toBe("/orders");
+    expect(pathWithCanonicalQuery("https://api.example/orders?")).toBe("/orders");
+  });
+
+  it("gives the same request hash whatever order the client sent the query in", () => {
+    const first = hashRequest({ method: "POST", path: pathWithCanonicalQuery("https://api.example/orders?a=1&b=2") });
+    const second = hashRequest({ method: "POST", path: pathWithCanonicalQuery("https://api.example/orders?b=2&a=1") });
+    expect(first).toBe(second);
   });
 });
 
@@ -262,6 +411,65 @@ describe("idempotencyMiddleware", () => {
     const refused = await strict.post(undefined, { item: "tea" });
     expect(refused.status).toBe(400);
     expect(await refused.json()).toEqual({ error: "idempotency_key_required" });
+  });
+
+  function buildEcho(status: 201 | 422, extra: Partial<IdempotencyMiddlewareOptions> = {}) {
+    const app = new Hono();
+    let calls = 0;
+    app.use(
+      "/orders",
+      idempotencyMiddleware(memoryIdempotencyStore(), {
+        scope: "orders",
+        actorOf: (c) => c.req.header("x-tenant"),
+        ...extra,
+      })
+    );
+    app.post("/orders", (c) => {
+      calls += 1;
+      return c.json({ calls }, status);
+    });
+    const post = (query: string, key: string) =>
+      app.request(`/orders${query}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant": "tenant-a", "idempotency-key": key },
+        body: JSON.stringify({ item: "tea" }),
+      });
+    return { post, calls: () => calls };
+  }
+
+  it("treats the same query sent in another order as the same request", async () => {
+    const { post, calls } = buildEcho(201);
+    const first = await post("?a=1&b=2", "k1");
+    expect(first.status).toBe(201);
+    expect(await first.json()).toEqual({ calls: 1 });
+
+    const reordered = await post("?b=2&a=1", "k1");
+    expect(reordered.status).toBe(201);
+    expect(reordered.headers.get("idempotent-replayed")).toBe("true");
+    expect(await reordered.json()).toEqual({ calls: 1 });
+    expect(calls()).toBe(1);
+
+    const different = await post("?a=1&b=3", "k1");
+    expect(different.status).toBe(409);
+    expect(await different.json()).toEqual({ error: "idempotency_key_reused" });
+  });
+
+  it("stores a 4xx under the default policy, so the key replays it", async () => {
+    const { post, calls } = buildEcho(422);
+    expect((await post("", "k1")).status).toBe(422);
+    const replay = await post("", "k1");
+    expect(replay.status).toBe(422);
+    expect(replay.headers.get("idempotent-replayed")).toBe("true");
+    expect(calls()).toBe(1);
+  });
+
+  it("passes shouldStore through, so a policy that refuses a 4xx leaves the key free", async () => {
+    const { post, calls } = buildEcho(422, { shouldStore: (response) => response.status < 400 });
+    expect((await post("", "k1")).status).toBe(422);
+    const retry = await post("", "k1");
+    expect(retry.status).toBe(422);
+    expect(retry.headers.get("idempotent-replayed")).toBeNull();
+    expect(calls()).toBe(2);
   });
 
   it("ignores safe methods even when they carry a key", async () => {

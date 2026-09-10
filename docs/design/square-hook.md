@@ -188,6 +188,18 @@ because its answer is the payee; when it cannot answer, `claimRefund` reopens
 after `expiredAt` and emits `PayoutUnresolvable`. The pre-settlement actions
 keep the strict call, so a wrong agent binding still reverts the submit.
 
+Two consequences of the tolerant call are worth stating (#154). First,
+`beforeAction` is no longer guaranteed to have run when `afterAction` runs, so
+the compliance outcome the hook carries between the two is three-state and
+keyed by the job: not run, passed, failed. `afterAction` writes a `100` on
+passed, a `0` on failed, and nothing at all when the check never ran; a check
+that ran for another job in the same transaction is not mistaken for this
+one's. Second, the kernel's refund probe calls `resolvePayout` with empty
+`optParams`, so a resolver must be answerable without `data`; `IPayoutResolver`
+states that contract and `SquareHook` meets it, since it reads `providerBps`
+from `optParams` with a full-share default and never lets `data` decide
+whether it can answer.
+
 That trade is only defensible while something reads the event, so the reader is
 named here. **`services/indexer`** decodes both events as it applies a batch,
 logs `indexer.hook_write_failed` at `error` and counts them into
