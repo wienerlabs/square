@@ -109,6 +109,23 @@ template PaymentCompliance(MAX_WHITELIST, MAX_BLOCKED, MAX_CATEGORIES) {
     signal input operator_id_field;
     signal input policy_id_field;
 
+    // One salt per committed field, so the commitment can be opened one field
+    // at a time. square#45.
+    //
+    // Without these the commitment is Poseidon over eight guessable values and
+    // a "selective" disclosure discloses everything: an auditor handed seven
+    // sibling leaves could brute-force them, because max_daily is published on
+    // chain as PolicyRegistry.dailyLimit, the time field has under 150,000
+    // possible values, and an empty list has a well-known image. That is
+    // square#98, and it is the same defect.
+    //
+    // They are unconstrained here on purpose. Their only job is entropy, and
+    // what pins them is the registry: a proof whose policy_data_hash does not
+    // equal the commitment the institution registered is a proof about some
+    // other policy. Changing a salt changes the commitment, which is the
+    // binding.
+    signal input policy_salts[8];
+
     // Time restriction. time_active = 0 means "no time gate"; the remaining
     // time fields are then free witnesses ignored by both the hash and the rule.
     signal input time_active;
@@ -419,15 +436,47 @@ template PaymentCompliance(MAX_WHITELIST, MAX_BLOCKED, MAX_CATEGORIES) {
     signal time_field;
     time_field <== time_active * time_when_active.out;
 
+    // ==================================================== The policy commitment
+    //
+    // Eight leaves, one per committed field, and the root is the value the
+    // registry holds and the hook compares. square#45.
+    //
+    //   leaf[i] = Poseidon(3)(i, policy_salts[i], value[i])
+    //   root    = Poseidon(8)(leaf[0] .. leaf[7])
+    //
+    // The shape is deliberate. The root is still a single Poseidon(8), so it is
+    // the same kind of value the registry already stores and the same public
+    // signal 1 the verifier already reads — no interface moved. What changed is
+    // that it is now openable one field at a time: disclose (i, value, salt) and
+    // the seven sibling leaves, and anybody can recompute the root and check it
+    // against the chain, learning nothing about the other seven values because
+    // each sits behind its own salt.
+    //
+    // The index goes in as the first input, so a leaf cannot be replayed in
+    // another position. Aperture's tree sorted each pair before hashing, which
+    // throws that away, and hashed leaves and internal nodes the same way, which
+    // lets an internal node be presented as a leaf. Neither applies here: there
+    // is one level, the position is inside the leaf, and a leaf is a Poseidon(3)
+    // while the root is a Poseidon(8).
+    signal policy_values[8];
+    policy_values[0] <== max_daily;
+    policy_values[1] <== max_per_tx;
+    policy_values[2] <== operator_id_field;
+    policy_values[3] <== policy_id_field;
+    policy_values[4] <== cat_list_hash.out;
+    policy_values[5] <== blocked_list_hash.out;
+    policy_values[6] <== tokens_list_hash.out;
+    policy_values[7] <== time_field;
+
+    component policy_leaf[8];
     component policy_hasher = Poseidon(8);
-    policy_hasher.inputs[0] <== max_daily;
-    policy_hasher.inputs[1] <== max_per_tx;
-    policy_hasher.inputs[2] <== operator_id_field;
-    policy_hasher.inputs[3] <== policy_id_field;
-    policy_hasher.inputs[4] <== cat_list_hash.out;
-    policy_hasher.inputs[5] <== blocked_list_hash.out;
-    policy_hasher.inputs[6] <== tokens_list_hash.out;
-    policy_hasher.inputs[7] <== time_field;
+    for (var i = 0; i < 8; i++) {
+        policy_leaf[i] = Poseidon(3);
+        policy_leaf[i].inputs[0] <== i;
+        policy_leaf[i].inputs[1] <== policy_salts[i];
+        policy_leaf[i].inputs[2] <== policy_values[i];
+        policy_hasher.inputs[i] <== policy_leaf[i].out;
+    }
     policy_data_hash <== policy_hasher.out;
 }
 

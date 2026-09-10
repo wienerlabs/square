@@ -24,7 +24,10 @@ jobs:
           set -euo pipefail
           VER=8.28.0
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" | tar -xz gitleaks
-          ./gitleaks detect --source . --redact --no-banner --exit-code 1
+          # --verbose birlikte --redact ile: bulgunun kural adini, dosyasini ve satirini
+          # basar, degerini basmaz. Onsuz cikti yalnizca "leaks found: N" oluyor ve
+          # zorunlu bir kapi neyi reddettigini soylemeden merge'i durduruyor (square#174).
+          ./gitleaks detect --source . --redact --no-banner --exit-code 1 --verbose
 
   grep:
     name: forbidden strings

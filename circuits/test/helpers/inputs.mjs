@@ -68,6 +68,20 @@ export const ADDRESSES = {
 };
 
 // A policy that the default payment satisfies. Override pieces per test.
+// Eight fixed salts. Real policies use commitment.js's randomPolicySalt; these
+// are constants so a rebuilt input produces the same commitment and a failing
+// test is reproducible. They are not secret and are not meant to be.
+export const DEFAULT_SALTS = Object.freeze([
+  '1000000000000000000000000000000000000000000000000000000000000001',
+  '1000000000000000000000000000000000000000000000000000000000000002',
+  '1000000000000000000000000000000000000000000000000000000000000003',
+  '1000000000000000000000000000000000000000000000000000000000000004',
+  '1000000000000000000000000000000000000000000000000000000000000005',
+  '1000000000000000000000000000000000000000000000000000000000000006',
+  '1000000000000000000000000000000000000000000000000000000000000007',
+  '1000000000000000000000000000000000000000000000000000000000000008',
+]);
+
 export async function buildInput(overrides = {}) {
   const {
     maxPerTx = '10000000',            // 10 USDC at 6 decimals
@@ -78,6 +92,7 @@ export async function buildInput(overrides = {}) {
     paymentCategory = 'api-call',
     operator = ADDRESSES.operator,
     policyIdField = '424242',
+    policySalts = DEFAULT_SALTS,
     timeActive = '0',
     timeDaysBitmask = '0',
     timeStartHourUtc = '0',
@@ -106,6 +121,10 @@ export async function buildInput(overrides = {}) {
     payment_category: await hashCategory(paymentCategory),
     operator_id_field: addressToField(operator),
     policy_id_field: String(policyIdField),
+    // Fixed rather than random, so a rebuilt input produces the same
+    // commitment and a failing test is reproducible. A real policy uses
+    // commitment.js's randomPolicySalt.
+    policy_salts: policySalts,
     time_active: String(timeActive),
     time_days_bitmask: String(timeDaysBitmask),
     time_start_hour_utc: String(timeStartHourUtc),
@@ -152,7 +171,13 @@ export async function policyDataHash(input) {
       BigInt(input.time_end_hour_utc),
     ]));
 
-  return f(p([
+  // square#45: eight salted, position-separated leaves, and the root is the
+  // commitment. This is a third independent implementation of the construction
+  // — the circuit is the first and services/prover/src/commitment.js the second
+  // — and the point of writing it out longhand here rather than importing one
+  // of the others is that a test which shares an implementation with the thing
+  // it is testing proves only that the code equals itself.
+  const values = [
     BigInt(input.max_daily),
     BigInt(input.max_per_tx),
     BigInt(input.operator_id_field),
@@ -161,5 +186,9 @@ export async function policyDataHash(input) {
     BigInt(f(blockedHash)),
     BigInt(f(tokensHash)),
     BigInt(timeField),
-  ]));
+  ];
+  const leaves = values.map((value, i) => BigInt(f(p([
+    BigInt(i), BigInt(input.policy_salts[i]), value,
+  ]))));
+  return f(p(leaves));
 }

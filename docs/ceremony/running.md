@@ -132,7 +132,7 @@ document says.
 ```console
 $ node scripts/ceremony.mjs verify-chain
 phase 1
-  ok    ppot_0080_13.ptau matches the adopted Perpetual Powers of Tau contribution 80
+  ok    ppot_0080_14.ptau matches the adopted Perpetual Powers of Tau contribution 80
 
 circuit
   ok    the compiled circuit matches the one the ceremony started from

@@ -26,7 +26,7 @@ pull request.
 | `cli` | The resolver and the CLI build; the CLI's exit codes are unchanged. Hermetic. |
 | `did-aip-driver (unit)` | The driver's config parsing and envelope construction. |
 | `did-aip-driver image` | The container answers, and a malformed DID is still a 400 rather than a 500. |
-| `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. |
+| `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. A red `secret scan` names the rule, the file and the line in the job log: gitleaks runs with `--verbose`, and with `--redact` beside it the value itself is never printed. It walks the git history, so the finding can sit in a commit the diff no longer shows. |
 
 Three are **not** required to merge. Each one's red is a statement about Arc
 Testnet being reachable, or about a funded account, rather than about the change,
@@ -126,7 +126,7 @@ the iden3 release binary — and checks it, because an unverified download means
 whoever can answer for github.com chooses the compiler that produces this
 project's proving key.
 
-The 9.5 MB phase-1 powers of tau is cached, keyed on `fetch-ptau.mjs` because
+The 19 MB phase-1 powers of tau is cached, keyed on `fetch-ptau.mjs` because
 that file holds the adoption record, so adopting a different powers of tau
 misses the cache instead of reusing the old file. `fetch-ptau.mjs` re-verifies
 the bytes on every run either way, which is what makes caching a downloaded
