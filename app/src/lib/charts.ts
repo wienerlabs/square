@@ -130,7 +130,7 @@ export function payoutSplit(record: { budget: bigint; platformFeeBP: number; eva
   const platformFee = (budget * record.platformFeeBP) / 10_000;
   const evaluatorFee = (budget * record.evaluatorFeeBP) / 10_000;
   const net = netPayout > 0n ? usdc(netPayout) : Math.max(0, budget - platformFee - evaluatorFee);
-  const providerBps = record.status === JobStatus.Completed && record.providerBps > 0 ? record.providerBps : 10_000;
+  const providerBps = record.status === JobStatus.Completed ? record.providerBps : 10_000;
   const providerShare = (net * providerBps) / 10_000;
   return { budget, platformFee, evaluatorFee, net, providerShare, clientShare: net - providerShare, providerBps };
 }
@@ -140,20 +140,26 @@ export interface FeeTotals {
   evaluator: number;
   netPaid: number;
   refunded: number;
+  splitToClient: number;
   completed: number;
   rejected: number;
 }
 
 export function feeTotals(jobs: readonly JobSummary[]): FeeTotals {
-  const totals: FeeTotals = { platform: 0, evaluator: 0, netPaid: 0, refunded: 0, completed: 0, rejected: 0 };
+  const totals: FeeTotals = { platform: 0, evaluator: 0, netPaid: 0, refunded: 0, splitToClient: 0, completed: 0, rejected: 0 };
   for (const job of jobs) {
     if (job.status === JobStatus.Completed) {
       const budget = usdc(job.budget);
       const platform = (budget * job.platformFeeBP) / 10_000;
       const evaluator = (budget * job.evaluatorFeeBP) / 10_000;
+      const net = budget - platform - evaluator;
+      const payeeShare = (net * job.providerBps) / 10_000;
+      const clientShare = net - payeeShare;
       totals.platform += platform;
       totals.evaluator += evaluator;
-      totals.netPaid += budget - platform - evaluator;
+      totals.netPaid += payeeShare;
+      totals.splitToClient += clientShare;
+      totals.refunded += clientShare;
       totals.completed += 1;
     } else if (job.status === JobStatus.Rejected && job.fundedAt > 0) {
       totals.refunded += usdc(job.budget);

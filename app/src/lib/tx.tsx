@@ -42,6 +42,10 @@ export function describeError(error: unknown): string {
   return "Unknown error";
 }
 
+export function switchNetworkGuidance(chainName: string, error: unknown): string {
+  return `Switch to ${chainName} inside the wallet, or disconnect here and connect again on ${chainName}. The wallet reported: ${describeError(error)}`;
+}
+
 export function TxProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<TxState>({ status: "idle" });
   const queryClient = useQueryClient();
