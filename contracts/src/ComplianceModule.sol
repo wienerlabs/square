@@ -77,7 +77,8 @@ import {ISquareJob} from "./interfaces/ISquareJob.sol";
 /// something in the first place: without a counter on chain, a prover claims
 /// zero every time and the circuit's daily ceiling is vacuous.
 ///
-/// **An explicit mark.** `_consumed[keccak(proof)]`, because the counter's
+/// **An explicit mark.** `_consumed[keccak(statement)]`, the eight public signals
+/// rather than the bytes that carried them, because the counter's
 /// protection is only as good as the counter: a job whose `amount` is zero
 /// moves it not at all. Belt and braces, and cheap.
 ///
