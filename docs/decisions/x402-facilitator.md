@@ -119,13 +119,22 @@ broadcast but its receipt was not seen, which the library reports as
 `accepted` row and stops, because the payment may still land and writing `failed`
 would make the authoritative ledger wrong.
 
-`reconcileSettlements` is the operator-scheduled pass that closes those rows: a
-successful receipt settles the row, a reverted receipt fails it with
-`settlement_reverted`, an unknown receipt is left alone while the authorization is
-still valid, and once `validBefore` has passed, when the token contract can no longer
-accept it, the row fails with `authorization_expired`. Without it a pending settlement
-sat at `accepted` forever while `has()` kept refusing the authorization, which is safe
-but leaves a payment nobody can account for.
+`reconcileSettlements` is the operator-scheduled pass that closes those rows, and its
+decision table turns on whether a transaction was ever broadcast. With a transaction
+hash on the row: a successful receipt settles it, a reverted receipt fails it with
+`settlement_reverted`, and a receipt that cannot be read leaves it `accepted` and
+unresolved with `settlement_receipt_unreadable`, whatever `validBefore` says. Without a
+transaction hash: the row fails with `authorization_expired` once `validBefore` has
+passed, because a transfer that was never sent can no longer be sent. An expired
+authorization whose receipt is unreadable is not a failure, it is an unknown: the
+transaction may have been mined before `validBefore` with only this node unable to see
+it, and `failed` is a state the ledger never leaves. Without the pass a pending
+settlement sat at `accepted` forever while `has()` kept refusing the authorization,
+which is safe but leaves a payment nobody can account for.
+
+`now` comes from whatever clock the caller passes. `blockTimestampFromClient` reads the
+latest block timestamp, which is the clock EIP-3009 compares `validBefore` against; the
+default is the local wall clock, for callers that hold no public client.
 
 `settlement: "before-handler"` is not supported and is rejected when routes are
 configured. The upfront flow makes the resource server accept the payload without
