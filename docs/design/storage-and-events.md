@@ -360,8 +360,18 @@ institution's compliance state filters on the poster address.
 | Event | Carries |
 |---|---|
 | `PolicyCommitted(address indexed poster, bytes32 indexed commitment, uint128 dailyLimit, uint64 epoch)` | on every `setPolicy`, including a replacement; `epoch` is what distinguishes them |
-| `SpendRecorded(address indexed poster, uint64 indexed day, uint256 amount, uint256 spentAfter)` | on every accepted release; `day` is the UTC day index |
+| `SpendRecorded(address indexed poster, uint64 indexed day, uint256 amount, uint256 spentAfter)` | on every release, accepted or not; `day` is the UTC day index |
+| `ReleaseOutsidePolicy(address indexed poster, uint64 indexed day, uint256 spentAfter, uint128 dailyLimit, Verdict verdict)` | beside `SpendRecorded` when the verdict is not `Compliant`, with `verdict` either `NoPolicy` or `LimitExceeded`. The release still happened; this is the record that it happened outside the ceiling |
 | `SpenderUpdated(address indexed spender, bool allowed)` | owner only |
+
+A release outside the policy is not refused, it is recorded. `recordSpend` never
+reverts on policy grounds: it advances the counter, returns a `Verdict` and
+emits `ReleaseOutsidePolicy` alongside `SpendRecorded`. The counter may then
+stand above the ceiling, which is the truthful reading because the money left.
+`SquareHook._checkRelease` wraps the module in `try/catch`, so a revert here
+would have been swallowed and the counter's own advance lost with it. Compliance
+is a signal on the release, never a lock on the escrow
+([hook-failure-modes.md](../decisions/hook-failure-modes.md)).
 
 ### Ownership, on every owned contract
 
@@ -373,9 +383,6 @@ inherit OpenZeppelin's `Ownable2Step`, so each of them declares the same pair.
 |---|---|
 | `OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner)` | `transferOwnership` nominated a new owner; nothing has changed yet |
 | `OwnershipTransferred(address indexed previousOwner, address indexed newOwner)` | the nominee called `acceptOwnership`, or the constructor set the first owner. This is the transfer |
-
-A refused release emits nothing: `recordSpend` reverts, and the revert
-propagates out of `SquareJob.complete`, so there is no partial state to observe.
 
 ## When the ERC-8004 registries are written
 
