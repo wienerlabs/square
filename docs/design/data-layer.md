@@ -105,12 +105,14 @@ create table jobs (
   reason            bytea,
   disputed          boolean       not null default false,
   agent_id          numeric(78,0),
+  refund_reason     text,                              -- null for a plain expiry; 'payoutUnresolvable' when the resolver could not answer
   updated_block     bigint        not null,
   primary key (chain_id, job_id)
 );
-create index jobs_open        on jobs (chain_id, status) where status in (0, 1);
-create index jobs_by_provider on jobs (chain_id, provider);
-create index jobs_in_window   on jobs (chain_id, challenge_end) where status = 2 and not disputed;
+create index jobs_open               on jobs (chain_id, status) where status in (0, 1);
+create index jobs_by_provider        on jobs (chain_id, provider);
+create index jobs_in_window          on jobs (chain_id, challenge_end) where status = 2 and not disputed;
+create index jobs_expired_with_agent on jobs (chain_id, job_id) where status = 5 and agent_id is not null;
 
 create table disputes (
   chain_id      bigint        not null,
@@ -169,6 +171,28 @@ inside one transaction. A single log that cannot be journalled or reduced is
 rolled back to its own savepoint, counted in
 `square_indexer_quarantined_events_total` and listed on the indexer's
 `/quarantine`, and the rest of the batch still commits.
+
+### One deployment at a time, and the larger shape that would hold two
+
+Every mirror row is keyed by `(chain_id, job_id)` and nothing in it says which
+`SquareJob` issued that id, so two deployments on the same chain collide by
+construction: after a redeploy the earlier deployment's jobs sit in `jobs`,
+`disputes`, `claim_listings` and the ledgers and the read surface serves them as
+current until the new deployment happens to reuse the same ids. The fix in place
+is deletion: `ON_DEPLOYMENT_CHANGE=restart` removes that chain's derived rows in
+the same transaction before it reindexes, so one deployment is mirrored at a
+time. The larger option is to put the deployment in the key, either as a
+`deployment` column carrying the `SquareJob` address (or a short id resolved
+from `indexer_checkpoints`) in the primary key of every mirror table and in the
+journal, or as one schema per deployment. It would let two deployments live side
+by side, make a redeploy non-destructive, and let the app show the old stack's
+history next to the new one. It is deferred because it touches the key of every
+mirror table, every repository signature and every read route at once, for a
+benefit no consumer asks for today: the app reads one deployment, the keeper
+acts on one deployment, and a testnet redeploy that drops the earlier mirror
+loses nothing that `job_events` on an archived database does not still hold.
+When mainnet history has to survive a redeploy, this is the change to make, and
+the deletion above becomes its migration path.
 
 ### Security layer (#44)
 
@@ -262,7 +286,16 @@ create table keeper_actions (
   reason        text,                      -- for 'skipped': 'unprofitable' | 'disputed' | …
   created_at    timestamptz not null default now()
 );
+create index keeper_actions_by_job on keeper_actions (chain_id, job_id, action);
 ```
+
+A `recordExpiry` row with no `reason` means the expiry is recorded on chain: it
+carries the transaction hash when this keeper sent it, and no hash when the
+keeper found it already recorded. That row is what
+`jobs.listExpiredWithAgent` anti-joins on, so a recorded expiry leaves the
+sweep's candidate set for good and a failed attempt, which does carry a
+`reason`, stays in it. `keeper_actions_by_job` is the index that anti-join
+reads.
 
 ## Retention
 

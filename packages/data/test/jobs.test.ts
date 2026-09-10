@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import * as jobs from "../src/repositories/jobs.js";
+import * as keeperActions from "../src/repositories/keeperActions.js";
 import { address, hash32, openMigratedDatabase } from "./helpers.js";
 
 const CHAIN = 5042002;
@@ -30,6 +31,7 @@ function job(overrides: Partial<jobs.JobRecord>): jobs.JobRecord {
     disputed: false,
     agentId: 2n ** 200n,
     updatedBlock: 1_000n,
+    refundReason: null,
     ...overrides,
   };
 }
@@ -74,6 +76,40 @@ describe("jobs", () => {
       const uppercase = job({ jobId: 8n, client: address(0xab).toUpperCase().replace("0X", "0x") as jobs.JobRecord["client"] });
       await jobs.upsert(db, uppercase);
       expect((await jobs.get(db, CHAIN, 8n))?.client).toBe(address(0xab));
+
+      const refunded = job({ jobId: 9n, status: jobs.JOB_STATUS.expired, refundReason: "payoutUnresolvable", updatedBlock: 20n });
+      await jobs.upsert(db, refunded);
+      expect((await jobs.get(db, CHAIN, 9n))?.refundReason).toBe("payoutUnresolvable");
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe("expiries the keeper still has to record", () => {
+  const expired = { status: jobs.JOB_STATUS.expired, challengeEnd: null, agentId: 42n };
+
+  it("skips a journaled expiry, honours the evaluator filter and the limit, and keeps a failed attempt", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      await jobs.upsert(db, job({ jobId: 10n, ...expired }));
+      await jobs.upsert(db, job({ jobId: 11n, ...expired }));
+      await jobs.upsert(db, job({ jobId: 12n, ...expired, evaluator: address(0x09) }));
+      await jobs.upsert(db, job({ jobId: 13n, ...expired, agentId: null }));
+      await jobs.upsert(db, job({ jobId: 14n }));
+
+      expect((await jobs.listExpiredWithAgent(db, CHAIN)).map((row) => row.jobId)).toEqual([10n, 11n, 12n]);
+      expect((await jobs.listExpiredWithAgent(db, CHAIN, address(0x03))).map((row) => row.jobId)).toEqual([10n, 11n]);
+      expect((await jobs.listExpiredWithAgent(db, CHAIN, address(0x03), 1)).map((row) => row.jobId)).toEqual([10n]);
+
+      await keeperActions.append(db, { chainId: CHAIN, jobId: 10n, action: "recordExpiry", txHash: hash32(0xaa) });
+      expect((await jobs.listExpiredWithAgent(db, CHAIN, address(0x03))).map((row) => row.jobId)).toEqual([11n]);
+
+      await keeperActions.append(db, { chainId: CHAIN, jobId: 11n, action: "recordExpiry", reason: "execution reverted" });
+      expect((await jobs.listExpiredWithAgent(db, CHAIN, address(0x03))).map((row) => row.jobId)).toEqual([11n]);
+
+      await keeperActions.append(db, { chainId: CHAIN, jobId: 11n, action: "recordExpiry" });
+      expect(await jobs.listExpiredWithAgent(db, CHAIN, address(0x03))).toEqual([]);
     } finally {
       await db.close();
     }
