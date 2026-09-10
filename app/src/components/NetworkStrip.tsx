@@ -5,7 +5,7 @@ import { ArcNetworkMark } from "./marks";
 import { formatBigint, formatDuration } from "@/lib/format";
 import { useNetwork } from "@/lib/square";
 import { describeError } from "@/lib/tx";
-import { activeChain, deployment } from "@/lib/wagmi";
+import { activeChain, deployment, isArcNetwork } from "@/lib/wagmi";
 
 const contracts = [
   { label: "SquareJob", address: deployment.squareJob },
@@ -37,7 +37,7 @@ export function NetworkStrip() {
       <div className="grid divide-y divide-fog sm:grid-cols-3 sm:divide-x sm:divide-y-0">
         <Cell label="Chain">
           <span className="inline-flex items-center gap-2">
-            {activeChain.id === 5042002 ? <ArcNetworkMark className="size-4" /> : null}
+            {isArcNetwork ? <ArcNetworkMark className="size-4" /> : null}
             {activeChain.name} <span className="text-graphite">({activeChain.id})</span>
           </span>
         </Cell>

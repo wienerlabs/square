@@ -74,8 +74,11 @@ runbook as the deploy, and the deploy log prints the reminder.
 
 ## Superseding a deployment
 
-A redeploy leaves the previous contracts on chain with their balances. Before
-the old addresses are dropped from the SDK and the docs:
+The full checklist, including the documents a redeploy makes stale and the
+two places that carry the addresses, is
+[docs/deploy/README.md](../docs/deploy/README.md). A redeploy leaves the
+previous contracts on chain with their balances. Before the old addresses are
+dropped from the SDK and the docs:
 
 1. Finalize or reject every job still `Submitted` on the old `KeeperEvaluator`
    (`finalize` is permissionless), so no escrow stays in the old kernel.
@@ -110,7 +113,9 @@ cd packages/core && ARC_FORK_RPC_URL=http://127.0.0.1:8546 npm test
 
 The windows are testnet values chosen so the acceptance run finishes in minutes;
 production values are days. The run itself, with every transaction and its gas,
-is [docs/deploy/lifecycle-5042002.md](../docs/deploy/lifecycle-5042002.md).
+is [docs/deploy/lifecycle-5042002-2026-09-09.md](../docs/deploy/lifecycle-5042002-2026-09-09.md);
+`docs/deploy/lifecycle-5042002.md` is the same report as the latest and is
+rewritten on every run.
 
 ## Measured gas
 

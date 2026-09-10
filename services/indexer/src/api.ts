@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { getAddress, isAddress } from "viem";
 import { claimListings, disputes, jobs, type Database } from "@squaresdk/data";
 import type { Health, Metrics } from "@squaresdk/observability";
@@ -11,6 +12,15 @@ export interface ApiOptions {
   indexer: Indexer;
   health: Health;
   metrics: Metrics;
+  corsOrigins?: readonly string[];
+}
+
+const LOCALHOST_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/;
+
+export function allowedOrigin(origin: string, configured: readonly string[]): string | null {
+  if (origin.length === 0) return null;
+  if (LOCALHOST_ORIGIN.test(origin)) return origin;
+  return configured.includes(origin) ? origin : null;
 }
 
 function serialize(value: unknown): unknown {
@@ -29,7 +39,9 @@ function now(): bigint {
 
 export function createApi(options: ApiOptions): Hono {
   const { db, chainId, indexer } = options;
+  const configured = options.corsOrigins ?? [];
   const app = new Hono();
+  app.use("*", cors({ origin: (origin) => allowedOrigin(origin, configured), allowMethods: ["GET", "OPTIONS"], maxAge: 600 }));
   app.route("/", observabilityRoutes({ health: options.health, metrics: options.metrics }));
 
   app.get("/status", (c) =>

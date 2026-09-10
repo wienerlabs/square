@@ -22,6 +22,7 @@
   ],
   "scripts": {
     "generate:abi": "node scripts/generate-abis.mjs",
+    "check:events": "node scripts/check-events-documented.mjs",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:anvil": "ANVIL=1 vitest run",

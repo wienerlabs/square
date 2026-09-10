@@ -73,7 +73,12 @@ export function createPaidRoutes(options: PaidRoutesOptions): MiddlewareHandler 
   return paymentMiddleware(routes, server);
 }
 
-export function parseRoutePattern(pattern: string): { method: string; path: string } {
+export interface ParsedRoutePattern {
+  method: string;
+  path: string;
+}
+
+export function parseRoutePattern(pattern: string): ParsedRoutePattern {
   const trimmed = pattern.trim();
   const parts = trimmed.split(/\s+/);
   const method = parts.length > 1 ? (parts[0] ?? "*").toUpperCase() : "*";
@@ -82,17 +87,22 @@ export function parseRoutePattern(pattern: string): { method: string; path: stri
   return { method, path };
 }
 
+export function routePatternKey(parsed: ParsedRoutePattern): string {
+  return parsed.method === "*" ? parsed.path : `${parsed.method} ${parsed.path}`;
+}
+
 export function createGatewayApp(options: GatewayAppOptions): Hono {
   const asset = options.asset ?? ARC_TESTNET_USDC;
   const app = new Hono();
   app.get("/health", (c) =>
     c.json({ ok: true, network: options.network, payTo: getAddress(options.payTo), asset })
   );
+  const parsed = Object.entries(options.routes).map(([pattern, route]) => ({ ...parseRoutePattern(pattern), route }));
   const paidRoutes: Record<string, PaidRouteConfig> = {};
-  for (const [pattern, route] of Object.entries(options.routes)) {
+  for (const { method, path, route } of parsed) {
     const { handler, ...config } = route;
     void handler;
-    paidRoutes[pattern] = config;
+    paidRoutes[routePatternKey({ method, path })] = config;
   }
   app.use(
     "*",
@@ -105,8 +115,7 @@ export function createGatewayApp(options: GatewayAppOptions): Hono {
       ...(options.settlement !== undefined ? { settlement: options.settlement } : {}),
     })
   );
-  for (const [pattern, route] of Object.entries(options.routes)) {
-    const { method, path } = parseRoutePattern(pattern);
+  for (const { method, path, route } of parsed) {
     if (method === "*") {
       app.all(path, route.handler);
     } else {

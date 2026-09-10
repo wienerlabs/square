@@ -22,6 +22,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@squaresdk/data": "file:../data",
     "undici": "^7.29.1"
   },
   "peerDependencies": {

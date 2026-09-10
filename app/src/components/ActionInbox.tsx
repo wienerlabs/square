@@ -5,6 +5,7 @@ import type { Address } from "viem";
 import { AmountUsdc } from "@/components/AmountUsdc";
 import { PanelCard } from "@/components/PanelCard";
 import { StatusPill, phaseTone } from "@/components/StatusPill";
+import { submitDeadline } from "@/lib/actions";
 import { formatCountdown, formatTimestamp } from "@/lib/format";
 import { walletInbox, walletJobCount } from "@/lib/inbox";
 import { jobPhase, PHASE_LABELS, type JobSummary } from "@/lib/square";
@@ -51,9 +52,11 @@ export function ActionInbox({ jobs, address, now, scanned }: { jobs: JobSummary[
                       <span className="text-caption tabular-nums text-graphite">
                         {group.kind === "dispute" && job.challengeEnd > 0
                           ? formatCountdown(job.challengeEnd, now)
-                          : group.kind === "submit" || group.kind === "fund" || group.kind === "budget"
-                            ? `Expires ${formatTimestamp(job.expiredAt)}`
-                            : ""}
+                          : group.kind === "submit"
+                            ? `Submit by ${formatTimestamp(submitDeadline(job))}`
+                            : group.kind === "fund" || group.kind === "budget"
+                              ? `Expires ${formatTimestamp(job.expiredAt)}`
+                              : ""}
                       </span>
                       <span className="flex items-center gap-3">
                         <AmountUsdc value={job.budget} className="text-caption" />

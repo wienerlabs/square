@@ -15,6 +15,7 @@ contract MockComplianceModule is IComplianceModule {
 
     Check[] public checks;
     bool public rejectAll;
+    bool public refuseAll;
     bytes32 public expectedProof;
     uint256 public gasToBurn;
 
@@ -22,6 +23,10 @@ contract MockComplianceModule is IComplianceModule {
 
     function setRejectAll(bool value) external {
         rejectAll = value;
+    }
+
+    function setRefuseAll(bool value) external {
+        refuseAll = value;
     }
 
     function setExpectedProof(bytes32 value) external {
@@ -63,10 +68,9 @@ contract MockComplianceModule is IComplianceModule {
             while (start - gasleft() < gasToBurn) x = uint256(keccak256(abi.encode(x)));
         }
         if (rejectAll) revert ReleaseNotCompliant(jobId, payee, amount);
-        if (expectedProof != bytes32(0) && keccak256(proof) != expectedProof) {
-            revert ReleaseNotCompliant(jobId, payee, amount);
-        }
         checks.push(Check(jobId, payee, amount, token, client, proof));
+        if (refuseAll) return false;
+        if (expectedProof != bytes32(0) && keccak256(proof) != expectedProof) return false;
         return true;
     }
 

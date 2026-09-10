@@ -1,0 +1,223 @@
+# The local stack: a chain, a database, the contracts on the chain, the circuit
+# artifacts, and the four long-running processes. `make up` is the one command;
+# this file is what it runs.
+#
+# Nothing here carries an address, a chain id or a key of its own. Addresses
+# reach the services as a deployment file that the deployer writes after it puts
+# the contracts on the chain, and everything else comes from the environment --
+# .env if you have one, .env.example's defaults if you do not. The one place a
+# chain id or an address is declared is packages/core/src/deployments.ts, and
+# packages/core/test/single-source.test.ts fails if a second copy appears.
+#
+# `docker compose up --wait` returns only once every health check below passes,
+# so a zero exit status from `make up` is the evidence that the stack is up.
+
+name: square
+
+volumes:
+  postgres-data:
+  circuit-artifacts:
+
+services:
+  # ── the chain ────────────────────────────────────────────────────────────
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:v1.8.1
+    # The default mnemonic is the one DeployLocal.s.sol derives its deployer
+    # from, so it is left alone rather than restated here.
+    # One string, not a folded block: this image's entrypoint is `/bin/sh -c`,
+    # so a multi-word command reaches it as `sh -c anvil --host ...`, where
+    # everything after the first word becomes $0, $1, ... and is dropped. anvil
+    # then binds 127.0.0.1 and nothing on the compose network can reach it.
+    command: ["anvil --host 0.0.0.0 --chain-id ${CHAIN_ID:-31337} --block-time ${ANVIL_BLOCK_TIME:-2}"]
+    ports:
+      - "${ANVIL_PORT:-8545}:8545"
+    healthcheck:
+      test: ["CMD", "cast", "block-number", "--rpc-url", "http://127.0.0.1:8545"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  # ── the contracts on it ──────────────────────────────────────────────────
+  # One shot. Writes contracts/deployments/<chainId>.json, which is what the
+  # indexer and the keeper read; the host sees the same file, so the CLI and
+  # the host-side tests get the addresses too. Foundry's own build output is
+  # pushed to /tmp so a container build cannot fight a host build over out/.
+  deployer:
+    image: ghcr.io/foundry-rs/foundry:v1.8.1
+    depends_on:
+      anvil:
+        condition: service_healthy
+    working_dir: /contracts
+    volumes:
+      - ./contracts:/contracts
+    environment:
+      FOUNDRY_OUT: /tmp/out
+      FOUNDRY_CACHE_PATH: /tmp/cache
+      FOUNDRY_BROADCAST: /tmp/broadcast
+    # Root, then hand the result back. The image's own user is uid 1000, which
+    # can write into the mounted tree on a developer's machine and cannot on a
+    # Linux CI runner, where the checkout belongs to somebody else. Writing as
+    # root always works; the chown afterwards means the file that lands in the
+    # working tree belongs to whoever owns the directory it landed in, rather
+    # than to root.
+    user: "0:0"
+    command:
+      - >-
+        forge script script/DeployLocal.s.sol:DeployLocal
+        --rpc-url ${RPC_URL:-http://anvil:8545} --broadcast
+        && chown -R "$(stat -c '%u:%g' /contracts)" /contracts/deployments
+
+  # ── the database ─────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-square}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-square}
+      POSTGRES_DB: ${POSTGRES_DB:-square}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-square} -d ${POSTGRES_DB:-square}"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # The services do not migrate when DATABASE_URL is set -- they migrate only
+  # the in-memory database they fall back to -- so the schema is applied once,
+  # here, before either of them starts.
+  migrate:
+    build:
+      context: .
+      dockerfile: services/indexer/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://square:square@postgres:5432/square}
+    command: ["node", "node_modules/@squaresdk/data/dist/cli.js", "migrate", "up"]
+
+  # ── the circuit artifacts ────────────────────────────────────────────────
+  # One shot: copies payment.wasm and payment.zkey into the shared volume the
+  # prover mounts. The compile happens in the image build, so this reruns in
+  # about a second once the layer is cached.
+  circuits:
+    build:
+      context: .
+      dockerfile: circuits/Dockerfile
+    platform: linux/amd64
+    volumes:
+      - circuit-artifacts:/artifacts
+
+  # ── the services ─────────────────────────────────────────────────────────
+  prover:
+    build:
+      context: .
+      dockerfile: services/prover/Dockerfile
+    depends_on:
+      circuits:
+        condition: service_completed_successfully
+    environment:
+      PROVER_SERVICE_PORT: 3003
+      PROVER_ARTIFACTS_DIR: /artifacts
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    volumes:
+      - circuit-artifacts:/artifacts:ro
+    ports:
+      - "${PROVER_PORT:-3003}:3003"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3003/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  indexer:
+    build:
+      context: .
+      dockerfile: services/indexer/Dockerfile
+    depends_on:
+      anvil:
+        condition: service_healthy
+      deployer:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      CHAIN_ID: ${CHAIN_ID:-31337}
+      RPC_URL: ${RPC_URL:-http://anvil:8545}
+      SQUARE_DEPLOYMENT_FILE: /deployments/${CHAIN_ID:-31337}.json
+      DATABASE_URL: ${DATABASE_URL:-postgres://square:square@postgres:5432/square}
+      PORT: 3010
+      START_BLOCK: ${START_BLOCK:-0}
+      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-1000}
+      SQUARE_VERSION: ${SQUARE_VERSION:-0.1.0}
+    volumes:
+      - ./contracts/deployments:/deployments:ro
+    ports:
+      - "${INDEXER_PORT:-3010}:3010"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3010/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  keeper:
+    build:
+      context: .
+      dockerfile: services/keeper/Dockerfile
+    depends_on:
+      anvil:
+        condition: service_healthy
+      deployer:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      CHAIN_ID: ${CHAIN_ID:-31337}
+      RPC_URL: ${RPC_URL:-http://anvil:8545}
+      SQUARE_DEPLOYMENT_FILE: /deployments/${CHAIN_ID:-31337}.json
+      DATABASE_URL: ${DATABASE_URL:-postgres://square:square@postgres:5432/square}
+      # No default. The keeper signs transactions, so refusing to start without
+      # a key is the correct behaviour; .env.example carries anvil's published
+      # test key for the local chain and says so.
+      KEEPER_PRIVATE_KEY: ${KEEPER_PRIVATE_KEY:?set KEEPER_PRIVATE_KEY, see .env.example}
+      PORT: 3011
+      SQUARE_VERSION: ${SQUARE_VERSION:-0.1.0}
+    volumes:
+      - ./contracts/deployments:/deployments:ro
+    ports:
+      - "${KEEPER_PORT:-3011}:3011"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3011/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # ── the application ──────────────────────────────────────────────────────
+  # next.config.ts sets output: "export", so this is a static bundle behind a
+  # file server. The NEXT_PUBLIC_ values are read by a browser on the host, so
+  # they name the published ports rather than the compose network.
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+      args:
+        NEXT_PUBLIC_CHAIN_ID: ${CHAIN_ID:-31337}
+        NEXT_PUBLIC_RPC_URL: ${NEXT_PUBLIC_RPC_URL:-http://localhost:8545}
+        NEXT_PUBLIC_INDEXER_URL: ${NEXT_PUBLIC_INDEXER_URL:-http://localhost:3010}
+    depends_on:
+      indexer:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-3000}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s

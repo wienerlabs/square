@@ -147,6 +147,29 @@ those apply here: one level, position inside the leaf, and a leaf is a
 Everything in the right-hand column stays private. An auditor learns that the
 checks ran, not what the operator's limits or lists were.
 
+**Rule 6's window cannot cross midnight.** The circuit computes
+`hour >= start AND hour <= end`, which is empty whenever `start > end`, so a
+policy of 22:00 to 06:00 would put no hour of any day inside the window and
+refuse every payment it covers. The prover refuses such a policy instead: since
+[#148][i148], `allowed_hours_start > allowed_hours_end` is a 400 whose message
+says the window is not modelled, and both hours have to be in 0..23 — the range
+the OpenAPI document had declared and nothing enforced. An overnight window is
+expressed as two policies, one per side of midnight.
+
+**And it is one window, over at least one day.** The commitment's eighth field
+is `time_field = Poseidon(1, days_bitmask, start, end)`, which holds a single
+window and has room for exactly one. A request carrying a second
+`time_restrictions` entry used to be validated field by field and then dropped
+by the builder, which reads only the first — so the policy the caller sent and
+the policy the proof covered were different documents. Since [#181][i181] the
+service refuses the second entry instead. An empty `allowed_days` is refused
+for the same reason as the overnight window: it forbids every weekday, so no
+payment could satisfy the rule. Leaving `time_restrictions` out is how a policy
+says it has no window at all.
+
+[i148]: https://github.com/wienerlabs/square/issues/148
+[i181]: https://github.com/wienerlabs/square/issues/181
+
 ### Rule 5 binds nobody, and the reason is structural
 
 **`payment_category` is the operator's own statement about what a payment was

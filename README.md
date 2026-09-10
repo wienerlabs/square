@@ -38,7 +38,7 @@ replace. Nothing carries an assurance claim.
 | Layer | State |
 |---|---|
 | Identity: `did:aip` v2, agent card, CLI, Universal Resolver driver | live against ERC-8004 on Arc Testnet ([docs/smoke](docs/smoke/)) |
-| Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | deployed on Arc Testnet, covered by the Foundry suite including a bond-solvency invariant, the five settlement paths run on the testnet with real USDC and the deployed ERC-8004 registries ([docs/deploy/lifecycle-5042002.md](docs/deploy/lifecycle-5042002.md)) |
+| Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | deployed on Arc Testnet, covered by the Foundry suite including a bond-solvency invariant, the five settlement paths run on the testnet with real USDC and the deployed ERC-8004 registries ([docs/deploy/lifecycle-5042002-2026-09-09.md](docs/deploy/lifecycle-5042002-2026-09-09.md)) |
 | Services: indexer, keeper, x402 gateway, data layer, observability | implemented and tested against the local stack |
 | Compliance: circuit, prover, Groth16 verifier, `ComplianceHook` | circuit, prover and verifier live (#14, #18, #17); the hook slot is open (#27) |
 | Website (`site/`) | live at [square-protocol.vercel.app](https://square-protocol.vercel.app), adapted from an MIT template with Square's own copy and surfaces, every button leads to the app |
@@ -99,6 +99,22 @@ is not ported.
 | [aperture](https://github.com/wienerlabs/aperture) | Circom circuit, Poseidon policy commitment, prover service |
 | [aip-beta](https://github.com/dr-wilson-empty/aip-beta) | `did:aip` spec and resolver, A2A task protocol, MCP bridge, agent SDK |
 | [covenant](https://github.com/wienerlabs/covenant) | Escrow state machine (as specification), x402 verifier, chain-agnostic hardening |
+
+## Running it
+
+Everything, on a local chain, from one command:
+
+```bash
+make up
+```
+
+That brings up anvil, deploys the contracts to it, migrates Postgres, builds
+the circuit artifacts, and starts the prover, the indexer, the keeper and the
+application, returning only once all four report healthy. Docker, git and
+make are the whole prerequisite.
+[docs/deploy/local-stack.md](docs/deploy/local-stack.md)
+has the ports, the measured start-up time and how to point the same stack at
+Arc testnet.
 
 ## Layout
 
@@ -200,6 +216,7 @@ are the 2026-09-09 redeploy's**; the superseded sets, what changed each time and
 the sweep of the balances they held are in
 [docs/deploy/redeploy-2026-09-08.md](docs/deploy/redeploy-2026-09-08.md) and
 [docs/deploy/redeploy-2026-09-09.md](docs/deploy/redeploy-2026-09-09.md).
+The checklist a redeploy walks is [docs/deploy/README.md](docs/deploy/README.md).
 Testnet parameters: challenge window 120 s, dispute window 300 s, finalize grace
 600 s (so `settlementHorizon()` reads 1020 s), evaluator fee 0.5 %, platform fee
 1 %, bond 10 % with a 1 USDC floor, three arbiters with threshold 2. The owner is
@@ -216,7 +233,9 @@ still the deployer; a Safe takes over before mainnet.
 `@squaresdk/core` carries these addresses (`deployments[5042002]`). The five
 settlement paths were run against them with real USDC and a provider registered
 as ERC-8004 agent `892531`; every transaction hash and the measured gas are in
-[docs/deploy/lifecycle-5042002.md](docs/deploy/lifecycle-5042002.md).
+[docs/deploy/lifecycle-5042002-2026-09-09.md](docs/deploy/lifecycle-5042002-2026-09-09.md),
+the dated record of that run. `docs/deploy/lifecycle-5042002.md` holds whatever
+ran last.
 
 ## License
 

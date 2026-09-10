@@ -223,3 +223,137 @@ describe('which error wins when two things are wrong', () => {
       .rejects.toThrow(/Missing required field\(s\): .*max_daily_spend.*policy_salt|.*policy_salt.*max_daily_spend/);
   });
 });
+
+// square#148. The window's hours had three upper bounds and none of them was
+// enforced: openapi.js declared 0..23, the circuit's Num2Bits(5) allowed 0..31,
+// and toFieldString allowed everything under the BN254 modulus. And nothing
+// anywhere refused start > end, which is a window no hour satisfies.
+describe('the window hours are bounded, and the window has a direction', () => {
+  it.each([
+    ['midnight to midnight', 0, 0],
+    ['a single hour', 12, 12],
+    ['the whole day', 0, 23],
+    ['a working day', 9, 17],
+  ])('accepts %s', async (_name, start, end) => {
+    const input = await build({
+      time_restrictions: [{ ...WINDOW, allowed_hours_start: start, allowed_hours_end: end }],
+    });
+    expect(input.time_start_hour_utc).toBe(String(start));
+    expect(input.time_end_hour_utc).toBe(String(end));
+  });
+
+  // 24..31 is the gap between the schema and the circuit. Both sides accepted
+  // it and neither is an hour: an end of 31 behaves like 23, and a start of 25
+  // empties the window so every payment under the policy is refused.
+  it.each([24, 25, 31])('rejects %i, which the circuit would have accepted', async (hour) => {
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_hours_start: hour }] }))
+      .rejects.toThrow('time_restrictions.allowed_hours_start: must be an hour of the day, 0 to 23');
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_hours_end: hour }] }))
+      .rejects.toThrow('time_restrictions.allowed_hours_end: must be an hour of the day, 0 to 23');
+  });
+
+  // 32 and above used to fail inside witness generation, where the caller got a
+  // constraint error rather than the name of the field they got wrong.
+  it.each([32, 99999, '1788356730'])('rejects %s by field name, not in the witness', async (hour) => {
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_hours_end: hour }] }))
+      .rejects.toThrow('time_restrictions.allowed_hours_end: must be an hour of the day, 0 to 23');
+  });
+
+  it('still rejects a non-integer hour by field name', async () => {
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_hours_start: 9.5 }] }))
+      .rejects.toThrow('time_restrictions.allowed_hours_start: must be a whole number');
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_hours_start: -1 }] }))
+      .rejects.toThrow(/allowed_hours_start/);
+  });
+
+  // The finding. 22:00 to 06:00 is an ordinary thing to want for an agent that
+  // works overnight; the circuit computes `hour >= start AND hour <= end`, so
+  // under it no hour of any day is inside the window and every payment the
+  // policy covers is refused with the same 'time_window' a genuine miss gets.
+  it.each([
+    ['an overnight window', 22, 6],
+    ['one hour backwards', 10, 9],
+    ['the widest wrap', 23, 0],
+  ])('rejects %s rather than accepting one nothing satisfies', async (_name, start, end) => {
+    await expect(build({
+      time_restrictions: [{ ...WINDOW, allowed_hours_start: start, allowed_hours_end: end }],
+    })).rejects.toThrow(/allowed_hours_start must not be later than allowed_hours_end/);
+  });
+
+  it('says why, so the caller learns the night window is not modelled', async () => {
+    await expect(build({
+      time_restrictions: [{ ...WINDOW, allowed_hours_start: 22, allowed_hours_end: 6 }],
+    })).rejects.toThrow(/window that crosses midnight is not modelled/);
+  });
+
+  // normalize.js exists so a policy value never reaches a log line or a response.
+  it('never echoes the hour it refused', async () => {
+    const secret = 99999;
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_hours_end: secret }] }))
+      .rejects.toThrow(expect.not.stringContaining(String(secret)));
+  });
+});
+
+// square#181. Three ways a policy reached the circuit as something other than
+// what was sent, all measured by running buildCircuitInput rather than reading it.
+describe('one window, and it has to be a window somebody could satisfy', () => {
+  // The finding. validateRequest checked every entry field by field, which says
+  // plural is supported; buildCircuitInput reads `[0]` and nothing else.
+  it('refuses a second entry rather than validating it and dropping it', async () => {
+    const second = { ...WINDOW, allowed_days: ['saturday'], allowed_hours_start: 10, allowed_hours_end: 12 };
+    await expect(build({ time_restrictions: [WINDOW, second] }))
+      .rejects.toThrow(/2 entries were given and only one window can be proved/);
+  });
+
+  it('says why, so the caller learns the commitment holds one window', async () => {
+    await expect(build({ time_restrictions: [WINDOW, WINDOW] }))
+      .rejects.toThrow(/commitment covers a single window/);
+  });
+
+  it('still takes exactly one', async () => {
+    const input = await build({ time_restrictions: [WINDOW] });
+    expect(input.time_active).toBe('1');
+    expect(input.time_start_hour_utc).toBe('9');
+  });
+
+  // The timezone used to be checked on `[0]` only, and after validation. A
+  // second record could carry a zone that is refused when sent on its own.
+  it('refuses a timezone it does not support, in the only record there is', async () => {
+    await expect(build({ time_restrictions: [{ ...WINDOW, timezone: 'America/New_York' }] }))
+      .rejects.toThrow("time_restrictions.timezone: only 'UTC' is supported");
+  });
+
+  // The finding itself: on main this request was accepted and the second
+  // record's America/New_York never looked at, even though the same value sent
+  // on its own is refused. It cannot slip through now, because a second record
+  // does not get that far.
+  it('no longer lets a second record carry a timezone nobody checks', async () => {
+    const newYork = { ...WINDOW, timezone: 'America/New_York' };
+    await expect(build({ time_restrictions: [WINDOW, newYork] })).rejects.toThrow(
+      /only one window can be proved/,
+    );
+  });
+
+  it('leaves the timezone optional, as it was', async () => {
+    const { timezone: _dropped, ...withoutZone } = WINDOW;
+    const input = await build({ time_restrictions: [withoutZone] });
+    expect(input.time_active).toBe('1');
+  });
+
+  // An empty day list forbids every weekday: the same class of value as the
+  // `??` defaults this file already refuses, and it was the one getting through.
+  it('refuses an empty day list rather than forbidding every weekday', async () => {
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_days: [] }] }))
+      .rejects.toThrow(/must name at least one day/);
+  });
+
+  it('says how to express no window at all', async () => {
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_days: [] }] }))
+      .rejects.toThrow(/omit time_restrictions entirely/);
+  });
+
+  it('and one day is enough', async () => {
+    const input = await build({ time_restrictions: [{ ...WINDOW, allowed_days: ['wednesday'] }] });
+    expect(input.time_days_bitmask).toBe('4');
+  });
+});

@@ -30,7 +30,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): DriverConfig {
       throw new Error("DRIVER_RPC is not valid JSON");
     }
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error('DRIVER_RPC must be an object, e.g. {"5042002":"https://..."}');
+      throw new Error('DRIVER_RPC must be an object, e.g. {"<chainId>":"https://..."}');
     }
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
       const id = Number(k);
@@ -48,7 +48,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): DriverConfig {
   if (Object.keys(rpc).length === 0) {
     throw new Error(
       "No chains configured. Set DRIVER_RPC or RPC_<chainId>, " +
-        "e.g. RPC_5042002=https://rpc.testnet.arc.io"
+        "e.g. RPC_<chainId>=https://your-endpoint"
     );
   }
 
