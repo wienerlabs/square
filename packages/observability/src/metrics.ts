@@ -4,7 +4,7 @@ export const DEFAULT_PREFIX = "square";
 
 export type KeeperActionResult = "success" | "failure" | "skipped";
 
-export type HookWriteKind = "reputation" | "validation";
+export type HookWriteKind = "reputation" | "validation" | "hookCall";
 
 export type AlertDispatchStage = "evaluate" | "notify";
 
@@ -280,7 +280,7 @@ export function createMetrics(options: MetricsOptions): Metrics {
   });
   const hookWriteFailures = new Counter({
     name: names.hookWriteFailures,
-    help: "ERC-8004 registry writes the hook could not land, by kind. These should never fire.",
+    help: "Hook work the kernel could not land, by kind: a registry write that reverted, or a hook call that never completed. These should never fire.",
     labelNames: ["kind"] as const,
     registers,
   });
