@@ -4,7 +4,7 @@ import { agentFromDid, hashDeliverable, JobStatus, Outcome, specHashFromDescript
 import { InvalidDidError } from "@squaresdk/did-resolver";
 import { useSearchParams } from "next/navigation";
 import { useMemo, useState, type ReactNode } from "react";
-import { getAddress, isAddress, isAddressEqual, type Address } from "viem";
+import { isAddressEqual, type Address } from "viem";
 import { useAccount } from "wagmi";
 import { AddressLink } from "@/components/AddressLink";
 import { AmountUsdc } from "@/components/AmountUsdc";
@@ -18,9 +18,10 @@ import { JsonEditor } from "@/components/JsonEditor";
 import { PanelCard } from "@/components/PanelCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { StatusPill, listingTone, outcomeTone, phaseTone } from "@/components/StatusPill";
+import { addressInputError, readAddressInput } from "@/lib/address";
 import { challengeWindowClosed, disputeAvailable, keeperEvaluates as evaluatedByKeeper, refundAvailable } from "@/lib/actions";
 import { chartColors, formatCompactUsdc, payoutSplit, settlementClock } from "@/lib/charts";
-import { formatBps, formatCountdown, formatDuration, formatTimestamp, formatUsdc, isZeroAddress, parseUsdc, shortHash, statusLabel } from "@/lib/format";
+import { formatBps, formatCountdown, formatDuration, formatTimestamp, formatUsdc, isZeroAddress, parseUsdc, shortAddress, shortHash, statusLabel } from "@/lib/format";
 import {
   countVotes,
   jobPhase,
@@ -109,15 +110,16 @@ function SimpleAction({
 
 function SetProviderAction({ ctx }: { ctx: ActionContext }) {
   const [value, setValue] = useState("");
-  const valid = isAddress(value) && !isZeroAddress(value);
+  const parsed = readAddressInput(value);
+  const provider = parsed.kind === "valid" && !isZeroAddress(parsed.address) ? parsed.address : null;
   return (
     <ActionCard
       title="Set provider"
       description="The job was opened without a provider, so funding reverts with ProviderNotSet. Only the client may name one, only while the job is open, and only once."
       buttonLabel="Set provider"
-      disabled={!valid}
+      disabled={provider === null}
       onClick={() => {
-        if (valid) void ctx.run("Set provider", () => ctx.square.setProvider(ctx.id, getAddress(value)));
+        if (provider !== null) void ctx.run("Set provider", () => ctx.square.setProvider(ctx.id, provider));
       }}
       ctx={ctx}
     >
@@ -125,7 +127,7 @@ function SetProviderAction({ ctx }: { ctx: ActionContext }) {
         label="Provider address"
         htmlFor="provider"
         hint="An agent's wallet on this chain. It is fixed once set."
-        error={value.length > 0 && !valid ? "Enter a 0x address of 40 hex characters." : null}
+        error={addressInputError(parsed)}
       >
         <input
           id="provider"
@@ -137,6 +139,13 @@ function SetProviderAction({ ctx }: { ctx: ActionContext }) {
           spellCheck={false}
         />
       </Field>
+      {parsed.kind === "checksum" ? (
+        <div>
+          <GhostButton size="sm" onClick={() => setValue(parsed.suggestion)}>
+            Use {shortAddress(parsed.suggestion)}
+          </GhostButton>
+        </div>
+      ) : null}
     </ActionCard>
   );
 }

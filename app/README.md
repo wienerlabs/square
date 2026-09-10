@@ -98,6 +98,7 @@ src/lib/square.ts   useSquare() and every chain read hook
 src/lib/actions.ts  The gates the kernel enforces, shared by the job page, the inbox and the form
 src/lib/clock.ts    The offset between the chain and the browser clock, and the skew notice threshold
 src/lib/spec.ts     Checking a pasted spec against the spec: hash on chain
+src/lib/address.ts  Reading an address input: valid, checksum only, or malformed
 src/lib/indexer.ts  Optional indexer read API client
 src/lib/format.ts   USDC, address, timestamp and duration formatting
 src/lib/tx.tsx      Transaction runner and toast state
