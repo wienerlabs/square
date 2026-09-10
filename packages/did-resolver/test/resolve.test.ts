@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  ContractFunctionExecutionError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
+  HttpRequestError,
+  TimeoutError,
+} from "viem";
 import { AipDidResolver } from "../src/resolve.js";
+import { IDENTITY_REGISTRY_ABI } from "../src/registry.js";
 import type { ResolverOptions } from "../src/types.js";
 
 const REGISTRY = "0x8004a818bfb912233c491871b3d84c89a494bd9e";
@@ -7,6 +15,23 @@ const CHAIN = 5042002;
 const DID = (id: number | string) => `did:aip:eip155:${CHAIN}:${REGISTRY}:${id}`;
 const OWNER = "0x7954350d124ff904f0d4d89cceb4499c852c4628";
 const OWNER_CS = "0x7954350d124Ff904F0D4D89CCEB4499C852C4628";
+
+/** What viem's readContract throws: the cause wrapped in ContractFunctionExecutionError, which is the shape the resolver keys on. */
+function contractError(cause: Error, functionName: "ownerOf" | "tokenURI" | "getAgentWallet"): Error {
+  return new ContractFunctionExecutionError(cause as never, {
+    abi: IDENTITY_REGISTRY_ABI,
+    functionName,
+    args: [1n],
+    contractAddress: REGISTRY,
+  });
+}
+
+function revert(functionName: "ownerOf" | "tokenURI" | "getAgentWallet"): Error {
+  return contractError(
+    new ContractFunctionRevertedError({ abi: IDENTITY_REGISTRY_ABI, functionName, message: "execution reverted" }),
+    functionName,
+  );
+}
 
 /** Stand in for the chain so behaviour is tested, not connectivity. */
 function fakeChain(opts: {
@@ -22,7 +47,7 @@ function fakeChain(opts: {
     readContract: vi.fn(async ({ functionName, args }: any) => {
       const id = args[0] as bigint;
       if (functionName === "ownerOf") {
-        if (!opts.ownerOf) throw new Error("reverted");
+        if (!opts.ownerOf) throw revert("ownerOf");
         return opts.ownerOf(id);
       }
       if (functionName === "tokenURI") {
@@ -69,6 +94,33 @@ describe("resolve — never throws", () => {
     const r = resolverWith(fakeChain({}));
     const res = await r.resolve(DID(999999));
     expect(res.didResolutionMetadata.error).toBe("notFound");
+  });
+
+  it("reports notFound when the registry answers ownerOf with no data", async () => {
+    // No contract at the address, or one without ownerOf: the chain's "no",
+    // like a revert, not a fault in reaching it.
+    const chain = fakeChain({});
+    chain.readContract.mockRejectedValueOnce(
+      contractError(new ContractFunctionZeroDataError({ functionName: "ownerOf" }), "ownerOf"),
+    );
+    expect((await resolverWith(chain).resolve(DID(2))).didResolutionMetadata.error).toBe("notFound");
+  });
+
+  it("does not report a transport failure on ownerOf as notFound", async () => {
+    // The driver maps notFound to a cacheable 404 and networkError to a 502
+    // that says "retry". A rate limit or a dropped connection on this one
+    // read used to become an authoritative "this agent does not exist".
+    for (const transport of [
+      new HttpRequestError({ url: "http://stub", status: 429, details: "rate limited" }),
+      new TimeoutError({ body: {}, url: "http://stub" }),
+      new Error("socket hang up"),
+    ]) {
+      const chain = fakeChain({ ownerOf: () => OWNER });
+      chain.readContract.mockRejectedValueOnce(contractError(transport, "ownerOf"));
+      const res = await resolverWith(chain).resolve(DID(2));
+      expect(res.didResolutionMetadata.error, transport.constructor.name).toBe("networkError");
+      expect(res.didResolutionMetadata.errorMessage).toMatch(/ownerOf/);
+    }
   });
 });
 
@@ -179,6 +231,49 @@ describe("resolve — services", () => {
     const svc = res.didDocument!.service;
     expect(svc.map((s) => s.id)).toEqual([`${DID(2)}#a2a`, `${DID(2)}#a2a-2`]);
     expect(svc.every((s) => s.serviceEndpoint.startsWith("https://"))).toBe(true);
+  });
+
+  it("never gives two services the same id, whatever names the file chooses", async () => {
+    // "agent", "agent", "agent 2" used to produce #agent-2 twice: the counter
+    // counted base slugs, not the ids it had produced. DID Core requires ids
+    // within a document to be unique, and the file's owner picks the names.
+    const r = resolverWith(
+      fakeChain({ ownerOf: () => OWNER, tokenURI: () => "https://x/card.json" }),
+      {
+        fetchAgentUri: async () => ({
+          services: [
+            { name: "agent", endpoint: "https://a.example/1" },
+            { name: "agent", endpoint: "https://a.example/2" },
+            { name: "agent 2", endpoint: "https://a.example/3" },
+            { name: "agent-2", endpoint: "https://a.example/4" },
+          ],
+        }),
+      }
+    );
+    const ids = (await r.resolve(DID(2))).didDocument!.service.map((s) => s.id.slice(s.id.indexOf("#")));
+    expect(ids).toEqual(["#agent", "#agent-2", "#agent-2-2", "#agent-2-3"]);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("drops a service whose endpoint is not a URI", async () => {
+    // DID Core wants serviceEndpoint to be a URI. The file already gets the
+    // "drop what is not usable" treatment; an endpoint that does not parse
+    // is not usable.
+    const r = resolverWith(
+      fakeChain({ ownerOf: () => OWNER, tokenURI: () => "https://x/card.json" }),
+      {
+        fetchAgentUri: async () => ({
+          services: [
+            { name: "A2A", endpoint: "this is not a uri at all" },
+            { name: "MCP", endpoint: "/relative/path" },
+            { name: "DID", endpoint: "did:web:example.com" },
+            { name: "A2A", endpoint: "https://a.example/a2a" },
+          ],
+        }),
+      }
+    );
+    const svc = (await r.resolve(DID(2))).didDocument!.service;
+    expect(svc.map((s) => s.serviceEndpoint)).toEqual(["did:web:example.com", "https://a.example/a2a"]);
   });
 
   it("marks an inactive registration deactivated, and says why", async () => {

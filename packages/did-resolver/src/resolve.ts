@@ -1,4 +1,11 @@
-import { createPublicClient, http, type PublicClient } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
+  createPublicClient,
+  http,
+  type PublicClient,
+} from "viem";
 import { buildDidDocument, type RegistrationFile } from "./document.js";
 import { AgentUriError, defaultFetchAgentUri } from "./fetch.js";
 import { InvalidDidError, parseDid } from "./parse.js";
@@ -10,6 +17,12 @@ import type {
   ResolutionWarning,
   ResolverOptions,
 } from "./types.js";
+
+/** The contract answered, and the answer was a revert or empty data: the chain's own "no". */
+function chainSaidNo(err: unknown): boolean {
+  if (!(err instanceof BaseError)) return false;
+  return err.walk((e) => e instanceof ContractFunctionRevertedError || e instanceof ContractFunctionZeroDataError) !== null;
+}
 
 function failure(
   error: ResolutionErrorCode,
@@ -131,8 +144,13 @@ export class AipDidResolver {
     let owner: string;
     try {
       owner = (await client.readContract({ ...contract, functionName: "ownerOf", args: [parsed.agentId] })) as string;
-    } catch {
-      // ERC-721 ownerOf reverts for a token that was never minted or was burned.
+    } catch (err) {
+      // ERC-721 ownerOf reverts for a token that was never minted or was
+      // burned, and that is notFound. A transport failure, a timeout or a
+      // rate limit is not: the driver maps notFound to a cacheable 404 and
+      // networkError to a 502 that says "retry", and a flaky RPC must not
+      // turn into an authoritative "this agent does not exist".
+      if (!chainSaidNo(err)) return failure("networkError", `ownerOf could not be read: ${String(err)}`);
       return failure("notFound", `agent ${parsed.agentId} does not exist in ${parsed.registry}`);
     }
 

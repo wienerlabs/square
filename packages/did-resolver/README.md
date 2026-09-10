@@ -27,6 +27,10 @@ the agent has a registration file, one fetch. That is the whole method.
 **`resolve()` never throws.** Every failure is a code in `didResolutionMetadata.error`.
 Resolution gets embedded in agent-to-agent dispatch, where an exception takes down the
 caller rather than just the lookup. The predecessor made the same promise and it is kept.
+The codes mean what they say: `notFound` is the chain's own answer (`ownerOf` reverted, or
+the registry returned no data), and a transport failure, timeout or rate limit on that
+same read is `networkError`, which the driver maps to a retryable 502 rather than a
+cacheable 404.
 
 **An unreachable registration file is a warning, not a failure.** On-chain state is
 authoritative for identity; an identity that vanishes because an IPFS gateway is down is
