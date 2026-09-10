@@ -12,7 +12,10 @@ export interface IndexerConfig {
   port: number;
   databaseUrl: string | undefined;
   version: string;
+  corsOrigins: string[];
   maxLagBlocks: bigint;
+  maxSyncAgeMs: number;
+  startupGraceMs: number;
   alertIntervalMs: number;
   alertWebhookUrl: string | undefined;
   onDeploymentChange: DeploymentChangePolicy;
@@ -30,6 +33,13 @@ function integer(name: string, fallback: number): number {
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer`);
   return value;
+}
+
+function originList(name: string): string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 }
 
 export function loadDeployment(chainId: number): SquareDeployment {
@@ -57,7 +67,10 @@ export function configFromEnv(): IndexerConfig {
     port: integer("PORT", 3010),
     databaseUrl: process.env["DATABASE_URL"],
     version: process.env["SQUARE_VERSION"] ?? "0.1.0",
+    corsOrigins: originList("CORS_ORIGINS"),
     maxLagBlocks: BigInt(integer("MAX_LAG_BLOCKS", 100)),
+    maxSyncAgeMs: integer("MAX_SYNC_AGE_MS", 120_000),
+    startupGraceMs: integer("STARTUP_GRACE_MS", 60_000),
     alertIntervalMs: integer("ALERT_INTERVAL_MS", 30_000),
     alertWebhookUrl: process.env["ALERT_WEBHOOK_URL"],
     onDeploymentChange: deploymentChangePolicy(),

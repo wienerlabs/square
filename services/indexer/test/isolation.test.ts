@@ -4,6 +4,7 @@ import { deploymentFor, keeperEvaluatorAbi, squareHookAbi, squareJobAbi, type Sq
 import { checkpoints, jobs, ledgerBalances, migrate, MIGRATIONS_DIR, pgliteDatabase, type Database } from "@squaresdk/data";
 import { createHealth, createMetrics, type Metrics } from "@squaresdk/observability";
 import { createApi } from "../src/api.js";
+import { indexerChecks } from "../src/checks.js";
 import { Indexer } from "../src/sync.js";
 
 const CHAIN = 31337;
@@ -361,20 +362,22 @@ describe("signals the operator can act on", () => {
       const health = createHealth({
         service: "square-indexer",
         version: "0",
-        checks: {
-          lag: {
-            check: () => {
-              const lag = indexer.chainHead - (indexer.lastIndexedBlock ?? 0n);
-              return { ok: lag <= 100n, detail: `${lag} blocks behind` };
-            },
-            critical: true,
-          },
-        },
+        checks: indexerChecks({
+          db,
+          publicClient: { getChainId: async () => CHAIN },
+          chainId: CHAIN,
+          indexer,
+          maxLagBlocks: 100n,
+          maxSyncAgeMs: 120_000,
+          startupGraceMs: 60_000,
+        }),
       });
       const api = createApi({ db, chainId: CHAIN, indexer, health, metrics });
       const response = await api.request("/health");
       expect(response.status).toBe(503);
-      expect(((await response.json()) as { status: string }).status).toBe("unhealthy");
+      const body = (await response.json()) as { status: string; checks: Record<string, { ok: boolean; detail?: string }> };
+      expect(body.status).toBe("unhealthy");
+      expect(body.checks["lag"]).toMatchObject({ ok: false, detail: "4999 blocks behind, limit 100" });
     } finally {
       await db.close();
     }
