@@ -1,4 +1,4 @@
-import { readFile, writeFile, rename, unlink } from "node:fs/promises";
+import { readFile, writeFile, rename, stat, unlink } from "node:fs/promises";
 import { randomBytes, createCipheriv, createDecipheriv, scrypt as scryptCb } from "node:crypto";
 import { promisify } from "node:util";
 import { getAddress, type Address, type Hex } from "viem";
@@ -19,7 +19,7 @@ const scrypt = promisify(scryptCb) as (
  * second and 128 MiB per attempt, which is the point: it is the only thing
  * standing between a stolen keystore file and the key inside it.
  */
-const SCRYPT_PARAMS = { N: 2 ** 17, r: 8, p: 1, keyLen: 32, maxmem: 256 * 1024 * 1024 };
+const SCRYPT_PARAMS = { N: 2 ** 17, r: 8, p: 1, keyLen: 32 as const, maxmem: 256 * 1024 * 1024 };
 
 /**
  * Version 2 holds a secp256k1 key; version 1 held an Ed25519 Solana keypair.
@@ -33,11 +33,33 @@ const LEGACY_SOLANA_VERSION = 1;
 
 const ALGORITHM = "aes-256-gcm" as const;
 const IV_LENGTH = 12;
+const AUTH_TAG_LENGTH = 16;
 const SALT_LENGTH = 32;
 /** secp256k1 private keys are 32 bytes; the Ed25519 keypairs this replaced were 64. */
 const PRIVATE_KEY_LENGTH = 32;
 const MIN_PASSPHRASE = 8;
+/**
+ * The cost range a file may ask for. 2^17 is what this CLI writes; a file
+ * asking for less has been edited towards cheap, one asking for more towards
+ * a memory error. Both are the file's word against the format's, and the
+ * format wins.
+ */
+const SCRYPT_N_MIN = 2 ** 14;
+const SCRYPT_N_MAX = 2 ** 18;
 
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+/** base64 that decodes to exactly `bytes`. A tag of one byte is not a tag. */
+const base64Of = (bytes: number) =>
+  z.string().regex(BASE64).refine((s) => Buffer.from(s, "base64").length === bytes, {
+    message: `expected ${bytes} bytes of base64`,
+  });
+
+/**
+ * As tight as the format actually is. Every field below is handed to Node's
+ * crypto, and Node reports a wrong-length tag or an off-range cost in its own
+ * words with exit code 1; a file that does not fit the format is malformed,
+ * and says so through the same door as a file that is not JSON.
+ */
 export const KeystoreSchema = z.object({
   version: z.literal(KEYSTORE_VERSION),
   curve: z.literal("secp256k1"),
@@ -46,15 +68,20 @@ export const KeystoreSchema = z.object({
   algorithm: z.literal(ALGORITHM),
   kdf: z.object({
     name: z.literal("scrypt"),
-    salt: z.string(),
-    N: z.number().int().positive(),
-    r: z.number().int().positive(),
-    p: z.number().int().positive(),
-    keyLen: z.number().int().positive(),
+    salt: base64Of(SALT_LENGTH),
+    N: z
+      .number()
+      .int()
+      .min(SCRYPT_N_MIN)
+      .max(SCRYPT_N_MAX)
+      .refine((n) => (n & (n - 1)) === 0, { message: "N must be a power of two" }),
+    r: z.number().int().min(1).max(32),
+    p: z.number().int().min(1).max(16),
+    keyLen: z.literal(32),
   }),
-  iv: z.string(),
-  ciphertext: z.string(),
-  authTag: z.string(),
+  iv: base64Of(IV_LENGTH),
+  ciphertext: base64Of(PRIVATE_KEY_LENGTH),
+  authTag: base64Of(AUTH_TAG_LENGTH),
   createdAt: z.string(),
 });
 
@@ -151,17 +178,20 @@ export async function encryptKeystore(wallet: Wallet, passphrase: string): Promi
 }
 
 export async function decryptKeystore(keystore: Keystore, passphrase: string): Promise<Wallet> {
-  const key = await scrypt(passphrase, Buffer.from(keystore.kdf.salt, "base64"), keystore.kdf.keyLen, {
-    N: keystore.kdf.N,
-    r: keystore.kdf.r,
-    p: keystore.kdf.p,
-    maxmem: SCRYPT_PARAMS.maxmem,
-  });
-  const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(keystore.iv, "base64"));
-  decipher.setAuthTag(Buffer.from(keystore.authTag, "base64"));
-
+  // Everything the file feeds into crypto sits inside the try, not only the
+  // decryption. The schema keeps the parameters in range for a file that came
+  // through loadKeystore; a caller that built the object itself gets the
+  // same WalletError, not Node's.
   let plaintext: Buffer;
   try {
+    const key = await scrypt(passphrase, Buffer.from(keystore.kdf.salt, "base64"), keystore.kdf.keyLen, {
+      N: keystore.kdf.N,
+      r: keystore.kdf.r,
+      p: keystore.kdf.p,
+      maxmem: SCRYPT_PARAMS.maxmem,
+    });
+    const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(keystore.iv, "base64"));
+    decipher.setAuthTag(Buffer.from(keystore.authTag, "base64"));
     plaintext = Buffer.concat([
       decipher.update(Buffer.from(keystore.ciphertext, "base64")),
       decipher.final(),
@@ -223,7 +253,7 @@ export async function loadKeystore(): Promise<Keystore> {
     throw new WalletError(
       "This keystore holds a Solana (Ed25519) key from the aip CLI",
       "Square signs secp256k1 transactions on Arc. Create a new wallet with " +
-        "'square login', or import an EVM key with 'square login --import-key'.",
+        "'square login', or import an EVM key from a file with 'square login --import-file <path>'.",
     );
   }
 
@@ -252,15 +282,47 @@ export async function deleteKeystore(): Promise<void> {
     await unlink(paths.keystoreFile());
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw err;
+    throw new ConfigError(
+      `Could not delete ${paths.keystoreFile()}: ${(err as Error).message}`,
+      "The keystore is still there. Fix the permissions on it and its directory, or remove it yourself.",
+    );
   }
 }
 
+/**
+ * Whether a keystore is on disk. Only ENOENT means "no"; a file that is there
+ * but cannot be looked at is an error, the same distinction loadKeystore
+ * makes. Deriving "absent" from a failed read let login rename a new keystore
+ * over one the user could not read, and logout report nothing to delete.
+ */
 export async function keystoreExists(): Promise<boolean> {
   try {
-    await readFile(paths.keystoreFile(), "utf8");
+    await stat(paths.keystoreFile());
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw new ConfigError(
+      `Could not look at ${paths.keystoreFile()}: ${(err as Error).message}`,
+      "Fix the permissions on it and its directory before running this again.",
+    );
+  }
+}
+
+/**
+ * Refuse to replace what cannot be read. `login --force` renames a new
+ * keystore over the old one, and rename needs the directory, not the file:
+ * an unreadable keystore would be replaced without anyone having seen what
+ * was in it. Malformed is fine here (replacing it is the documented way out);
+ * unreadable is not.
+ */
+export async function assertKeystoreReplaceable(): Promise<void> {
+  try {
+    await readFile(paths.keystoreFile());
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw new ConfigError(
+      `A keystore exists at ${paths.keystoreFile()} but could not be read: ${(err as Error).message}`,
+      "Nothing was written over it. Fix the permissions, or move it aside yourself, then run 'square login' again.",
+    );
   }
 }
