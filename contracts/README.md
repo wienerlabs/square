@@ -74,8 +74,11 @@ runbook as the deploy, and the deploy log prints the reminder.
 
 ## Superseding a deployment
 
-A redeploy leaves the previous contracts on chain with their balances. Before
-the old addresses are dropped from the SDK and the docs:
+The full checklist, including the documents a redeploy makes stale and the
+two places that carry the addresses, is
+[docs/deploy/README.md](../docs/deploy/README.md). A redeploy leaves the
+previous contracts on chain with their balances. Before the old addresses are
+dropped from the SDK and the docs:
 
 1. Finalize or reject every job still `Submitted` on the old `KeeperEvaluator`
    (`finalize` is permissionless), so no escrow stays in the old kernel.
