@@ -95,16 +95,45 @@ describe("payout split", () => {
     expect(split.clientShare).toBe(0);
     expect(split.net).toBeCloseTo(0.985);
   });
+
+  it("keeps a decided zero share at zero instead of reading it as a full payout", () => {
+    const split = payoutSplit({ budget: 1_000_000n, platformFeeBP: 100, evaluatorFeeBP: 50, providerBps: 0, status: JobStatus.Completed }, 985_000n);
+    expect(split.providerBps).toBe(0);
+    expect(split.providerShare).toBe(0);
+    expect(split.clientShare).toBeCloseTo(0.985);
+  });
 });
 
 describe("fee totals", () => {
   it("adds fees on completed jobs and refunds on rejected funded jobs", () => {
     const totals = feeTotals([
-      job({ id: 1n, status: JobStatus.Completed, budget: 2_000_000n }),
+      job({ id: 1n, status: JobStatus.Completed, budget: 2_000_000n, providerBps: 10_000 }),
       job({ id: 2n, status: JobStatus.Rejected, budget: 1_000_000n, fundedAt: 5 }),
       job({ id: 3n, status: JobStatus.Rejected, budget: 1_000_000n }),
     ]);
-    expect(totals).toEqual({ platform: 0.02, evaluator: 0.01, netPaid: 1.97, refunded: 1, completed: 1, rejected: 1 });
+    expect(totals).toEqual({ platform: 0.02, evaluator: 0.01, netPaid: 1.97, refunded: 1, splitToClient: 0, completed: 1, rejected: 1 });
+  });
+
+  it("splits the net of a decided job between the payee and the client, as SquareJob.complete does", () => {
+    const totals = feeTotals([job({ id: 1n, status: JobStatus.Completed, budget: 1_000_000n, providerBps: 4_000 })]);
+    expect(totals).toEqual({ platform: 0.01, evaluator: 0.005, netPaid: 0.394, refunded: 0.591, splitToClient: 0.591, completed: 1, rejected: 0 });
+  });
+
+  it("counts nothing as paid to the payee when a completed job was decided at a zero provider share", () => {
+    const totals = feeTotals([job({ id: 1n, status: JobStatus.Completed, budget: 1_000_000n, providerBps: 0 })]);
+    expect(totals.netPaid).toBe(0);
+    expect(totals.refunded).toBe(0.985);
+    expect(totals.splitToClient).toBe(0.985);
+  });
+
+  it("keeps the whole net accounted for on every completed job", () => {
+    const totals = feeTotals([
+      job({ id: 1n, status: JobStatus.Completed, budget: 1_000_000n, providerBps: 4_000 }),
+      job({ id: 2n, status: JobStatus.Completed, budget: 2_000_000n, providerBps: 10_000 }),
+      job({ id: 3n, status: JobStatus.Rejected, budget: 1_000_000n, fundedAt: 5 }),
+    ]);
+    expect(totals.netPaid + totals.splitToClient).toBeCloseTo(0.985 + 1.97);
+    expect(totals.refunded).toBeCloseTo(totals.splitToClient + 1);
   });
 });
 

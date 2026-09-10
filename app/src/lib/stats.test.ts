@@ -61,9 +61,18 @@ describe("liveStats", () => {
 
 describe("released", () => {
   it("agrees with SquareJob.complete on the deployed fee basis points", () => {
-    expect(released(job({ budget: 1_000_000n, platformFeeBP: 100, evaluatorFeeBP: 50, providerBps: 10_000 }))).toBe(985_000n);
-    expect(released(job({ budget: 1_000_000n, platformFeeBP: 100, evaluatorFeeBP: 50, providerBps: 0 }))).toBe(985_000n);
-    expect(released(job({ budget: 1_000_000n, platformFeeBP: 0, evaluatorFeeBP: 0, providerBps: 10_000 }))).toBe(1_000_000n);
+    expect(released(job({ status: JobStatus.Completed, budget: 1_000_000n, platformFeeBP: 100, evaluatorFeeBP: 50, providerBps: 10_000 }))).toBe(985_000n);
+    expect(released(job({ status: JobStatus.Completed, budget: 1_000_000n, platformFeeBP: 0, evaluatorFeeBP: 0, providerBps: 10_000 }))).toBe(1_000_000n);
+  });
+
+  it("releases nothing to the payee when the decision gave the provider a zero share", () => {
+    expect(released(job({ status: JobStatus.Completed, budget: 1_000_000n, platformFeeBP: 100, evaluatorFeeBP: 50, providerBps: 0 }))).toBe(0n);
+  });
+
+  it("keeps the whole net between the payee and the client on a split", () => {
+    const split = job({ status: JobStatus.Completed, budget: 1_000_000n, platformFeeBP: 100, evaluatorFeeBP: 50, providerBps: 4_000 });
+    expect(released(split)).toBe(394_000n);
+    expect(985_000n - released(split)).toBe(591_000n);
   });
 });
 
