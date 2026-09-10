@@ -8,6 +8,8 @@ import {IPayoutResolver} from "../src/interfaces/IPayoutResolver.sol";
 import {SquareHook} from "../src/SquareHook.sol";
 import {MockComplianceModule} from "./mocks/MockComplianceModule.sol";
 import {MockReputationRegistry} from "./mocks/MockRegistries.sol";
+import {IClaimMarket} from "../src/interfaces/IClaimMarket.sol";
+import {KernelBatcher} from "./mocks/KernelBatcher.sol";
 
 contract SquareHookTest is BaseTest {
     uint256 internal constant BUDGET = 1_000 * USDC;
@@ -356,5 +358,72 @@ contract SquareHookTest is BaseTest {
         hook.setReputationPolicy(address(keeper), 5 * uint64(USDC));
         assertEq(hook.trustedEvaluator(), address(keeper));
         assertEq(hook.minReputationBudget(), 5 * uint64(USDC));
+    }
+
+    function test_afterAction_writesNoVerdictWhenTheCheckNeverRan() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        uint256 jobId = submittedHookedJob(BUDGET);
+        pastWindow(jobId);
+        vm.mockCallRevert(
+            address(kernel), abi.encodeWithSelector(ISquareJob.netPayout.selector, jobId), "read failed"
+        );
+        vm.expectEmit(true, true, false, false);
+        emit ISquareJob.HookFailed(jobId, address(hook), ISquareJob.complete.selector, "");
+        keeper.finalize(jobId, "");
+        vm.clearMockedCalls();
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed), "settlement is untouched");
+        (address responder,,) = validation.responses(REQUEST_HASH);
+        assertEq(responder, address(0), "a check that never ran writes no verdict, failed or passed");
+        assertEq(compliance.checkCount(), 0, "the module was never reached");
+        assertTrue(hook.recorded(jobId), "reputation is written as before");
+    }
+
+    function test_afterAction_ignoresACheckThatRanForAnotherJob() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        uint256 first = submittedHookedJob(BUDGET);
+        bytes32 secondRequest = keccak256("second request");
+        vm.prank(provider);
+        validation.validationRequest(address(hook), AGENT_ID, "", secondRequest);
+        uint256 second = _hookedJobWithoutAHorizon(abi.encode(AGENT_ID, secondRequest));
+        bytes memory data = abi.encode(bytes32(0), bytes(""));
+
+        address logic = makeAddr("kernel logic");
+        vm.etch(logic, address(kernel).code);
+        vm.etch(address(kernel), address(new KernelBatcher(logic)).code);
+        KernelBatcher batched = KernelBatcher(payable(address(kernel)));
+
+        batched.completeHooksOf(hook, first, second, data);
+        (address responder,,) = validation.responses(secondRequest);
+        assertEq(responder, address(0), "the first job's outcome does not leak into the second");
+
+        batched.completeHooksOf(hook, first, first, data);
+        (address firstResponder, uint8 response,) = validation.responses(REQUEST_HASH);
+        assertEq(firstResponder, address(hook));
+        assertEq(response, 100, "and the job the check ran for gets its verdict");
+    }
+
+    function test_complete_aModuleThatRefusesWithoutRevertingRecordsAFailedValidation() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        compliance.setRefuseAll(true);
+        uint256 jobId = submittedHookedJob(BUDGET);
+        pastWindow(jobId);
+        keeper.finalize(jobId, "");
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));
+        assertEq(compliance.checkCount(), 1, "the module ran and kept its state");
+        (address responder, uint8 response,) = validation.responses(REQUEST_HASH);
+        assertEq(responder, address(hook));
+        assertEq(response, 0, "refusal by return value is the shape the decision record asks for");
+    }
+
+    function test_resolvePayout_answersTheProbeTheKernelSends() public {
+        uint256 jobId = submittedHookedJob(BUDGET);
+        (address payee, uint16 providerBps) = hook.resolvePayout(jobId, abi.encode(bytes32(0), bytes("")));
+        assertEq(payee, provider);
+        assertEq(providerBps, FULL_BPS, "empty optParams read as the full share, so the probe and the call agree");
+        (address listedPayee,) = hook.resolvePayout(jobId, abi.encode(bytes32(0), abi.encode(uint16(4_000), bytes(""))));
+        assertEq(listedPayee, payee, "the payee never depends on data");
     }
 }

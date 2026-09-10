@@ -175,6 +175,11 @@ Everywhere else, pass a bounded classification, never an error message or a URL.
 `oldestPendingAgeSeconds`, `proofAttempts`, `proofFailures`, `indexerLagBlocks`,
 `disputesOpen`, and so on). It is the input to alerting.
 
+`indexerLagBlocks` is `undefined` until `setIndexerHead` and `setChainHead` have both
+been called at least once, the same guard the `square_indexer_lag_blocks` gauge already
+had: a difference against a head nobody sampled is not a measurement. A rule reading the
+snapshot therefore sees no sample instead of a zero it would report as healthy.
+
 ## Health and version
 
 `createHealth({ service, version, checks?, commit?, checkTimeoutMs? })` returns
@@ -236,7 +241,7 @@ Notifications have the shape
 | Rule | Condition | Snapshot keys | Defaults | Severity |
 |---|---|---|---|---|
 | `keeperStalled({ maxPendingAgeSeconds, maxTickAgeSeconds, forSeconds })` | oldest finalizable job older than `maxPendingAgeSeconds`, or no tick completed for `maxTickAgeSeconds` | `oldestPendingAgeSeconds`, `lastKeeperTickAt` | 600 s pending age (2 x 300 s keeper slack), 300 s tick age, `forSeconds` 60 | `page` |
-| `indexerLagging({ maxLagBlocks, forSeconds })` | lag above `maxLagBlocks` | `indexerLagBlocks` | 100 blocks, `forSeconds` 120 | `warn` |
+| `indexerLagging({ maxLagBlocks, forSeconds })` | lag above `maxLagBlocks`, silent while `indexerLagBlocks` is `undefined` | `indexerLagBlocks` | 100 blocks, `forSeconds` 120 | `warn` |
 | `proofFailureRate({ maxFailureRatio, windowSeconds, minAttempts, forSeconds })` | failures / attempts over the sliding window above `maxFailureRatio` | `proofAttempts`, `proofFailures` (cumulative) | 0.2 over 300 s, at least 5 attempts, `forSeconds` 0 | `warn` |
 | `disputesPilingUp({ maxOpenDisputes, forSeconds })` | open disputes above `maxOpenDisputes` | `disputesOpen` | 10, `forSeconds` 0 | `warn` |
 | `hookWriteFailures({ maxFailures, forSeconds })` | any ERC-8004 registry write the hook could not land | `hookWriteFailures` | 0, `forSeconds` 0 | `warn` |
