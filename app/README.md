@@ -62,7 +62,7 @@ $ npm run build
 
 `--install-links` copies the two workspace packages into `node_modules` instead of symlinking them, so the app and the SDK share one copy of viem. The order is the same one `.github/workflows/packages.yml` uses in its `app (static export)` job; skipping the first two steps leaves `@squaresdk/core` and `@squaresdk/did-resolver` without a build output and every import of them unresolved.
 
-`npm test` runs the unit tests with Vitest: the phase derivation, the formatters, the chart aggregation, the action gates, the wallet inbox and the live statistics are pure modules under `src/lib` and are tested without a chain.
+`npm test` runs the unit tests with Vitest: the phase derivation, the formatters, the chart aggregation, the action gates, the dialog focus order, the wallet inbox and the live statistics are pure modules under `src/lib` and are tested without a chain.
 
 `npm run build` writes the static site to `out/`. Serve it with any static file server, for example:
 

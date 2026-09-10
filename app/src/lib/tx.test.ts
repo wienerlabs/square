@@ -1,7 +1,8 @@
 import { TransactionRevertedError } from "@squaresdk/core";
 import { describe, expect, it } from "vitest";
 import { BaseError, type TransactionReceipt } from "viem";
-import { describeError } from "./tx";
+import { truncate } from "./format";
+import { describeError, switchNetworkGuidance } from "./tx";
 
 const hash = "0x1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8" as const;
 
@@ -22,5 +23,14 @@ describe("describeError", () => {
 
   it("falls back to the message of a plain error", () => {
     expect(describeError(new Error("no funds"))).toBe("no funds");
+  });
+});
+
+describe("switchNetworkGuidance", () => {
+  it("leads with the next step, so the toast still carries it after truncation", () => {
+    const notice = switchNetworkGuidance("Arc Testnet", new Error("user rejected the request"));
+    expect(notice.startsWith("Switch to Arc Testnet inside the wallet")).toBe(true);
+    expect(truncate(notice, 200)).toContain("disconnect");
+    expect(notice).toContain("user rejected the request");
   });
 });
