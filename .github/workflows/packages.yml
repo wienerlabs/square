@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
     paths:
+      - "packages/core/**"
       - "packages/data/**"
+      - "packages/did-resolver/**"
       - "packages/hardening/**"
       - "packages/observability/**"
       - "packages/x402/**"

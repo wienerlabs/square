@@ -6,7 +6,16 @@ COPY packages/data packages/data
 COPY packages/observability packages/observability
 COPY services/indexer services/indexer
 RUN for p in packages/did-resolver packages/core packages/data packages/observability; do (cd $p && npm install --install-links --omit=dev --ignore-scripts && npm install --install-links --include=dev typescript && npm run build); done
-RUN cd services/indexer && npm install --install-links && npm run build && npm prune --omit=dev
+# --omit=dev from the start rather than a prune at the end. `npm install
+# --install-links` copies the file: dependencies in as real directories, and
+# `npm prune --omit=dev` then deletes every one of them -- node_modules/@squaresdk
+# comes out empty and the service cannot start. Installing production
+# dependencies once, and adding only the compiler the build needs, avoids it.
+RUN cd services/indexer \
+    && npm install --install-links --omit=dev \
+    && npm install --install-links --include=dev typescript \
+    && npm run build \
+    && rm -rf node_modules/typescript node_modules/.bin/tsc node_modules/.bin/tsserver
 
 FROM node:22-alpine AS runner
 ENV NODE_ENV=production
@@ -16,4 +25,15 @@ COPY --from=build --chown=square:nodejs /src/services/indexer/node_modules ./nod
 COPY --from=build --chown=square:nodejs /src/services/indexer/dist ./dist
 COPY --from=build --chown=square:nodejs /src/services/indexer/package.json ./package.json
 USER square
+EXPOSE 3010
+
+# The service answers /health from @squaresdk/observability, which returns 503
+# when a check marked critical fails. For the indexer those are the database,
+# the RPC endpoint and, since square#147, the indexing lag: an indexer further
+# behind than MAX_LAG_BLOCKS is unhealthy rather than merely slow, which is what
+# makes this check worth having on a container. PORT moves the listener, so the
+# check follows it.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3010)+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+
 CMD ["node", "dist/main.js"]

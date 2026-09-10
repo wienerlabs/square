@@ -20,6 +20,7 @@
       "cli",
       "did-aip-driver (unit)",
       "did-aip-driver image",
+      "local stack (make up)",
       "secret scan",
       "forbidden strings"
     ]

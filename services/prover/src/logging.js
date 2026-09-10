@@ -90,6 +90,24 @@ export function proofFailedLogEntry(error) {
   };
 }
 
+// A request refused before any proving started.
+//
+// Separate from proof_failed on purpose. That event means this service tried to
+// produce a proof and could not, which is an incident; this one means a caller
+// sent a policy the service will not accept, which is not. Merging them would
+// put every mistyped hour into the prover's failure rate -- and square#148 is an
+// issue about exactly that kind of conflation.
+//
+// The message comes from validateRequest, which names fields and never their
+// values, so it carries the same guarantee as the entry above.
+export function requestRejectedLogEntry(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    event: 'request_rejected',
+    error: message,
+  };
+}
+
 // Every log entry a single successful /prove call produces, in order.
 //
 // The whole logging decision lives here rather than inline in the route so it

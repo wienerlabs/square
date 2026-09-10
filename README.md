@@ -100,6 +100,22 @@ is not ported.
 | [aip-beta](https://github.com/dr-wilson-empty/aip-beta) | `did:aip` spec and resolver, A2A task protocol, MCP bridge, agent SDK |
 | [covenant](https://github.com/wienerlabs/covenant) | Escrow state machine (as specification), x402 verifier, chain-agnostic hardening |
 
+## Running it
+
+Everything, on a local chain, from one command:
+
+```bash
+make up
+```
+
+That brings up anvil, deploys the contracts to it, migrates Postgres, builds
+the circuit artifacts, and starts the prover, the indexer, the keeper and the
+application, returning only once all four report healthy. Docker, git and
+make are the whole prerequisite.
+[docs/deploy/local-stack.md](docs/deploy/local-stack.md)
+has the ports, the measured start-up time and how to point the same stack at
+Arc testnet.
+
 ## Layout
 
 ```
