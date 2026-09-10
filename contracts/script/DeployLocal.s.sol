@@ -8,6 +8,8 @@ import {Arbitration} from "../src/Arbitration.sol";
 import {ClaimMarket} from "../src/ClaimMarket.sol";
 import {SquareHook} from "../src/SquareHook.sol";
 import {PolicyRegistry} from "../src/PolicyRegistry.sol";
+import {Groth16Verifier} from "../src/Groth16Verifier.sol";
+import {ComplianceModule} from "../src/ComplianceModule.sol";
 import {MockUSDC3009} from "../test/mocks/MockUSDC3009.sol";
 import {MockIdentityRegistry, MockReputationRegistry, MockValidationRegistry} from "../test/mocks/MockRegistries.sol";
 
@@ -34,6 +36,8 @@ contract DeployLocal is Script {
         ClaimMarket market;
         SquareHook hook;
         PolicyRegistry policy;
+        Groth16Verifier verifier;
+        ComplianceModule compliance;
     }
 
     function run() external {
@@ -69,12 +73,40 @@ contract DeployLocal is Script {
             address(s.keeper),
             1_000_000
         );
-        // Deployed but not wired: the hook's compliance slot stays empty until
-        // square#27 supplies a module, and the registry's spender set stays
-        // empty until there is one to register. Deploying it here means the
-        // local stack matches the tree, and the address is in 31337.json for
-        // whoever writes that module.
+        // square#27 filled the slot. The registry, the verifying key and the
+        // module are wired here, in the order their access control needs:
+        // the module has to know its hook before the hook can use it, and the
+        // registry has to know the module before the module can move a counter.
+        //
+        // A local chain mines a block per transaction, so the tolerance is
+        // generous. On a real chain it is the time between building a proof and
+        // it being mined, and every second of it is a second in which a policy's
+        // time window can be straddled.
         s.policy = new PolicyRegistry(deployer);
+        s.verifier = new Groth16Verifier();
+        s.compliance = new ComplianceModule(
+            address(s.verifier), address(s.policy), address(s.kernel), deployer, 1 hours
+        );
+        s.compliance.setHook(address(s.hook));
+        s.policy.setSpender(address(s.compliance), true);
+
+        // Installed only when asked for. Once the hook holds a module, every
+        // completion needs a proof that binds to the job, and a release without
+        // one pays the client instead of the provider -- which is the point of
+        // square#27 and is also not what the local stack is for. Nothing on a
+        // dev chain produces those proofs: the SDK lifecycle, the indexer and
+        // keeper suites and the compose stack all complete jobs with an empty
+        // optParams, and installing this by default would silently route their
+        // money to the client.
+        //
+        //   INSTALL_COMPLIANCE_MODULE=true forge script script/DeployLocal.s.sol ...
+        //
+        // The gate's own behaviour is covered by test/ComplianceModule.t.sol
+        // against real proofs, so this flag is about what a dev chain defaults
+        // to, not about whether the gate works.
+        if (vm.envOr("INSTALL_COMPLIANCE_MODULE", false)) {
+            s.hook.setComplianceModule(address(s.compliance));
+        }
         s.keeper.setArbitration(address(s.arbitration));
         s.kernel.setHookWhitelist(address(s.hook), true);
         address[] memory arbiters = new address[](3);
@@ -100,6 +132,8 @@ contract DeployLocal is Script {
         vm.serializeAddress(json, "ClaimMarket", address(s.market));
         vm.serializeAddress(json, "SquareHook", address(s.hook));
         vm.serializeAddress(json, "PolicyRegistry", address(s.policy));
+        vm.serializeAddress(json, "Groth16Verifier", address(s.verifier));
+        vm.serializeAddress(json, "ComplianceModule", address(s.compliance));
         vm.serializeAddress(json, "USDC", address(m.usdc));
         vm.serializeAddress(json, "IdentityRegistry", address(m.identity));
         vm.serializeAddress(json, "ReputationRegistry", address(m.reputation));

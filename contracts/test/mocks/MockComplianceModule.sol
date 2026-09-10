@@ -37,6 +37,28 @@ contract MockComplianceModule is IComplianceModule {
         gasToBurn = value;
     }
 
+    /// @dev The preview a real module answers from the same state. This mock has
+    ///      no state to speak of, so it mirrors the flags: rejectAll and a proof
+    ///      that does not match make it false, and it never reverts, which is the
+    ///      contract SquareHook.resolvePayout relies on.
+    function previewRelease(
+        uint256,
+        address,
+        uint256,
+        address,
+        address,
+        bytes calldata proof
+    ) external view returns (bool) {
+        // rejectAll reverts in checkRelease, refuseAll answers false without
+        // reverting (square#194). Both are refusals, so both are false here:
+        // this module is the one place that could break the contract
+        // previewRelease and checkRelease are supposed to keep, which is that a
+        // preview of true is a check the hook can act on.
+        if (rejectAll || refuseAll) return false;
+        if (expectedProof != bytes32(0) && keccak256(proof) != expectedProof) return false;
+        return true;
+    }
+
     function checkRelease(
         uint256 jobId,
         address payee,

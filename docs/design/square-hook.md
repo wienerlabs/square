@@ -143,9 +143,16 @@ what the money is eventually spent on.
 | `setBudget` | – | no-op | state | – |
 | `fund` | – | no-op | pulls USDC | – |
 | `submit` | – | decode `agentId`, verify ownership, store `agentOf[jobId]`, `validationOf[jobId]`; emit `AgentBound` | Submitted | – |
-| `complete` | `payee = ClaimMarket.payeeOf(jobId)`; `providerBps` from `optParams` | recompute `payee` and `providerShare`; `complianceModule.checkRelease(jobId, payee, providerShare, token, client, proof)` if a module is installed; emit `ComplianceChecked` | credit ledger, emit normative events | `giveFeedback(agentOf[jobId], +1, "square", "completed", …, reason)`; `validationResponse(requestHash, 100, …)` when a proof was verified; emit `ReputationRecorded` / `ValidationRecorded` |
+| `complete` | `payee = ClaimMarket.payeeOf(jobId)`; `providerBps` from `optParams`, then **zeroed by `complianceModule.previewRelease` when a module is installed and refuses** (#27) | recompute `payee` and `providerShare`; `complianceModule.checkRelease(jobId, payee, providerShare, token, client, proof)` if a module is installed; emit `ComplianceChecked` | credit ledger, emit normative events | `giveFeedback(agentOf[jobId], +1, "square", "completed", …, reason)`; `validationResponse(requestHash, 100, …)` when a proof was verified; emit `ReputationRecorded` / `ValidationRecorded` |
 | `reject` | – | no-op | refund credit | if the job was Submitted: `giveFeedback(agentOf[jobId], −1, …, "rejected")`, `validationResponse(requestHash, 0, …)`; otherwise nothing |
 | `claimRefund` | not hookable | | refund credit, Expired | not hookable; `SquareHook.recordExpiry(jobId)` is permissionless and writes the neutral feedback once the kernel reports `Expired` |
+
+**Since [#27][i27] the resolver is where a compliance verdict becomes money.**
+`resolvePayout` asks an installed module for a read-only verdict and returns
+`providerBps = 0` when it refuses, which sends the whole net back to the client.
+That is the only channel the kernel honours — [#100](../decisions/hook-failure-modes.md)
+stopped a hook being able to veto by reverting — and the reasoning, the eight
+bindings and the measured gas are in [compliance-gate.md](compliance-gate.md).
 
 The order inside `complete` is the whole point of the unified hook:
 

@@ -92,14 +92,72 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         _setReputationPolicy(trustedEvaluator_, minReputationBudget_);
     }
 
+    /// @notice The payee and the split the kernel will pay.
+    /// @dev This is where a compliance verdict becomes money, and the only
+    ///      channel the kernel honours. `SquareJob.complete` calls this
+    ///      strictly and before anything else, then calls `beforeAction`
+    ///      tolerantly, so a module that wants to stop a release has to do it
+    ///      here: `providerBps = 0` returns the whole net to the client.
+    ///
+    ///      Reverting instead would bubble through `_resolvePayout` and leave
+    ///      the escrow with no exit at all, which is the lock #100 removed.
+    ///      `previewRelease` is specified never to revert, and the call is
+    ///      wrapped anyway: an unusable module reads as "not verified" rather
+    ///      than as a stuck job. See docs/decisions/hook-failure-modes.md.
+    ///
+    ///      With no module installed nothing changes and the split arrives from
+    ///      `optParams` as before.
     function resolvePayout(uint256 jobId, bytes calldata data)
         external
         view
         returns (address payee, uint16 providerBps)
     {
         (, bytes memory optParams) = abi.decode(data, (bytes32, bytes));
-        (providerBps,) = _decodeComplete(optParams);
+        bytes memory proof;
+        (providerBps, proof) = _decodeComplete(optParams);
         payee = _claimMarket.payeeOf(jobId);
+
+        if (address(_complianceModule) == address(0)) return (payee, providerBps);
+        if (!_previewsCompliant(jobId, payee, providerBps, proof)) providerBps = 0;
+    }
+
+    /// @dev One external call, so one `try` covers everything that can fail.
+    ///
+    ///      The kernel reads have to be inside it, not in the argument list: an
+    ///      argument to a `try` expression is evaluated before the protected
+    ///      call, so a `netPayout` that reverts would bubble out of
+    ///      `resolvePayout` -- and that call is strict, so `complete` would
+    ///      revert with it. square#194 established the opposite: a check that
+    ///      cannot run writes no verdict and settlement is untouched.
+    function _previewsCompliant(uint256 jobId, address payee, uint16 providerBps, bytes memory proof)
+        private
+        view
+        returns (bool)
+    {
+        try this.previewVerdict(jobId, payee, providerBps, proof) returns (bool verified) {
+            return verified;
+        } catch {
+            return false;
+        }
+    }
+
+    /// @notice The compliance verdict for a release, read-only.
+    /// @dev `external` so `_previewsCompliant` can catch it; not part of the
+    ///      hook's surface. Reverts freely -- everything it touches is a read
+    ///      that should succeed, and a failure is a refusal, not a stuck job.
+    function previewVerdict(uint256 jobId, address payee, uint16 providerBps, bytes memory proof)
+        external
+        view
+        returns (bool)
+    {
+        return _complianceModule.previewRelease(
+            jobId,
+            payee,
+            (_squareJob.netPayout(jobId) * providerBps) / FULL_BPS,
+            _squareJob.paymentToken(),
+            _squareJob.getJobRecord(jobId).client,
+            proof
+        );
     }
 
     function beforeAction(uint256 jobId, bytes4 selector, bytes calldata data) external onlyKernel {
