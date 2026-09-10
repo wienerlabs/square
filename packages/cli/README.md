@@ -34,7 +34,11 @@ $ npm --prefix ../did-resolver install && npm --prefix ../did-resolver run build
 | `square config` | Inspect and change the network configuration |
 
 Every command takes `--json`. Machine output goes to stdout and everything else
-to stderr, so `square resolve <did> --json | jq` works.
+to stderr, so `square resolve <did> --json | jq` works. `config --json` (and
+`config set-rpc … --json`, the others likewise) prints the configuration in
+effect after the command ran; `login --json` prints the address and the
+keystore path; `logout --json` prints `{"deleted": true|false, "keystore": …}`,
+where `false` covers "there was nothing to delete" and "you said no".
 
 `register --json` writes one JSON record per line rather than one document:
 `{"status":"sent", "transactionHash": …}` the moment the RPC accepts the

@@ -132,8 +132,9 @@ beyond the database.
 | `0005_keeper` | `keeper_actions` |
 | `0006_x402_reason` | `x402_payments.reason` |
 
-Migrations never run at service boot. They are an explicit deploy step, run before the new
-service version starts, with the connection string in `DATABASE_URL`:
+Migrations never run at service boot against a configured database. They are an explicit
+deploy step, run before the new service version starts, with the connection string in
+`DATABASE_URL`:
 
 ```sh
 square-data migrate status
@@ -151,6 +152,12 @@ await migrate(db, MIGRATIONS_DIR, "up");
 await migrate(db, MIGRATIONS_DIR, "down", 2);
 const { applied, pending } = await migrationStatus(db, MIGRATIONS_DIR);
 ```
+
+The one exception is the mode with no database to preserve. Without `DATABASE_URL` the
+indexer and the keeper fall back to an ephemeral in-process PGlite, and each migrates that
+itself on start (`services/indexer/src/main.ts`, `services/keeper/src/main.ts`), logging
+that it did. That database dies with the process, so there is nothing a boot-time migration
+could damage; a configured Postgres is never touched at boot.
 
 The test suite applies up, down and up again on PGlite and checks that the schema comes
 back identical, so every migration is exercised on every run without a daemon.
