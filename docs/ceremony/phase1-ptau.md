@@ -1,7 +1,7 @@
 # Phase 1: the adopted powers of tau
 
 **Adopted:** Perpetual Powers of Tau, contribution 80, truncated to power 13 —
-`ppot_0080_13.ptau`.
+`ppot_0080_14.ptau`.
 
 Phase 1 of a Groth16 setup is universal: it is not circuit-specific, it does not
 have to be run by us, and re-running it privately would be strictly worse than
@@ -13,24 +13,46 @@ are that file, and a way to check both without trusting us.
 |---|---|
 | Ceremony | [Perpetual Powers of Tau](https://github.com/privacy-ethereum/perpetualpowersoftau) |
 | Contribution | 80 |
-| Power | 13 (8192 points) |
-| File | `ppot_0080_13.ptau` |
-| Size | 9,530,514 bytes |
-| SHA-256 | `ccee28086e4b81d81a6e16fdee054d1dbd5276362e2662d4205d31de45cb930f` |
-| BLAKE2b | `bf0c2d498f1197ad04ec0dbfcdda6df6348cbd793759f1f986e5cdf1a4100842293dfad6b8961f64b7ba35c162b5c821c4c097a52f3a639b55b0e765ec311b44` |
-| Source | `https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_13.ptau` |
+| Power | 14 (16384 points) |
+| File | `ppot_0080_14.ptau` |
+| Size | 18,967,698 bytes |
+| SHA-256 | `3ca1149e9349b22b0ee0649399cfb787677129b7b1189d1899fc0d615d9583db` |
+| BLAKE2b | `a91842802f01b33fd42f5f69c3e49879ae03f0ae1f448b0c151244c9957024bd30bf5e3cc999ff2aeb02ebb959124a3a6a3cc20691cb4843a1234a02232072f3` |
+| Source | `https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_14.ptau` |
 
 `circuits/scripts/fetch-ptau.mjs` holds these values and refuses any file that
 does not match them, so a proving key cannot quietly end up standing on an
 unidentified tau.
 
-## Why power 13
+## Why power 14
 
-`payment.circom` compiles to a domain size of 8192 = 2^13, so 13 is the smallest
-truncation that fits. A larger one is not safer — the extra powers are never
-read — and costs 9.5 MB more to download at power 14. If the circuit ever grows
-past 8192 constraints the power has to go up, and that is a new adoption record,
-not a silent edit.
+`payment.circom` compiles to 11,426 constraints, so its domain is 16384 = 2^14
+and 14 is the smallest truncation that fits. A larger one is not safer — the
+extra powers are never read — and doubles the download again.
+
+### It was power 13, and the move is the record working
+
+Until [#45][i45] the circuit was 6,586 constraints and fitted 2^13, and this
+document said 13 was the smallest that fits and that a larger one bought
+nothing. Both were true. #45's salted commitment took the circuit past 8,192,
+`snarkjs groth16 setup` refused, and the adoption moved:
+
+```
+circuit too big for this power of tau ceremony. 11426*2 > 2**13
+```
+
+Worth recording how nearly that went unnoticed. `circom` prints *non-linear*
+constraints and it is tempting to size the ptau from them — those went from
+2,609 to 4,721, comfortably inside 8,192. snarkjs sizes the domain from the
+**total**, which went from 6,586 to 11,426. The first number said there was room
+and there was not. `ptau-adoption.test.js` now derives the required power from
+the built key rather than asserting it, so the two cannot drift again.
+
+Nothing about the provenance changed: same ceremony, same contribution 80, one
+truncation larger. What changed is how many powers of tau come with it, and the
+size of the download.
+
+[i45]: https://github.com/wienerlabs/square/issues/45
 
 ## Why contribution 80 rather than the file everyone links to
 
@@ -64,7 +86,7 @@ Two independent checks, and neither requires trusting this document.
 
 ```console
 $ node circuits/scripts/fetch-ptau.mjs --verify
-ppot_0080_13.ptau
+ppot_0080_14.ptau
   9530514 bytes
   sha256  ccee28086e4b81d81a6e16fdee054d1dbd5276362e2662d4205d31de45cb930f
   blake2b bf0c2d498f1197ad04ec0dbfcdda6df6348cbd793759f1f986e5cdf1a4100842293dfad6b8961f64b7ba35c162b5c821c4c097a52f3a639b55b0e765ec311b44
@@ -78,7 +100,7 @@ hour of one core — so run it once and record the result rather than putting it
 in a loop:
 
 ```bash
-snarkjs powersoftau verify ppot_0080_13.ptau
+snarkjs powersoftau verify ppot_0080_14.ptau
 ```
 
 Adopting this file rests on the hash check above, which is what pins the bytes

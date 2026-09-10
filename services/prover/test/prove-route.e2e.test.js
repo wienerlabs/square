@@ -43,6 +43,8 @@ const SECRET = {
 // that is not on the whitelist: three rules broken at once.
 const NON_COMPLIANT_REQUEST = {
   policy_id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
+  // square#45: the secret the eight leaf salts derive from.
+  policy_salt: '7777777777777777777777777777777777777777777777777777777777777',
   operator_id: SECRET.operator,
   max_daily_spend: SECRET.maxDaily,
   max_per_transaction: SECRET.maxPerTx,

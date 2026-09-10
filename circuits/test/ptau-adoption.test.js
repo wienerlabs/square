@@ -25,14 +25,15 @@ describe('the adoption record', () => {
   it('names one file, one ceremony and one contribution', () => {
     expect(ADOPTED.ceremony).toBe('Perpetual Powers of Tau');
     expect(ADOPTED.contribution).toBe(80);
-    expect(ADOPTED.file).toBe('ppot_0080_13.ptau');
+    expect(ADOPTED.file).toBe('ppot_0080_14.ptau');
   });
 
   it('is big enough for the circuit and no bigger', () => {
-    // payment.circom's domain size is 8192 = 2^13, so 13 is the smallest
-    // truncation that fits. Larger buys nothing and costs bandwidth.
-    expect(ADOPTED.power).toBe(13);
-    expect(2 ** ADOPTED.power).toBe(8192);
+    // payment.circom's domain size is 16384 = 2^14 as of square#45, so 14 is
+    // the smallest truncation that fits. Larger buys nothing and costs
+    // bandwidth: the download is already 19 MB rather than 9.5.
+    expect(ADOPTED.power).toBe(14);
+    expect(2 ** ADOPTED.power).toBe(16384);
   });
 
   it('carries hashes in the shape a hash check can use', () => {
@@ -106,5 +107,25 @@ describe.skipIf(!HAVE_ZKEY)('a key built here', () => {
   it('exposes the eight public signals the circuit declares', () => {
     const report = JSON.parse(inspect(ZKEY));
     expect(report.nPublic).toBe(8);
+  });
+
+  // The assertion above states the power. This one derives it, so the two
+  // cannot drift apart the way they did in square#45.
+  //
+  // The trap that caught that change: circom prints "non-linear constraints"
+  // and it is tempting to size the ptau from it, but snarkjs sizes the domain
+  // from the *total* constraint count. The salted commitment took non-linear
+  // constraints from 2,609 to 4,721 — comfortably inside 8,192 — while the
+  // total went from 6,586 to 11,426, which is not. `groth16 setup` refused,
+  // which is the right failure, but it refused at build time in CI rather than
+  // here where it can say why.
+  it('is exactly the smallest power the built key needs', () => {
+    const report = JSON.parse(inspect(ZKEY));
+    const domain = report.domainSize;
+    expect(Number.isInteger(Math.log2(domain))).toBe(true);
+
+    expect(2 ** ADOPTED.power).toBeGreaterThanOrEqual(domain);
+    // And no larger than it has to be.
+    expect(2 ** (ADOPTED.power - 1)).toBeLessThan(domain);
   });
 });
