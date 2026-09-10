@@ -11,7 +11,7 @@ import {
   daysToBitmask,
 } from './hash.js';
 import { deriveSalts, POLICY_FIELDS } from './commitment.js';
-import { toFieldString, toIdentifier } from './normalize.js';
+import { toFieldString, toHourString, toIdentifier } from './normalize.js';
 import { evaluateRules } from './rules.js';
 import { encodeForSolidity } from './convert.js';
 
@@ -51,7 +51,13 @@ const PUBLIC_SIGNAL_ORDER = [
 
 // Validate that an incoming request carries every field the circuit needs.
 // Field names only — never their values (#4).
-function validateRequest(req) {
+// Exported so the route can run it as a gate and answer 400.
+//
+// It is the one function in this file whose failures are all the caller's: every
+// throw below names a field the request supplied. buildCircuitInput calls it too,
+// so a direct caller -- the end-to-end script, the tests -- gets the same checks
+// without going through HTTP.
+export function validateRequest(req) {
   const required = [
     'policy_id',
     'operator_id',
@@ -151,6 +157,45 @@ function validateRequest(req) {
       if (!Array.isArray(restriction.allowed_days)) {
         throw new Error('time_restrictions.allowed_days: must be an array');
       }
+
+      // The hours, in range, before anything is hashed. openapi.js has declared
+      // 0..23 all along and nothing enforced it; square#148 measured what got
+      // through. 24..31 is accepted by the circuit's Num2Bits(5) and is not an
+      // hour: an end of 31 behaves like 23, a start of 25 empties the window and
+      // every payment under that policy is refused with 'time_window' and no way
+      // to tell a bad payment from a broken policy. 32 and above fails inside
+      // witness generation, where the caller gets a constraint error rather than
+      // the name of the field they got wrong.
+      const startHour = toHourString(
+        restriction.allowed_hours_start, 'time_restrictions.allowed_hours_start',
+      );
+      const endHour = toHourString(
+        restriction.allowed_hours_end, 'time_restrictions.allowed_hours_end',
+      );
+
+      // A window that runs past midnight is refused, and the message says so.
+      //
+      // The circuit computes `hour >= start AND hour <= end` and says in its own
+      // comment that it assumes start <= end; rules.js mirrors the same
+      // limitation deliberately, so that the two agree. They do agree -- on
+      // accepting a policy that can never be satisfied. 22:00 to 06:00 is a
+      // perfectly ordinary thing to want for an agent that works overnight, and
+      // under it *no* hour of *any* day is inside the window, so every payment is
+      // refused. The response is identical to a payment that genuinely missed its
+      // window, and rules_agree stays true, so nothing in the system says which
+      // one happened.
+      //
+      // Modelling it is a circuit change -- an OR branch selected by start > end,
+      // mirrored in rules.js and pinned by circuit-agreement.test.js. Until that
+      // is done the honest answer is to refuse the policy at the door rather than
+      // accept it and refuse everything it covers. See circuits/README.md, rule 6.
+      if (BigInt(startHour) > BigInt(endHour)) {
+        throw new Error(
+          'time_restrictions: allowed_hours_start must not be later than '
+          + 'allowed_hours_end. A window that crosses midnight is not modelled; '
+          + 'express it as two policies, or one window per side of midnight.',
+        );
+      }
     }
   }
 }
@@ -185,10 +230,10 @@ export async function buildCircuitInput(request) {
   const timeActive = tr ? '1' : '0';
   const timeDaysBitmask = tr ? String(daysToBitmask(tr.allowed_days)) : '0';
   const timeStartHourUtc = tr
-    ? toFieldString(tr.allowed_hours_start, 'time_restrictions.allowed_hours_start')
+    ? toHourString(tr.allowed_hours_start, 'time_restrictions.allowed_hours_start')
     : '0';
   const timeEndHourUtc = tr
-    ? toFieldString(tr.allowed_hours_end, 'time_restrictions.allowed_hours_end')
+    ? toHourString(tr.allowed_hours_end, 'time_restrictions.allowed_hours_end')
     : '0';
 
   return {

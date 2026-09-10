@@ -62,6 +62,27 @@ export function toFieldString(value, label) {
   return text;
 }
 
+// An hour of the day, as the decimal string the circuit input expects.
+//
+// The bound is here rather than at the three places that had one. Before
+// square#148 an hour had three different upper limits and no two agreed:
+// openapi.js declared 0..23 and enforced nothing, the circuit's Num2Bits(5)
+// allowed 0..31, and toFieldString above allowed everything under the BN254
+// modulus. The gap between the first two is silent -- an hour of 25 empties the
+// window and every payment is refused with no diagnosis -- and the gap between
+// the second two fails inside witness generation, where the caller gets a
+// constraint error instead of the name of the field they got wrong.
+//
+// 0..23 is the range openapi.js already published, so this enforces a contract
+// rather than inventing one.
+export function toHourString(value, label) {
+  const text = toFieldString(value, label);
+  if (BigInt(text) > 23n) {
+    throw new Error(`${label}: must be an hour of the day, 0 to 23`);
+  }
+  return text;
+}
+
 // A plain string field (an identifier, not a policy value). Length-capped so a
 // caller cannot push an arbitrarily large blob into a log line through a field
 // the logger is allowed to emit.

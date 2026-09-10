@@ -147,6 +147,17 @@ those apply here: one level, position inside the leaf, and a leaf is a
 Everything in the right-hand column stays private. An auditor learns that the
 checks ran, not what the operator's limits or lists were.
 
+**Rule 6's window cannot cross midnight.** The circuit computes
+`hour >= start AND hour <= end`, which is empty whenever `start > end`, so a
+policy of 22:00 to 06:00 would put no hour of any day inside the window and
+refuse every payment it covers. The prover refuses such a policy instead: since
+[#148][i148], `allowed_hours_start > allowed_hours_end` is a 400 whose message
+says the window is not modelled, and both hours have to be in 0..23 — the range
+the OpenAPI document had declared and nothing enforced. An overnight window is
+expressed as two policies, one per side of midnight.
+
+[i148]: https://github.com/wienerlabs/square/issues/148
+
 ### Rule 5 binds nobody, and the reason is structural
 
 **`payment_category` is the operator's own statement about what a payment was
