@@ -137,15 +137,26 @@ export class AipDidResolver {
       agentWallet = undefined; // OPTIONAL in ERC-8004; absence is not an error.
     }
 
+    // Whether what the Registration File would have said is known. It is
+    // known when there is no file to read (an empty agentURI is a registration
+    // made with the no-argument register(), spec §5) and when the file was
+    // read and parsed. Anything else leaves `service` and `active` unknown,
+    // and the metadata has to say so: a warning alone is easy to skip over,
+    // and a missing `deactivated` reads as "active" to a consumer that reads
+    // only that field.
+    let registrationKnown = true;
+
     let agentUri = "";
     try {
       agentUri = (await client.readContract({ ...contract, functionName: "tokenURI", args: [parsed.agentId] })) as string;
     } catch {
       warnings.push({ code: "agentUriUnavailable", message: "tokenURI reverted" });
+      registrationKnown = false;
     }
 
     let registration: RegistrationFile | null = null;
     if (agentUri) {
+      registrationKnown = false;
       try {
         const fetcher = this.options.fetchAgentUri
           ?? ((u: string) => defaultFetchAgentUri(u, {
@@ -155,6 +166,7 @@ export class AipDidResolver {
         const doc = await fetcher(agentUri);
         if (typeof doc === "object" && doc !== null) {
           registration = doc as RegistrationFile;
+          registrationKnown = true;
         } else {
           warnings.push({ code: "agentUriMalformed", message: "registration file is not a JSON object" });
         }
@@ -180,6 +192,7 @@ export class AipDidResolver {
         ...(blockNumber !== undefined ? { versionId: blockNumber.toString() } : {}),
         agentRegistry: parsed.agentRegistry,
         ...(inactive ? { deactivated: true, deactivationReason: "registrationInactive" as const } : {}),
+        ...(registrationKnown ? {} : { registrationFile: "unavailable" as const }),
       },
     };
   }

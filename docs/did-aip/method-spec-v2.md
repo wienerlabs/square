@@ -334,6 +334,7 @@ network operations. Step 7 is the only step that leaves the chain.
 | `didResolutionMetadata.warnings` | Non-fatal problems, e.g. an unreachable Agent URI |
 | `didDocumentMetadata.versionId` | The block number the state was read at |
 | `didDocumentMetadata.deactivated` | `true` per §7.4 |
+| `didDocumentMetadata.registrationFile` | `"unavailable"` when a non-empty Agent URI could not be dereferenced or parsed (§5). `service` and `deactivated` then reflect on-chain state alone: the file was not read, and a consumer that reads only `deactivated` must not take that for "active" |
 | `didDocumentMetadata.agentRegistry` | The ERC-8004 `agentRegistry` string |
 
 `versionId` is the block number, not a timestamp: on a chain with sub-second deterministic

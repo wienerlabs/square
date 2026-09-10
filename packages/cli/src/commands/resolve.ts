@@ -99,6 +99,8 @@ function render(result: DidResolutionResult): void {
   if (meta.versionId) log.field("block", meta.versionId);
   if (meta.deactivated) {
     log.field("deactivated", c.yellow(`yes (${meta.deactivationReason ?? "unknown reason"})`));
+  } else if (meta.registrationFile === "unavailable") {
+    log.field("deactivated", c.yellow("unknown (the registration file could not be read)"));
   }
 
   log.blank();
