@@ -49,7 +49,12 @@ contract MockComplianceModule is IComplianceModule {
         address,
         bytes calldata proof
     ) external view returns (bool) {
-        if (rejectAll) return false;
+        // rejectAll reverts in checkRelease, refuseAll answers false without
+        // reverting (square#194). Both are refusals, so both are false here:
+        // this module is the one place that could break the contract
+        // previewRelease and checkRelease are supposed to keep, which is that a
+        // preview of true is a check the hook can act on.
+        if (rejectAll || refuseAll) return false;
         if (expectedProof != bytes32(0) && keccak256(proof) != expectedProof) return false;
         return true;
     }

@@ -123,10 +123,40 @@ proof presented a second time carries a stale signal 5. This is aperture's
 without a counter on chain, a prover claims zero every time and the circuit's
 daily ceiling is vacuous.
 
-**An explicit mark.** `keccak256(proof)`, because the counter's protection is
-only as good as the counter — a release of zero moves it not at all, and a new
-UTC day resets it. `test_theMarkStopsAReplayEvenWhenTheCounterAgrees` puts the
-counter back where the proof wants it and shows the mark still refuses.
+**An explicit mark, on the statement rather than the bytes.** The counter's
+protection is only as good as the counter — a release of zero moves it not at
+all, and a new UTC day resets it — so a spent proof is also recorded.
+
+What is recorded is `keccak256(abi.encode(publicSignals))`, not a hash of the
+proof. **A Groth16 proof is not bound to its own encoding.** For a valid
+(A, B, C) and any r, s,
+
+    A' = r·A        B' = r⁻¹·B + s·δ        C' = C + (r·s)·A
+
+verifies for the same public inputs: e(A',B') = e(A,B)·e(rs·A, δ), and C'
+absorbs the difference. The verifier checks the pairing and the signals' field
+membership and nothing about the encoding, so it accepts the copy.
+
+That is measured, not argued. `circuits/scripts/rerandomise.mjs` builds such a
+copy and `contracts/test/Malleability.t.sol` hands it to
+`src/Groth16Verifier.sol`, which accepts it — same eight signals, different
+bytes.
+
+Marking the bytes therefore recorded a representation. The gap it left is
+narrow but real, and the counter does not cover it: a proof for the first
+payment of a day, presented again just after the counter resets at midnight and
+still inside the timestamp tolerance. Signals 5 and 6 both match there, and
+`KeeperEvaluator.finalize` is permissionless, so anyone who saw the first
+proof could re-randomise it and present it against a second job with the same
+payee, amount, client and token.
+
+Re-randomisation cannot touch the signals, so hashing them is what makes "this
+statement has been spent" true rather than "these bytes have been seen".
+`test_aRerandomisedCopyOfASpentProofIsRefused` opens that window on purpose —
+past midnight, counter put back, tolerance widened so the timestamp still
+matches — and asserts the refusal arrives by name, `proof already used`, with
+nothing else left to refuse it. Against the old mark it fails on the assertion
+that says so.
 
 A job cannot complete twice, since `complete` requires `Submitted`. So replay
 is about a proof crossing from one job to another, which the bindings make hard

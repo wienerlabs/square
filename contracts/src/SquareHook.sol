@@ -121,25 +121,43 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         if (!_previewsCompliant(jobId, payee, providerBps, proof)) providerBps = 0;
     }
 
-    /// @dev Its own frame: the resolver above already holds the payee, the split
-    ///      and the proof, and the module's six arguments do not fit beside them.
+    /// @dev One external call, so one `try` covers everything that can fail.
+    ///
+    ///      The kernel reads have to be inside it, not in the argument list: an
+    ///      argument to a `try` expression is evaluated before the protected
+    ///      call, so a `netPayout` that reverts would bubble out of
+    ///      `resolvePayout` -- and that call is strict, so `complete` would
+    ///      revert with it. square#194 established the opposite: a check that
+    ///      cannot run writes no verdict and settlement is untouched.
     function _previewsCompliant(uint256 jobId, address payee, uint16 providerBps, bytes memory proof)
         private
         view
         returns (bool)
     {
-        try _complianceModule.previewRelease(
+        try this.previewVerdict(jobId, payee, providerBps, proof) returns (bool verified) {
+            return verified;
+        } catch {
+            return false;
+        }
+    }
+
+    /// @notice The compliance verdict for a release, read-only.
+    /// @dev `external` so `_previewsCompliant` can catch it; not part of the
+    ///      hook's surface. Reverts freely -- everything it touches is a read
+    ///      that should succeed, and a failure is a refusal, not a stuck job.
+    function previewVerdict(uint256 jobId, address payee, uint16 providerBps, bytes memory proof)
+        external
+        view
+        returns (bool)
+    {
+        return _complianceModule.previewRelease(
             jobId,
             payee,
             (_squareJob.netPayout(jobId) * providerBps) / FULL_BPS,
             _squareJob.paymentToken(),
             _squareJob.getJobRecord(jobId).client,
             proof
-        ) returns (bool verified) {
-            return verified;
-        } catch {
-            return false;
-        }
+        );
     }
 
     function beforeAction(uint256 jobId, bytes4 selector, bytes calldata data) external onlyKernel {

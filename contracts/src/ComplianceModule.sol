@@ -109,11 +109,12 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
     address private _hook;
     uint64 private _timestampTolerance;
 
-    mapping(bytes32 proofId => bool) private _consumed;
+    mapping(bytes32 statement => bool) private _consumed;
 
     event HookUpdated(address indexed hook);
     event TimestampToleranceUpdated(uint64 seconds_);
-    event ReleaseVerified(uint256 indexed jobId, address indexed payee, uint256 amount, bytes32 proofId);
+    event ReleaseVerified(uint256 indexed jobId, address indexed payee, uint256 amount, bytes32 statement);
+    event VerdictDisagreed(uint256 indexed jobId, IPolicyRegistry.Verdict verdict);
     event ReleaseRefused(uint256 indexed jobId, bytes32 reason);
 
     error OnlyHook();
@@ -192,7 +193,7 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         address client,
         bytes calldata proof
     ) external view returns (bool verified) {
-        (verified,) = _verify(jobId, payee, amount, token, client, proof);
+        (verified,,) = _verify(jobId, payee, amount, token, client, proof);
     }
 
     /// @inheritdoc IComplianceModule
@@ -205,24 +206,34 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         bytes calldata proof
     ) external onlyHook returns (bool verified) {
         bytes32 reason;
-        (verified, reason) = _verify(jobId, payee, amount, token, client, proof);
+        bytes32 statement;
+        (verified, reason, statement) = _verify(jobId, payee, amount, token, client, proof);
         if (!verified) {
             emit ReleaseRefused(jobId, reason);
             return false;
         }
 
-        bytes32 proofId = keccak256(proof);
-        _consumed[proofId] = true;
+        _consumed[statement] = true;
 
-        // Advances the poster's day by exactly what the payee receives, and
-        // returns what it was before. `_verify` has already compared that value
-        // to signal 5 and checked it against the ceiling, so this cannot revert
-        // for a proof that got this far — which matters, because this call sits
-        // inside the kernel's tolerant hook call and a revert here would be
-        // swallowed while the money moved.
-        _registry.recordSpend(client, amount);
+        // Advances the poster's day by exactly what the payee receives.
+        //
+        // Since square#194 this returns a verdict rather than reverting on
+        // policy grounds, so the ceiling is no longer something that could
+        // revert here. `_bindings` checks it anyway, because the ceiling is a
+        // condition of payment and not a report afterwards -- and a proof that
+        // got this far was already measured against the same counter this call
+        // is about to advance.
+        //
+        // The verdict is read rather than discarded. A proof that passed every
+        // binding and still comes back NoPolicy or LimitExceeded means the two
+        // contracts have drifted apart, and that should be visible on the day it
+        // happens rather than as money moving under a policy nobody checked.
+        (, IPolicyRegistry.Verdict verdict) = _registry.recordSpend(client, amount);
+        if (verdict != IPolicyRegistry.Verdict.Compliant) {
+            emit VerdictDisagreed(jobId, verdict);
+        }
 
-        emit ReleaseVerified(jobId, payee, amount, proofId);
+        emit ReleaseVerified(jobId, payee, amount, statement);
         return true;
     }
 
@@ -240,13 +251,12 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         address token,
         address client,
         bytes calldata proof
-    ) private view returns (bool, bytes32) {
+    ) private view returns (bool, bytes32, bytes32) {
         jobId; // bound through payee and amount, which the hook resolved from it
 
         // Every component is a fixed-size type, so a well-formed proof is
         // exactly (2 + 4 + 2 + 8) words.
-        if (proof.length != PROOF_BYTES) return (false, R_MALFORMED);
-        if (_consumed[keccak256(proof)]) return (false, R_CONSUMED);
+        if (proof.length != PROOF_BYTES) return (false, R_MALFORMED, bytes32(0));
 
         uint256[8] memory input;
         // An external call so the decode and the pairing can be caught. A revert
@@ -255,10 +265,33 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         try this.verifiedSignals(proof) returns (uint256[8] memory signals) {
             input = signals;
         } catch {
-            return (false, R_INVALID);
+            return (false, R_INVALID, bytes32(0));
         }
 
-        return _bindings(payee, amount, token, client, input);
+        // The mark is keyed on the statement, not on the bytes that carried it.
+        //
+        // A Groth16 proof is not bound to its own encoding. For a valid
+        // (A, B, C) and any r, s, the triple (rA, r⁻¹B + sδ, C + rsA) verifies
+        // for the same public signals, and the pairing is all this verifier
+        // checks. Measured against src/Groth16Verifier.sol itself in
+        // test/Malleability.t.sol: the copy has different bytes, the same eight
+        // signals, and the verifier accepts it.
+        //
+        // So keccak256(proof) marked a representation. A re-randomised copy of a
+        // proof already spent has a different hash and the mark never sees it,
+        // which matters on the one path the counter does not cover: a proof for
+        // the first payment of a day, presented again just after the counter
+        // resets at midnight and still inside the timestamp tolerance. Signals 5
+        // and 6 both match there, and finalize is permissionless.
+        //
+        // Re-randomisation cannot touch the signals, so hashing them is what
+        // makes "this statement has been spent" true rather than "these bytes
+        // have been seen".
+        bytes32 statement = keccak256(abi.encode(input));
+        if (_consumed[statement]) return (false, R_CONSUMED, statement);
+
+        (bool ok2, bytes32 reason) = _bindings(payee, amount, token, client, input);
+        return (ok2, reason, statement);
     }
 
     /// @notice Decode a proof, check it against the key, and return its signals.
@@ -302,8 +335,11 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         // would be a claim about a trust root that does not exist here.
         if (input[STRIPE_RECEIPT_HASH] != 0) return (false, R_STRIPE);
 
-        // Everything `recordSpend` would revert on, checked here so that a
-        // verdict of true is a verdict `checkRelease` can act on.
+        // The public ceiling, checked before the release rather than reported
+        // after it. square#194 made `recordSpend` return a verdict instead of
+        // reverting, so this is no longer about keeping `checkRelease` from
+        // throwing; it is about the ceiling being a condition of payment. The
+        // registry's own verdict is asserted in `checkRelease` as a second line.
         if (spentBefore + amount > _registry.policyOf(client).dailyLimit) return (false, R_CEILING);
 
         return (true, bytes32(0));
@@ -338,8 +374,11 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         return address(_squareJob);
     }
 
-    function isConsumed(bytes32 proofId) external view returns (bool) {
-        return _consumed[proofId];
+    /// @param statement `keccak256(abi.encode(publicSignals))`, not a hash of the
+    ///        proof bytes: a Groth16 proof can be re-randomised into different
+    ///        bytes for the same signals, so the bytes are not what was spent.
+    function isConsumed(bytes32 statement) external view returns (bool) {
+        return _consumed[statement];
     }
 
     /// @notice How many public signals this module binds.

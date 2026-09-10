@@ -183,6 +183,12 @@ contract ComplianceModuleTest is Test {
         return encoded(_load(".compliant"));
     }
 
+    /// What the module marks: `keccak256(abi.encode(publicSignals))`.
+    function statementOf(bytes memory proof) internal pure returns (bytes32) {
+        (,,, uint256[8] memory input) = abi.decode(proof, (uint256[2], uint256[2][2], uint256[2], uint256[8]));
+        return keccak256(abi.encode(input));
+    }
+
     function submittedJob() internal returns (uint256 jobId) {
         vm.prank(client);
         jobId = kernel.createJob(provider, address(keeper), block.timestamp + 30 days, "spec:0xabc", address(hook));
@@ -369,7 +375,9 @@ contract ComplianceModuleTest is Test {
         uint256 first = submittedJob();
         completeWith(first, compliantProof());
         assertEq(kernel.withdrawable(provider), FIXTURE_AMOUNT);
-        assertTrue(module.isConsumed(keccak256(compliantProof())), "the proof is marked");
+        // Keyed on the statement, not on the bytes: a Groth16 proof can be
+        // re-randomised into different bytes for the same eight signals.
+        assertTrue(module.isConsumed(statementOf(compliantProof())), "the statement is marked");
 
         uint256 second = submittedJob();
         completeWith(second, compliantProof());
@@ -394,6 +402,63 @@ contract ComplianceModuleTest is Test {
         vm.prank(address(keeper));
         kernel.complete(second, bytes32(0), abi.encode(FULL_BPS, compliantProof()));
         assertEq(kernel.withdrawable(provider), FIXTURE_AMOUNT, "the mark did not stop the replay");
+    }
+
+    /// A re-randomised copy of a spent proof is refused, with nothing else left
+    /// to refuse it.
+    ///
+    /// The review of #190 found the mark keyed on `keccak256(proof)`, and a
+    /// Groth16 proof is not bound to its own encoding: for any r, s the triple
+    /// (rA, r⁻¹B + sδ, C + rsA) verifies for the same signals.
+    /// test/Malleability.t.sol shows src/Groth16Verifier.sol accepting exactly
+    /// such a copy, so the premise is measured rather than argued.
+    ///
+    /// The counter closes most of the window. This test opens it on purpose --
+    /// past midnight so the day resets, the counter put back where the proof
+    /// wants it, and the tolerance widened so the timestamp still matches -- and
+    /// then asserts the refusal comes from the mark by name. Keyed on the bytes,
+    /// this paid the provider twice.
+    function test_aRerandomisedCopyOfASpentProofIsRefused() public {
+        bytes memory original = compliantProof();
+        bytes memory copy = encoded(_load(".compliant_rerandomised"));
+
+        assertEq(statementOf(copy), statementOf(original), "same statement");
+        assertTrue(keccak256(copy) != keccak256(original), "different bytes");
+
+        uint256 first = submittedJob();
+        completeWith(first, original);
+        assertEq(kernel.withdrawable(provider), FIXTURE_AMOUNT);
+
+        // Just past midnight: the counter resets lazily on timestamp / 86400.
+        uint256 nextDay = ((FIXTURE_TIMESTAMP / 1 days) + 1) * 1 days + 60;
+        // Wide enough to still admit the proof's timestamp from the other side
+        // of midnight. The gap is about ten hours with this fixture, which is
+        // why a default tolerance does not reach.
+        vm.prank(owner);
+        module.setTimestampTolerance(11 hours);
+        vm.warp(nextDay);
+
+        // The new day starts at zero, so put it back where signal 5 expects it.
+        vm.prank(client);
+        registry.setPolicy(FIXTURE_COMMITMENT, DAILY_LIMIT);
+        registry.recordSpend(client, FIXTURE_SPENT_BEFORE);
+        assertEq(registry.spentToday(client), FIXTURE_SPENT_BEFORE, "the counter agrees with the proof again");
+
+        assertFalse(
+            module.previewRelease(first, provider, FIXTURE_AMOUNT, address(usdc), client, copy),
+            "every other binding passes; only the mark can refuse this"
+        );
+
+        uint256 second = submittedJob();
+        // Named, so the test cannot pass for a different reason later.
+        vm.expectEmit(true, false, false, true, address(module));
+        emit ComplianceModule.ReleaseRefused(second, "proof already used");
+        vm.prank(address(keeper));
+        kernel.complete(second, bytes32(0), abi.encode(FULL_BPS, copy));
+
+        assertEq(kernel.withdrawable(provider), FIXTURE_AMOUNT, "the copy paid the provider a second time");
+        assertEq(kernel.withdrawable(client), FIXTURE_AMOUNT, "the second net went back to the client");
+        assertEq(registry.spentToday(client), FIXTURE_SPENT_BEFORE, "and moved no counter");
     }
 
     // --------------------------------------------------------- the sold claim
