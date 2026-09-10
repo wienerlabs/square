@@ -20,6 +20,20 @@ async function columnNames(db: Database, table: string): Promise<string[]> {
   return rows.map((row) => row.column_name);
 }
 
+function racedAtFirstTransaction(db: Database, race: () => Promise<unknown>): Database {
+  let raced = false;
+  return {
+    ...db,
+    async transaction(fn) {
+      if (!raced) {
+        raced = true;
+        await race();
+      }
+      return db.transaction(fn);
+    },
+  };
+}
+
 async function schemaSnapshot(db: Database): Promise<unknown> {
   const columns = await db.query(
     `select table_name, column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale
@@ -107,6 +121,39 @@ describe("migrations", () => {
       await db.query("insert into schema_migrations (name) values ('0003_x402')");
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0004_hosted_agents", "0005_keeper", "0006_x402_reason"]);
       expect(await tableNames(db)).toContain("keeper_actions");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("lets two runners race one PGlite database: both return, and every migration is applied exactly once", async () => {
+    const db = await pgliteDatabase();
+    try {
+      const [first, second] = await Promise.all([migrate(db, MIGRATIONS_DIR, "up"), migrate(db, MIGRATIONS_DIR, "up")]);
+
+      expect([...first.applied, ...second.applied].sort()).toEqual(ALL);
+      expect(first.applied.filter((name) => second.applied.includes(name))).toEqual([]);
+
+      const { rows } = await db.query<{ name: string; n: number }>(
+        "select name, count(*)::int as n from schema_migrations group by name order by name",
+      );
+      expect(rows).toEqual(ALL.map((name) => ({ name, n: 1 })));
+      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL, pending: [] });
+      expect(await tableNames(db)).toContain("x402_payments");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("skips, rather than conflicts, when another runner records a migration between the pending scan and the lock", async () => {
+    const db = await pgliteDatabase();
+    try {
+      const loser = racedAtFirstTransaction(db, () => migrate(db, MIGRATIONS_DIR, "up", 1));
+
+      expect((await migrate(loser, MIGRATIONS_DIR, "up", 1)).applied).toEqual([]);
+      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: [ALL[0]], pending: ALL.slice(1) });
+      const { rows } = await db.query<{ n: number }>("select count(*)::int as n from schema_migrations");
+      expect(rows[0]).toEqual({ n: 1 });
     } finally {
       await db.close();
     }

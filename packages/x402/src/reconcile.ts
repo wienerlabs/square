@@ -6,16 +6,20 @@ export type SettlementReceiptStatus = "success" | "reverted" | "unknown";
 
 export type SettlementReceiptLookup = (txHash: Hex) => Promise<SettlementReceiptStatus>;
 
+export type ReconcileClock = () => number | Promise<number>;
+
 export const RECONCILE_REASON = {
   reverted: "settlement_reverted",
   expired: "authorization_expired",
+  receiptUnreadable: "settlement_receipt_unreadable",
+  awaitingSettlement: "awaiting_settlement",
 } as const;
 
 export interface ReconcileOptions {
   store: ReplayStore;
   receiptStatusOf: SettlementReceiptLookup;
   limit?: number;
-  now?: () => number;
+  now?: ReconcileClock;
   logger?: GatewayLogger;
 }
 
@@ -37,15 +41,28 @@ export function receiptStatusFromClient(client: PublicClient): SettlementReceipt
   };
 }
 
+export function blockTimestampFromClient(client: PublicClient): ReconcileClock {
+  return async () => Number((await client.getBlock({ blockTag: "latest" })).timestamp);
+}
+
+export const wallClockSeconds: ReconcileClock = () => Math.floor(Date.now() / 1000);
+
 export async function reconcileSettlements(options: ReconcileOptions): Promise<ReconcileReport> {
   const logger = options.logger ?? silentLogger;
-  const now = options.now ?? (() => Math.floor(Date.now() / 1000));
   const rows = await options.store.listUnsettled(options.limit);
   const report: ReconcileReport = { examined: rows.length, settled: 0, failed: 0, unresolved: 0 };
+  if (rows.length === 0) return report;
+  const now = BigInt(await (options.now ?? wallClockSeconds)());
   for (const row of rows) {
-    const outcome = await resolve(row, options.receiptStatusOf, BigInt(now()));
-    if (outcome === "unresolved") {
+    const outcome = await resolve(row, options.receiptStatusOf, now);
+    if (outcome.status === "unresolved") {
       report.unresolved += 1;
+      logger.info("x402 settlement still unresolved", {
+        payer: row.payer,
+        nonce: row.nonce,
+        transaction: row.txHash,
+        reason: outcome.reason,
+      });
       continue;
     }
     if (outcome.status === "settled") {
@@ -61,13 +78,18 @@ export async function reconcileSettlements(options: ReconcileOptions): Promise<R
   return report;
 }
 
-type Outcome = "unresolved" | { status: "settled"; txHash: Hex } | { status: "failed"; reason: string };
+type Outcome =
+  | { status: "unresolved"; reason: string }
+  | { status: "settled"; txHash: Hex }
+  | { status: "failed"; reason: string };
 
 async function resolve(row: UnsettledPayment, receiptStatusOf: SettlementReceiptLookup, now: bigint): Promise<Outcome> {
   if (row.txHash !== null) {
     const status = await receiptStatusOf(row.txHash);
     if (status === "success") return { status: "settled", txHash: row.txHash };
     if (status === "reverted") return { status: "failed", reason: RECONCILE_REASON.reverted };
+    return { status: "unresolved", reason: RECONCILE_REASON.receiptUnreadable };
   }
-  return row.validBefore <= now ? { status: "failed", reason: RECONCILE_REASON.expired } : "unresolved";
+  if (row.validBefore <= now) return { status: "failed", reason: RECONCILE_REASON.expired };
+  return { status: "unresolved", reason: RECONCILE_REASON.awaitingSettlement };
 }
