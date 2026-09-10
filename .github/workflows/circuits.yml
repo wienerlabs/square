@@ -240,10 +240,16 @@ jobs:
 
       - uses: ./.github/actions/circom
 
+      # ppot_0080_14, like the two jobs above. This job was written before #45
+      # moved the adoption from power 13 to 14, and #136 updated the other two
+      # paths and not this one, so the step was caching a file that does not
+      # exist: green, and downloading 19 MB on every run. The key is the hash of
+      # fetch-ptau.mjs, which is where the adoption record lives, so a future
+      # move misses the cache rather than restoring the wrong file.
       - name: Cache the phase-1 powers of tau
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
-          path: circuits/build/ppot_0080_13.ptau
+          path: circuits/build/ppot_0080_14.ptau
           key: ptau-${{ hashFiles('circuits/scripts/fetch-ptau.mjs') }}
 
       - name: Build the circuit and a development proving key
