@@ -253,3 +253,115 @@ describe('the salt is what makes a sibling opaque', () => {
     expect(a.root).not.toBe(b.root);
   });
 });
+
+// square#179. verifyDisclosure is an untrusted-input boundary: the disclosure
+// is handed to an auditor by somebody, and the auditor's whole reason for
+// calling this is that they did not build the commitment themselves. Its own
+// structure says what the contract is -- it counts eight slots and returns a
+// reason -- and four paths fell outside that, into an exception.
+describe('a forged disclosure is a "no", not an exception', () => {
+  const R = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+
+  async function sound() {
+    const values = await committedValues();
+    const s = await deriveSalts(POLICY_SALT);
+    const { root } = await buildCommitment(values, s);
+    return { root, disclosure: await open(values, s, 'max_daily') };
+  }
+
+  it.each([
+    ['a salt that is not a number', (d) => ({ ...d, salt: 'abc' }), 'salt is not a field element'],
+    ['a value that is not a number', (d) => ({ ...d, value: 'oops' }), 'value is not a field element'],
+    ['a salt that is an object', (d) => ({ ...d, salt: {} }), 'salt is not a field element'],
+    ['a value that is null', (d) => ({ ...d, value: null }), 'value is not a field element'],
+    [
+      'a sibling that is not a number',
+      (d) => ({ ...d, siblings: d.siblings.map((s, i) => (i === 3 ? 'abc' : s)) }),
+      'sibling 3 is not a field element',
+    ],
+    [
+      'a sibling that is an object',
+      (d) => ({ ...d, siblings: d.siblings.map((s, i) => (i === 3 ? {} : s)) }),
+      'sibling 3 is not a field element',
+    ],
+  ])('refuses %s with a reason', async (_name, forge, reason) => {
+    const { root, disclosure } = await sound();
+    const result = await verifyDisclosure(forge(disclosure), root);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe(reason);
+  });
+
+  // The point of the whole group, stated once as the thing that broke: an
+  // auditor's service written as `if (!(await verifyDisclosure(d, root)).ok)`
+  // turned a forged disclosure into a 500 rather than a "no".
+  it('never throws, whatever it is handed', async () => {
+    const { root, disclosure } = await sound();
+    const forgeries = [
+      { ...disclosure, salt: 'abc' },
+      { ...disclosure, value: [] },
+      { ...disclosure, salt: -1 },
+      { ...disclosure, value: 1.5 },
+      { ...disclosure, siblings: disclosure.siblings.map(() => undefined) },
+      { ...disclosure, siblings: 'not an array' },
+      { index: 'zero', value: '1', salt: '1', siblings: [] },
+      {},
+    ];
+    for (const forged of forgeries) {
+      await expect(verifyDisclosure(forged, root)).resolves.toMatchObject({ ok: false });
+    }
+  });
+
+  // normalize.js exists because BigInt("abc") puts the offending text in its
+  // message. The disclosure path had the same leak.
+  it('names the field it refused and never the value it was given', async () => {
+    const { root, disclosure } = await sound();
+    const secret = 'super-secret-nonsense';
+    const result = await verifyDisclosure({ ...disclosure, salt: secret }, root);
+    expect(result.reason).not.toContain(secret);
+    expect(result.reason).toContain('salt');
+  });
+});
+
+describe('one encoding per value', () => {
+  const R = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+
+  async function sound() {
+    const values = await committedValues();
+    const s = await deriveSalts(POLICY_SALT);
+    const { root } = await buildCommitment(values, s);
+    return { root, disclosure: await open(values, s, 'max_daily') };
+  }
+
+  // The finding. The salt was reduced with `% R` and the value was not, so a
+  // disclosure carrying `v + R` verified and the caller was handed
+  // "21888242871839275222…" as the operator's daily ceiling.
+  it('refuses a value that is the committed one plus the modulus', async () => {
+    const { root, disclosure } = await sound();
+    const shifted = String(BigInt(disclosure.value) + R);
+    const result = await verifyDisclosure({ ...disclosure, value: shifted }, root);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('value is not a field element');
+  });
+
+  it('refuses a salt above the modulus rather than reducing it', async () => {
+    const { root, disclosure } = await sound();
+    const shifted = String(BigInt(disclosure.salt) + R);
+    const result = await verifyDisclosure({ ...disclosure, salt: shifted }, root);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('salt is not a field element');
+  });
+
+  it('returns the value in canonical form on success', async () => {
+    const { root, disclosure } = await sound();
+    const result = await verifyDisclosure({ ...disclosure, value: ` ${disclosure.value} ` }, root);
+    expect(result.ok).toBe(true);
+    expect(result.value).toBe(String(BigInt(disclosure.value)));
+    expect(result.value).not.toMatch(/\s/);
+  });
+
+  it('refuses a leading zero, which is a second spelling of one number', async () => {
+    const { root, disclosure } = await sound();
+    const result = await verifyDisclosure({ ...disclosure, value: `0${disclosure.value}` }, root);
+    expect(result.ok).toBe(false);
+  });
+});

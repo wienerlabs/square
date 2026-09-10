@@ -11,7 +11,7 @@ import {
   daysToBitmask,
 } from './hash.js';
 import { deriveSalts, POLICY_FIELDS } from './commitment.js';
-import { toFieldString, toHourString, toIdentifier } from './normalize.js';
+import { toFieldString, toHourString, toIdentifier, toPolicySaltString } from './normalize.js';
 import { evaluateRules } from './rules.js';
 import { encodeForSolidity } from './convert.js';
 
@@ -97,6 +97,11 @@ export function validateRequest(req) {
   if (missing.length > 0) {
     throw new Error(`Missing required field(s): ${missing.join(', ')}`);
   }
+
+  // The policy secret, before anything derives from it. square#178: it was on
+  // the required list and nothing else, so "0" and "1" were accepted and the
+  // eight leaf salts became constants anybody can compute.
+  toPolicySaltString(req.policy_salt, 'policy_salt');
 
   for (const key of ['allowed_endpoint_categories', 'blocked_addresses', 'token_whitelist']) {
     if (!Array.isArray(req[key])) {
@@ -312,7 +317,8 @@ export async function buildCircuitInput(request) {
     // One per committed field, in the order the circuit hashes them. See
     // commitment.js — the same construction, and the only two places it exists.
     policy_salts: (await deriveSalts(
-      toFieldString(request.policy_salt, 'policy_salt'),
+      // The same floor validateRequest applies, so the bound has one home.
+      toPolicySaltString(request.policy_salt, 'policy_salt'),
     )).map(String),
     time_active: timeActive,
     time_days_bitmask: timeDaysBitmask,

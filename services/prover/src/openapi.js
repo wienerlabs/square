@@ -148,11 +148,27 @@ export const openapiSpec = {
             description:
               'The secret the eight leaf salts derive from, as a decimal field element. '
               + 'Kept with the policy and reused on every proof of it: a different salt is '
-              + 'a different commitment, and the registry holds one. Generate with '
-              + 'randomPolicySalt() from src/commitment.js. It is the operator\'s secret — '
-              + 'disclosing one leaf salt discloses that leaf and no other, but disclosing '
-              + 'this one discloses all eight.',
-            example: '7777777777777777777777777777777777777777777777777777777777777',
+              + 'a different commitment, and the registry holds one. It is the operator\'s '
+              + 'secret — disclosing one leaf salt discloses that leaf and no other, but '
+              + 'disclosing this one discloses all eight, and two of the committed values '
+              + '(the per-transaction and daily ceilings) are round USDC amounts that a '
+              + 'dictionary opens once the salts are known. '
+              + 'GENERATE IT, NEVER COPY ONE: read 32 cryptographically random bytes, read '
+              + 'them as a big-endian integer, and reduce modulo '
+              + '21888242871839275222246405745257275088548364400416034343698204186575808495617 '
+              + '(the BN254 scalar field). That is all randomPolicySalt() in '
+              + 'src/commitment.js does, and it needs no server code: in any language it is '
+              + 'a random-bytes call and one modulo. The service refuses a value below 2^128, '
+              + 'which catches 0, 1 and the other degenerate ones; it cannot catch a large '
+              + 'number somebody chose by hand, so the randomness is the caller\'s to get right.',
+            // Deliberately not a value. An `example` is what a generated client
+            // and a "Try it" console put in the box, so it is the value an
+            // integrator copies -- and this field's whole contract is that it is
+            // a secret nobody else has. The previous example was sixty-one
+            // sevens; measured, it opens a 25 USDC ceiling in 24 050 tries,
+            // because a published example is in every attacker's guess list.
+            // A placeholder fails validation loudly instead.
+            example: 'GENERATE-32-RANDOM-BYTES-DO-NOT-COPY-THIS',
           },
           operator_id: { type: 'string', description: '20-byte EVM address, 0x-prefixed.' },
           max_daily_spend: {
