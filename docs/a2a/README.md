@@ -101,6 +101,18 @@ The `deliverable` that comes back on `DELIVERED` is a reference to the work
 rather than the work itself, sized for ERC-8183's `bytes32` — a hash or a CID.
 Keeping the same shape on the wire and on chain stops the two from drifting.
 
+`task/create` is idempotent on `taskId`. The caller chooses the id, the client
+retries the call, and the answer to a request that created and started the task
+can be lost on the way back; the retry, carrying the same five fields, is
+answered with the task as it stands. The same id with different content is
+refused with `-32003`, which is not what a bad request gets.
+
+`callerDid` on the wire is a claim. Nothing in the envelope proves it, so the
+host that has authenticated the caller by its own transport tells the server
+who is asking, and the server holds the body to that: a create naming another
+caller is refused, and a task is visible only to the caller that created it.
+`packages/a2a/README.md` has the shape.
+
 ## Cancellation has no window
 
 The state machine allows a cancel from `SUBMITTED` and from nowhere else. Once
@@ -128,6 +140,19 @@ the DID Document's services, and takes the entry named `A2A`. The card shape is
 Endpoints must be `https`, with one exception for loopback so that an agent can
 be written on `localhost` before it is deployed. A task request carries the work
 and the job id; over plain http both are rewritable by anyone on the path.
+
+The rule is about the address as well as the scheme, because the endpoint is
+the other side's choice and the caller contacts it unprompted, for the card at
+`/.well-known/agent-registration.json`. A literal private, link-local or
+otherwise non-public address is refused whatever the scheme:
+`https://169.254.169.254/` is not an agent. Loopback is the development
+exception, on http and https both. Hostnames are not resolved by this package,
+which has no dependencies; a host that must not reach its own network through a
+card it did not write passes `WellKnownCache` a `fetch` built on
+`@squaresdk/hardening`'s `safeFetch`.
+
+Redirects: the well-known request follows at most three, each target held to
+the same rule; a task request follows none, and a 3xx on it is a provider error.
 
 ## Failure is not refund
 

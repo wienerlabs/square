@@ -168,6 +168,23 @@ describe("protocol handling", () => {
     });
     await expect(client.createTask(ENDPOINT, PARAMS)).rejects.toThrow(/not a JSON-RPC response/);
   });
+
+  it("does not follow a redirect on a task request", async () => {
+    // The card names the endpoint that answers. A 3xx on the POST would carry
+    // the work and the job id wherever the provider's host pointed, past the
+    // endpoint rule that discovery applied; so the request is sent with
+    // redirect: "manual" and a 3xx is a provider error, not retried.
+    const calls: RequestInit[] = [];
+    const client = new A2AClient({
+      fetch: async (_input, init) => {
+        calls.push(init ?? {});
+        return new Response(null, { status: 307, headers: { location: "http://elsewhere.example/a2a" } });
+      },
+    });
+    await expect(client.createTask(ENDPOINT, PARAMS)).rejects.toThrow(/returned 307/);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.redirect).toBe("manual");
+  });
 });
 
 describe("concurrency cap", () => {

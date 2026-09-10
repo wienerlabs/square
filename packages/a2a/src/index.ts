@@ -41,7 +41,7 @@ export type { TaskRecord, TaskListener } from "./task-machine.js";
 
 export { A2AClient, A2AError } from "./client.js";
 export { A2AServer } from "./server.js";
-export type { A2AServerOptions, CapabilityHandler } from "./server.js";
+export type { A2AServerOptions, CallContext, CapabilityHandler } from "./server.js";
 export type { A2AClientOptions } from "./client.js";
 
 export { findA2AEndpoint, wellKnownUrlFor, WellKnownCache, EndpointError } from "./discovery.js";

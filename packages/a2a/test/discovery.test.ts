@@ -50,10 +50,52 @@ describe("findA2AEndpoint", () => {
       .toThrow(EndpointError);
   });
 
-  it("allows http on loopback, because agents are written on localhost first", () => {
-    for (const host of ["localhost", "127.0.0.1"]) {
-      expect(findA2AEndpoint({ services: [{ name: "A2A", endpoint: `http://${host}:4001/a2a` }] }))
-        .toBe(`http://${host}:4001/a2a`);
+  it("allows http and https on loopback, because agents are written on localhost first", () => {
+    // The development exception, and the only one: loopback on either scheme.
+    for (const host of ["localhost", "127.0.0.1", "[::1]", "agent.localhost"]) {
+      for (const scheme of ["http", "https"]) {
+        expect(findA2AEndpoint({ services: [{ name: "A2A", endpoint: `${scheme}://${host}:4001/a2a` }] }))
+          .toBe(`${scheme}://${host}:4001/a2a`);
+      }
+    }
+    // The URL parser canonicalises IPv4 spellings before the check runs, so
+    // octal, hex and decimal loopback are loopback too, not a way around it.
+    expect(findA2AEndpoint({ services: [{ name: "A2A", endpoint: "http://0177.0.0.1:4001/a2a" }] }))
+      .toBe("http://0177.0.0.1:4001/a2a");
+  });
+
+  it("refuses a private, link-local or otherwise non-public address even over https", () => {
+    // TLS says nothing about where a connection goes. https://169.254.169.254/
+    // used to pass while http://169.254.169.254/ was refused, because the only
+    // address check had ended up on the unencrypted path. The endpoint is the
+    // other side's choice, and the well-known request goes to it unprompted.
+    for (const endpoint of [
+      "https://169.254.169.254/latest/meta-data/",
+      "https://10.0.0.5/a2a",
+      "https://172.16.0.1/a2a",
+      "https://192.168.1.1/a2a",
+      "https://100.64.0.1/a2a",
+      "https://0.0.0.0/a2a",
+      "https://[::ffff:10.0.0.5]/a2a",
+      "https://[64:ff9b::a00:5]/a2a",
+      "https://[2002:a00:5::]/a2a",
+      "https://[fc00::1]/a2a",
+      "https://[fe80::1]/a2a",
+    ]) {
+      expect(() => findA2AEndpoint({ services: [{ name: "A2A", endpoint }] }), endpoint).toThrow(/non-public/);
+    }
+  });
+
+  it("refuses credentials in the endpoint", () => {
+    expect(() => findA2AEndpoint({ services: [{ name: "A2A", endpoint: "https://user:pw@a.example/a2a" }] }))
+      .toThrow(/credentials/);
+  });
+
+  it("lets a public literal address and any hostname through", () => {
+    // A hostname is not resolved here: the package has no dependencies. That
+    // gap is the host's to close, with a fetch built on hardening's safeFetch.
+    for (const endpoint of ["https://1.1.1.1/a2a", "https://[2606:4700::1111]/a2a", "https://agent.example/a2a"]) {
+      expect(findA2AEndpoint({ services: [{ name: "A2A", endpoint }] })).toBe(endpoint);
     }
   });
 
@@ -84,13 +126,18 @@ describe("wellKnownUrlFor", () => {
 describe("WellKnownCache", () => {
   const card = { services: [{ name: "A2A", endpoint: "https://a.example/a2a" }] };
 
-  function cacheWith(responder: () => Promise<Response>, now = () => 0) {
-    let calls = 0;
+  function cacheWith(responder: (url: string) => Promise<Response>, now = () => 0, maxCardBytes?: number) {
+    const urls: string[] = [];
     const cache = new WellKnownCache({
       now,
-      fetch: async () => { calls += 1; return responder(); },
+      ...(maxCardBytes !== undefined ? { maxCardBytes } : {}),
+      fetch: async (input, init) => {
+        urls.push(String(input));
+        expect(init?.redirect).toBe("manual");
+        return responder(String(input));
+      },
     });
-    return { cache, calls: () => calls };
+    return { cache, calls: () => urls.length, urls };
   }
 
   it("fetches once and serves the rest from memory", async () => {
@@ -153,5 +200,53 @@ describe("WellKnownCache", () => {
     expect(cache.peek("https://a.example/a2a")).toBeUndefined();
     await cache.get("https://a.example/a2a");
     expect(cache.peek("https://a.example/a2a")).toBeNull();
+  });
+
+  it("follows a redirect to another https origin, and no further than three", async () => {
+    const { cache, urls } = cacheWith(async (url) =>
+      url.startsWith("https://a.example/")
+        ? new Response(null, { status: 301, headers: { location: "https://cdn.example/card.json" } })
+        : new Response(JSON.stringify(card), { status: 200 }),
+    );
+    expect(await cache.get("https://a.example/a2a")).toEqual(card);
+    expect(urls).toEqual(["https://a.example/.well-known/agent-registration.json", "https://cdn.example/card.json"]);
+
+    const loop = cacheWith(async (url) => new Response(null, { status: 302, headers: { location: `${url}/again` } }));
+    expect(await loop.cache.get("https://b.example/a2a")).toBeNull();
+    expect(loop.calls()).toBe(4);
+  });
+
+  it("does not follow the well-known request into http or into a private address", async () => {
+    // The same mechanism #129 measured for the resolver, and the same runtime
+    // default: fetch would have followed both. Here the redirect is not even
+    // needed for the endpoint itself to be internal, which is what the
+    // endpoint rule handles; this is the rule applied to where it sends us.
+    for (const location of ["http://a.example/card.json", "https://10.0.0.5/card.json", "https://169.254.169.254/x"]) {
+      const { cache, urls } = cacheWith(async () => new Response(null, { status: 302, headers: { location } }));
+      expect(await cache.get("https://a.example/a2a")).toBeNull();
+      expect(urls, location).toHaveLength(1);
+    }
+  });
+
+  it("treats a card over the byte cap as a miss, whether declared or streamed", async () => {
+    const declared = cacheWith(async () => new Response("{}", { status: 200, headers: { "content-length": "999999" } }), () => 0, 1024);
+    expect(await declared.cache.get("https://a.example/a2a")).toBeNull();
+
+    const chunk = new TextEncoder().encode("x".repeat(512));
+    const streamed = cacheWith(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              for (let i = 0; i < 8; i += 1) c.enqueue(chunk);
+              c.close();
+            },
+          }),
+          { status: 200 },
+        ),
+      () => 0,
+      1024,
+    );
+    expect(await streamed.cache.get("https://a.example/a2a")).toBeNull();
   });
 });
