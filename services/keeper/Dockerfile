@@ -32,8 +32,10 @@ USER square
 EXPOSE 3011
 
 # The service answers /health from @squaresdk/observability, which returns 503
-# when a check marked critical fails -- for the keeper that is the database and
-# the RPC endpoint. PORT moves the listener, so the check follows it.
+# when a check marked critical fails. For the keeper those are the database, the
+# RPC endpoint and, since square#147, the gas balance: a keeper that cannot pay
+# for a transaction cannot do its job, so it reports unhealthy instead of
+# silently skipping work. PORT moves the listener, so the check follows it.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3011)+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
 

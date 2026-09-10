@@ -59,8 +59,12 @@ silently falls back to something is worse than one that will not start.
 
 ## A measured run
 
-2026-09-09, Docker 29.1.3 on Apple Silicon, images already built.
-`make clean && make up` took **38 seconds** to reach all-healthy, twice.
+2026-09-10, Docker 29.1.3 on Apple Silicon. `make clean && make up` reaches
+all-healthy in **27 to 28 seconds** with the images already built, twice in a
+row. A run that has to rebuild them first — which any change under
+`services/`, `packages/` or `app/` causes — took **94 seconds**; both numbers
+are here because quoting only the warm one would describe a case a contributor
+rarely hits first.
 
 ```
 $ make up
@@ -73,11 +77,20 @@ $ make up
  Container square-indexer-1 Healthy
  Container square-keeper-1 Healthy
  Container square-app-1 Healthy
-prover    {"status":"healthy","service":"square-prover","version":"0.1.0","checks":{"artifacts":{"ok":true,"critical":false,"latencyMs":0,"detail":"payment.wasm and payment.zkey present"}},"uptimeSeconds":32}
-indexer   {"status":"healthy","service":"square-indexer","version":"0.1.0","checks":{"database":{"ok":true,"critical":true,"latencyMs":2},"rpc":{"ok":true,"critical":true,"latencyMs":3},"lag":{"ok":true,"critical":false,"latencyMs":1,"detail":"0 blocks behind"}},"uptimeSeconds":11}
-keeper    {"status":"healthy","service":"square-keeper","version":"0.1.0","checks":{"database":{"ok":true,"critical":true,"latencyMs":5},"rpc":{"ok":true,"critical":true,"latencyMs":8},"balance":{"ok":true,"critical":false,"latencyMs":9,"detail":"9999995170851188989024 wei of native USDC for gas"}},"uptimeSeconds":11}
+prover    {"status":"healthy","service":"square-prover","version":"0.1.0","checks":{"artifacts":{"ok":true,"critical":true,"latencyMs":0,"detail":"payment.wasm and payment.zkey present"}},"uptimeSeconds":26}
+indexer   {"status":"healthy","service":"square-indexer","version":"0.1.0","checks":{"database":{"ok":true,"critical":true,"latencyMs":1},"rpc":{"ok":true,"critical":true,"latencyMs":2},"lag":{"ok":true,"critical":true,"latencyMs":1,"detail":"0 blocks behind, limit 100"},"quarantine":{"ok":true,"critical":false,"latencyMs":1,"detail":"no event set aside"}},"uptimeSeconds":11}
+keeper    {"status":"healthy","service":"square-keeper","version":"0.1.0","checks":{"database":{"ok":true,"critical":true,"latencyMs":3},"rpc":{"ok":true,"critical":true,"latencyMs":4},"balance":{"ok":true,"critical":true,"latencyMs":4,"detail":"9999992487747981934720 wei of native USDC for gas"},"mirror":{"ok":true,"critical":false,"latencyMs":2,"detail":"reading the mirror an indexer writes"}},"uptimeSeconds":11}
 app       HTTP 200
 ```
+
+**The gate is stricter than it looks.** `/health` returns 503 when a check
+marked `critical` fails, and square#147 moved two more into that set: the
+indexer's `lag` and the keeper's gas `balance`. So "all healthy" now means an
+indexer no further behind than `MAX_LAG_BLOCKS` and a keeper that can still pay
+for a transaction, not merely two processes that answer. On a fresh local chain
+the lag is zero and the anvil account is funded, which is why the timings above
+are unaffected — but a stack pointed at a real chain has to catch up before
+`make up` returns.
 
 Healthy is not the same as working, so the stack was also asked to do its job.
 

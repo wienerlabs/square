@@ -1,7 +1,12 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ARC_TESTNET_CHAIN_ID, deploymentFor } from "../src/deployments.js";
+import {
+  ANVIL_CHAIN_ID,
+  ARC_TESTNET_CHAIN_ID,
+  deploymentFor,
+  deploymentFromJson,
+} from "../src/deployments.js";
 
 /**
  * #49 asks that an address, a chain id and an RPC endpoint come from one place.
@@ -81,5 +86,50 @@ describe("one declaration site", () => {
 
   it("declares the Arc RPC endpoint once", () => {
     expect(filesContaining(/rpc\.testnet\.arc\.io/)).toEqual([DECLARATION_SITE]);
+  });
+});
+
+/**
+ * The nine addresses live in two files, and this is what keeps them equal.
+ *
+ * `deployments.ts` says the addresses come out of
+ * `contracts/deployments/<chainId>.json`, which a forge script writes. It does
+ * not read that file — it cannot, because the JSON is not shipped with the
+ * package — so it holds a copy, and a copy nobody compares is a copy that
+ * drifts. Five of the nine moved twice in two days across the redeploys of
+ * 2026-09-08 and 2026-09-09.
+ *
+ * The literal-duplication rule above cannot catch this one: the JSON is not a
+ * second *declaration* of an address, it is the output of the deploy that
+ * produced it, and forbidding it would delete the source of truth. So this
+ * checks the weaker and correct thing — that the copy still equals the source.
+ *
+ * Reported separately as square#168.
+ */
+describe("the copy still equals the deployment file", () => {
+  const deploymentFile = (chainId: number): string =>
+    join(repoRoot, "contracts", "deployments", `${chainId}.json`);
+
+  it("matches Arc testnet's file, address for address", () => {
+    const onDisk = deploymentFromJson(JSON.parse(readFileSync(deploymentFile(ARC_TESTNET_CHAIN_ID), "utf8")));
+    expect(deploymentFor(ARC_TESTNET_CHAIN_ID)).toEqual(onDisk);
+  });
+
+  /**
+   * 31337.json is gitignored — a local deploy writes it — so this asserts only
+   * when it is there. It says which of the two happened rather than passing
+   * quietly either way, because a suite that reports green having checked
+   * nothing is the failure docs/ci.md is about.
+   */
+  it("matches the local chain's file when a local deploy has written one", () => {
+    const path = deploymentFile(ANVIL_CHAIN_ID);
+    if (!existsSync(path)) {
+      expect(deploymentFor(ANVIL_CHAIN_ID).chainId).toBe(ANVIL_CHAIN_ID);
+      console.warn(`no ${path}: run DeployLocal to check the anvil copy too`);
+      return;
+    }
+    expect(deploymentFor(ANVIL_CHAIN_ID)).toEqual(
+      deploymentFromJson(JSON.parse(readFileSync(path, "utf8"))),
+    );
   });
 });

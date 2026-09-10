@@ -28,8 +28,11 @@ USER square
 EXPOSE 3010
 
 # The service answers /health from @squaresdk/observability, which returns 503
-# when a check marked critical fails -- for the indexer that is the database and
-# the RPC endpoint. PORT moves the listener, so the check follows it.
+# when a check marked critical fails. For the indexer those are the database,
+# the RPC endpoint and, since square#147, the indexing lag: an indexer further
+# behind than MAX_LAG_BLOCKS is unhealthy rather than merely slow, which is what
+# makes this check worth having on a container. PORT moves the listener, so the
+# check follows it.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3010)+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
 
