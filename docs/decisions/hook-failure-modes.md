@@ -57,6 +57,19 @@ is trusted instead of the expiry; the evaluator that provably cannot is not.
 
 [i89]: https://github.com/wienerlabs/square/issues/89
 
+**Who reads the events this decision leans on.** Tolerating a failure is only
+sound if somebody sees it, so both events have a named reader. `HookFailed` is
+reduced by the indexer (`services/indexer/src/reducer.ts`), counted into
+`square_hook_write_failures_total{kind="hookCall"}`
+(`services/indexer/src/sync.ts`) and alerted on by the `hookWriteFailures` rule
+the indexer runs every `ALERT_INTERVAL_MS`, which fires above zero because a
+hook call that never completes should never happen. `PayoutUnresolvable` is
+reduced into `jobs.refund_reason = 'payoutUnresolvable'`, so a job the client
+took back because the resolver could not answer is a different row from a job
+that simply ran out of time, on `/jobs/:id` and in any query over the mirror.
+Without those two readers the argument of this document would rest on evidence
+nobody collects.
+
 **The hook wraps the compliance module the same way.** `_checkRelease` calls
 the module inside `try/catch`; a revert reads as "not verified", emits
 `ComplianceCheckFailed(jobId, reason)`, and the job completes with a `0`

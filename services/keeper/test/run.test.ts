@@ -86,6 +86,7 @@ describe("the keeper journals what the chain accepted", () => {
       disputed: false,
       agentId: null,
       updatedBlock: 1n,
+      refundReason: null,
     });
   });
 

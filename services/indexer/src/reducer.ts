@@ -24,6 +24,7 @@ export interface JobState {
   reason: Hex | null;
   disputed: boolean;
   agentId: bigint | null;
+  refundReason: string | null;
   updatedBlock: bigint;
 }
 
@@ -77,7 +78,10 @@ export const ListingStatus = { None: 0, Listed: 1, Sold: 2, Cancelled: 3 } as co
 export type ReducerNotice =
   | { code: "windowsMissing"; jobId: bigint; submittedAt: bigint }
   | { code: "reputationWriteFailed"; jobId: bigint; agentId: bigint }
-  | { code: "validationWriteFailed"; jobId: bigint; requestHash: Hex };
+  | { code: "validationWriteFailed"; jobId: bigint; requestHash: Hex }
+  | { code: "hookFailed"; jobId: bigint; hook: Address; selector: Hex };
+
+export const REFUND_REASON_PAYOUT_UNRESOLVABLE = "payoutUnresolvable";
 
 export type NoticeSink = (notice: ReducerNotice) => void;
 
@@ -169,6 +173,7 @@ function applyKernel(state: IndexerState, event: Extract<SquareEvent, { contract
         reason: null,
         disputed: false,
         agentId: null,
+        refundReason: null,
         updatedBlock: block,
       });
       return;
@@ -251,6 +256,15 @@ function applyKernel(state: IndexerState, event: Extract<SquareEvent, { contract
       job.updatedBlock = block;
       return;
     }
+    case "PayoutUnresolvable": {
+      const job = requireJob(state, event.args.jobId);
+      job.refundReason = REFUND_REASON_PAYOUT_UNRESOLVABLE;
+      job.updatedBlock = block;
+      return;
+    }
+    case "HookFailed":
+      notice({ code: "hookFailed", jobId: event.args.jobId, hook: event.args.hook, selector: event.args.selector });
+      return;
     case "PaymentReleased":
       credit(state, "SquareJob", event.args.provider, event.args.amount);
       return;

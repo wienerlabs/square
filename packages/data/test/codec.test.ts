@@ -84,6 +84,7 @@ describe("candidate queries filter by evaluator", () => {
       disputed: false,
       agentId: null,
       updatedBlock: 1_000n,
+      refundReason: null,
       ...overrides,
     };
   }
