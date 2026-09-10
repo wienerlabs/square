@@ -7,6 +7,7 @@
 [i19]: https://github.com/wienerlabs/square/issues/19
 [i27]: https://github.com/wienerlabs/square/issues/27
 [i76]: https://github.com/wienerlabs/square/issues/76
+[i98]: https://github.com/wienerlabs/square/issues/98
 
 ## What is being claimed
 
@@ -35,6 +36,45 @@ The second is public signal 1 of the proof. `policyDataHash` is the same
 implementation `circuits/test/payment.test.js` uses to hold the circuit honest,
 imported rather than copied.
 
+## Why the salt is not written in the script
+
+Every value in the policy is written out in
+`contracts/script/prove-and-verify-on-arc.mjs`, so a reader can see what is being
+proved without leaving the file. `policy_salt` is the exception: it is drawn per
+run, printed, and never committed.
+
+[#98][i98] rebuilt the commitment as a tree of salted leaves precisely so that a
+field cannot be recovered from the root by trying candidate values against it.
+The policy fields here are guessable — a spending cap is a round number, a
+category is a short string — and an unsalted leaf is a lookup away. A salt
+written into a public repository is a salt that has stopped doing that job, and
+it would be written into the one script whose output is quoted as evidence.
+
+A real operator does the opposite of a fresh salt each time: they draw one,
+keep it with the policy, and reuse it, because the commitment on chain has to
+match on every later proof. This script has no policy to keep and no chain
+state to match, so keeping one would be theatre.
+
+The run commits the same policy three times and checks both halves of what a
+salt is for:
+
+    ok    a different salt moves the commitment
+    ok    the same salt does not
+
+The first is the property [#98][i98] bought: without it the root is a lookup
+table for eight guessable values. The second is the property an operator needs,
+because a commitment that moved between proofs could never be matched against
+one recorded on chain. Five milliseconds each, once the Poseidon tables are
+built, and together they are the only lines in the run that would notice if a
+future change dropped the salts back out of the leaves.
+
+Both are wired to the exit code. Making the second commitment reuse the first
+salt turns the run red rather than quietly green:
+
+    FAIL  a different salt moves the commitment
+    ok    the same salt does not
+    1 check(s) failed.        (exit 1)
+
 ## The run
 
 ```console
@@ -42,13 +82,17 @@ $ node contracts/script/prove-and-verify-on-arc.mjs
 rpc      https://rpc.testnet.arc.io
 chain id 5042002
 client   arc/v1
-block    61216037
+block    61373663
 
 verifier  the repository contract, keyed to this build, state-overridden at a
           scratch address on Arc. Nothing deployed, nothing committed.
 
 a policy, committed off chain
-  policy_data_hash  20874387725514270809315419603381509475968254125138003687451722302879959916009
+  policy_salt       12190023124539126855280631980795322565716991051691943275722018929597878958541
+  policy_data_hash  8801053666567262384589725919533962633280457992808803149873743606002804895244
+  another salt      15095070811756033868382339762161538597868378004186095807735877870697753859416
+  ok    a different salt moves the commitment
+  ok    the same salt does not
 
 a proof built from that policy, now
   ok    the circuit committed to the same policy
@@ -62,12 +106,14 @@ Arc verifies it
   ok    the proof verifies on chain
   ok    a substituted policy commitment is rejected
 
-Arc gas for the verification: 281,596
-  commitment        410 ms
-  prove             575 ms
-  build verifier    252 ms
-  verify             71 ms
-  total            1307 ms
+Arc gas for the verification: 281,608
+  commitment                       583 ms
+  commitment under another salt      5 ms
+  commitment again, same salt        5 ms
+  prove                            835 ms
+  build verifier                   165 ms
+  verify                            78 ms
+  total                           1670 ms
 
 Policy committed, proof built from it, accepted by chain 5042002 (arc/v1).
 ```
@@ -76,13 +122,21 @@ Policy committed, proof built from it, accepted by chain 5042002 (arc/v1).
 
 | Stage | Time | What it is |
 |---|---|---|
-| commitment | 410 ms | policy → circuit input → Poseidon, in JS. Dominated by circomlibjs building its Poseidon tables, not by the hash. |
-| prove | 575 ms | `snarkjs.groth16.fullProve` over 6,608 witness variables, domain size 8,192. |
-| build verifier | 252 ms | compiling the repository's verifier keyed to this build (see below); with `solc` already in `~/.svm`. |
-| verify | 71 ms | one `eth_call` to Arc with a state override. |
-| **total** | **1,307 ms** | |
+| commitment | 583 ms | policy → circuit input → Poseidon, in JS. Dominated by circomlibjs building its Poseidon tables, not by the hash. |
+| commitment under another salt | 5 ms | the same work with the tables already built, which is what the 583 ms above is actually made of. |
+| commitment again, same salt | 5 ms | likewise. |
+| prove | 835 ms | `snarkjs.groth16.fullProve` over 11,584 witness variables, domain size 16,384. |
+| build verifier | 165 ms | compiling the repository's verifier keyed to this build (see below); with `solc` already in `~/.svm`. |
+| verify | 78 ms | one `eth_call` to Arc with a state override. |
+| **total** | **1,670 ms** | |
 
-**Gas: 281,596** for one verification, from `eth_estimateGas` against Arc. The
+The circuit is larger than it was when this was first measured: [#98][i98]
+rebuilt the commitment on salted leaves, taking it from 6,608 witness variables
+to 11,584 and the domain from 8,192 to 16,384. Proving costs about 260 ms more.
+Gas did not move, because the proof is still three curve points over eight
+public signals whatever the circuit behind it costs.
+
+**Gas: 281,608** for one verification, from `eth_estimateGas` against Arc. The
 figure moves by a few dozen between blocks — three consecutive runs gave
 281,584, 281,596 and 281,608 — because an estimate is an estimate. The receipt
 figure for a verification on the deployed contract is in

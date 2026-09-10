@@ -55,9 +55,22 @@ const { buildCircuitInput, generateProof } = await import(
 const { policyDataHash } = await import(
   path.join(REPO, 'circuits', 'test', 'helpers', 'inputs.mjs')
 );
+const { randomPolicySalt } = await import(
+  path.join(REPO, 'services', 'prover', 'src', 'commitment.js')
+);
 
 // One policy, written out rather than imported, so what is being proved is
 // visible in the file that proves it.
+//
+// With one exception: policy_salt is generated per run, below, and is not
+// written here. square#98 made the commitment a tree of salted leaves so that
+// a field cannot be recovered from the root by trying values against it, and a
+// salt committed to a public repository is a salt that no longer does that. An
+// operator keeps one salt with the policy and reuses it, which is what makes
+// the commitment stable across proofs; this script is a demonstration and has
+// no policy to keep, so it draws a fresh one and prints it. The run below shows
+// what that buys: the same policy under a different salt commits to a different
+// root.
 const USDC = '0x3600000000000000000000000000000000000000';
 const POLICY = {
   policy_id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
@@ -287,13 +300,31 @@ async function main() {
       + '          scratch address on Arc. Nothing deployed, nothing committed.\n\n');
 
   // ---------------------------------------------------- 1. policy → commitment
-  const request = { ...POLICY, ...PAYMENT };
-  const expectedCommitment = await stage('commitment', async () => {
-    const input = await buildCircuitInput(request);
-    return policyDataHash(input);
-  });
+  const policySalt = randomPolicySalt();
+  const request = { ...POLICY, ...PAYMENT, policy_salt: policySalt };
+  const commit = async (req) => policyDataHash(await buildCircuitInput(req));
+  const expectedCommitment = await stage('commitment', () => commit(request));
+
+  // The salt is doing work, and a run that printed one root would not show it.
+  // Two more commitments, four milliseconds each now that the Poseidon tables
+  // are built, and between them they pin both halves of what a salt is for:
+  //
+  //   another salt, same policy  ->  a different root, or the root is a lookup
+  //                                  table for the eight guessable values in it
+  //   same salt,    same policy  ->  the same root, or an operator could never
+  //                                  prove twice against one commitment
+  const underAnotherSalt = await stage('commitment under another salt',
+    () => commit({ ...request, policy_salt: randomPolicySalt() }));
+  const recommitted = await stage('commitment again, same salt', () => commit(request));
+
   process.stdout.write('a policy, committed off chain\n');
-  process.stdout.write(`  policy_data_hash  ${expectedCommitment}\n\n`);
+  process.stdout.write(`  policy_salt       ${policySalt}\n`);
+  process.stdout.write(`  policy_data_hash  ${expectedCommitment}\n`);
+  process.stdout.write(`  another salt      ${underAnotherSalt}\n`);
+  check('a different salt moves the commitment',
+    String(underAnotherSalt !== expectedCommitment), 'true');
+  check('the same salt does not', recommitted, expectedCommitment);
+  process.stdout.write('\n');
 
   // ------------------------------------------------------------- 2. the proof
   const result = await stage('prove', () => generateProof(request));
