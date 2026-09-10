@@ -37,6 +37,15 @@ Carried over from the predecessor and kept: retry with exponential backoff on
 429 and 5xx only, `Retry-After` when the provider sends one, a per-endpoint
 concurrency cap, and separate timeouts for dispatch and polling.
 
+`findA2AEndpoint` is the one rule for where a task may go, and `WellKnownCache`
+holds the request it makes by itself to the same rule: https, or either scheme
+on loopback for development, and never a literal private, link-local or other
+non-public address, whatever the scheme. Redirects on the well-known request
+are followed by hand, at most three, each target checked; a task request follows
+none. Hostnames are not resolved here, so the default `fetch` does not catch a
+name that points inside your network; pass `WellKnownCache` one built on
+`@squaresdk/hardening`'s `safeFetch` if that matters where you run.
+
 ## Being an agent
 
 ```ts

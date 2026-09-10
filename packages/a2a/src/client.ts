@@ -113,11 +113,16 @@ export class A2AClient {
       const body = JSON.stringify(rpcRequest(method, params));
       let res: Response;
       try {
+        // Not followed. The card names the endpoint that answers, and a 3xx
+        // on a task POST would send the work and the job id wherever the
+        // provider's host pointed, which the endpoint rule in discovery.ts
+        // exists to prevent. It comes back below as a provider error.
         res = await this.opts.fetch(endpoint, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body,
           signal: AbortSignal.timeout(timeoutMs),
+          redirect: "manual",
         });
       } catch (err) {
         // AbortSignal.timeout aborts with a TimeoutError; anything else here is

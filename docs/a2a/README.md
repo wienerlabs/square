@@ -129,6 +129,19 @@ Endpoints must be `https`, with one exception for loopback so that an agent can
 be written on `localhost` before it is deployed. A task request carries the work
 and the job id; over plain http both are rewritable by anyone on the path.
 
+The rule is about the address as well as the scheme, because the endpoint is
+the other side's choice and the caller contacts it unprompted, for the card at
+`/.well-known/agent-registration.json`. A literal private, link-local or
+otherwise non-public address is refused whatever the scheme:
+`https://169.254.169.254/` is not an agent. Loopback is the development
+exception, on http and https both. Hostnames are not resolved by this package,
+which has no dependencies; a host that must not reach its own network through a
+card it did not write passes `WellKnownCache` a `fetch` built on
+`@squaresdk/hardening`'s `safeFetch`.
+
+Redirects: the well-known request follows at most three, each target held to
+the same rule; a task request follows none, and a 3xx on it is a provider error.
+
 ## Failure is not refund
 
 A provider that reports `FAILED` has said something about its own work and
