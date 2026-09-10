@@ -84,6 +84,33 @@ describe('POST /prove refuses a bad request before proving', () => {
     expect(response.body.error).toContain('allowed_hours_start');
   });
 
+  // square#181. All three used to be accepted: the second record was validated
+  // and dropped, its timezone never looked at, and an empty day list produced a
+  // policy that forbade every weekday.
+  it('answers 400 for a second time restriction', async () => {
+    const response = await post({ ...VALID, time_restrictions: [window_(9, 17), window_(10, 12)] });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('only one window can be proved');
+  });
+
+  it('answers 400 for an empty day list', async () => {
+    const response = await post({
+      ...VALID,
+      time_restrictions: [{ ...window_(9, 17), allowed_days: [] }],
+    });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('at least one day');
+  });
+
+  it('answers 400 for a timezone that is not UTC', async () => {
+    const response = await post({
+      ...VALID,
+      time_restrictions: [{ ...window_(9, 17), timezone: 'America/New_York' }],
+    });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('timezone');
+  });
+
   it('answers 400 for a missing required field', async () => {
     const { policy_salt: _dropped, ...withoutSalt } = VALID;
     const response = await post(withoutSalt);
