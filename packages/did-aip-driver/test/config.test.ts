@@ -36,6 +36,12 @@ describe("config", () => {
     expect(readConfig({ RPC_1: "https://a" } as never).allowedRegistries).toBeUndefined();
   });
 
+  it("parses an optional agentURI host allowlist", () => {
+    const c = readConfig({ RPC_1: "https://a", DRIVER_ALLOWED_AGENT_URI_HOSTS: "cards.example, cdn.example" } as never);
+    expect(c.allowedAgentUriHosts).toEqual(["cards.example", "cdn.example"]);
+    expect(readConfig({ RPC_1: "https://a" } as never).allowedAgentUriHosts).toBeUndefined();
+  });
+
   it("holds the per-chain form to the chain id check the JSON form gets", () => {
     // RPC_<id> wins over DRIVER_RPC, so it used to be the unchecked form that
     // decided. {"0": ...} was refused; RPC_0 was accepted as chain 0.

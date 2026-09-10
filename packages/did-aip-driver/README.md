@@ -26,6 +26,7 @@ The build context is `packages/`, not this directory — the driver depends on
 | `RPC_<chainId>` | Endpoint for one chain, e.g. `RPC_5042002` |
 | `DRIVER_RPC` | The whole map as JSON: `{"5042002":"https://…"}` |
 | `DRIVER_ALLOWED_REGISTRIES` | Comma-separated registries to honour |
+| `DRIVER_ALLOWED_AGENT_URI_HOSTS` | Comma-separated hosts a registration file may be fetched from, on every redirect hop. Unset allows any public host; a literal private address is refused either way |
 | `DRIVER_PORT` | 1 to 65535, default 8080 |
 | `DRIVER_TIMEOUT_MS` | agentURI fetch timeout, a whole number of milliseconds, default 10000 |
 

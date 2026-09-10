@@ -11,6 +11,7 @@ export function createApp(config: DriverConfig, resolver = new AipDidResolver({
   rpc: config.rpc,
   timeoutMs: config.timeoutMs,
   ...(config.allowedRegistries ? { allowedRegistries: config.allowedRegistries } : {}),
+  ...(config.allowedAgentUriHosts ? { allowedAgentUriHosts: config.allowedAgentUriHosts } : {}),
 })): Express {
   const app = express();
   app.disable("x-powered-by");

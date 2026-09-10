@@ -168,6 +168,8 @@ export class AipDidResolver {
           ?? ((u: string) => defaultFetchAgentUri(u, {
             ...(this.options.ipfsGateway !== undefined ? { ipfsGateway: this.options.ipfsGateway } : {}),
             ...(this.options.timeoutMs !== undefined ? { timeoutMs: this.options.timeoutMs } : {}),
+            ...(this.options.maxAgentUriBytes !== undefined ? { maxResponseBytes: this.options.maxAgentUriBytes } : {}),
+            ...(this.options.allowedAgentUriHosts !== undefined ? { allowedHosts: this.options.allowedAgentUriHosts } : {}),
           }));
         const doc = await fetcher(agentUri);
         if (typeof doc === "object" && doc !== null) {

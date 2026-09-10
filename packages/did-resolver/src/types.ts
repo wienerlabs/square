@@ -120,4 +120,11 @@ export interface ResolverOptions {
   fetchAgentUri?: (uri: string) => Promise<unknown>;
   ipfsGateway?: string;
   timeoutMs?: number;
+  /** Largest registration file the default fetcher will read. Default 1 MiB. */
+  maxAgentUriBytes?: number;
+  /**
+   * Hosts the default fetcher may contact for a registration file, on every
+   * redirect hop. Omit to allow any public host. The IPFS gateway is exempt.
+   */
+  allowedAgentUriHosts?: string[];
 }

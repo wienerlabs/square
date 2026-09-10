@@ -8,7 +8,13 @@ import type { DidResolutionResult } from "@squaresdk/did-resolver";
  * The hermetic smoke check the v1 driver had — a malformed DID must answer 400 —
  * lives here and is the one assertion that must never regress.
  */
-const CONFIG = { port: 0, rpc: { 5042002: "http://stub" }, allowedRegistries: undefined, timeoutMs: 1000 };
+const CONFIG = {
+  port: 0,
+  rpc: { 5042002: "http://stub" },
+  allowedRegistries: undefined,
+  allowedAgentUriHosts: undefined,
+  timeoutMs: 1000,
+};
 
 function serveWith(resolve: (did: string) => Promise<DidResolutionResult>) {
   const app = createApp(CONFIG, { resolve } as never);
