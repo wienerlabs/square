@@ -23,8 +23,14 @@ guessing.
 - No bundler and no paymaster. The keeper EOA calls `handleOps([op], keeper)` itself.
 - Anvil fork of Arc testnet (block 60823359, chain id 5042002) with the Square stack
   deployed by `script/DeployLocal.s.sol`, so the real EntryPoint and factory answer.
-- Gas price: 20 gwei, the base fee observed on Arc testnet and inherited by the fork.
-  1 gas = 2e-8 USDC, 100 000 gas = 0.002 USDC.
+- Gas price: every USDC figure below is at **20 gwei**, which is Arc testnet's
+  base fee and a normalisation chosen for these rows, not the price the fork
+  charged. The fork's six receipts in `packages/aa/measurements.json` carry
+  2.550639404 down to 2.212450663 gwei, falling block by block because EIP-1559
+  drains the base fee on an empty chain, on average 8.5 times under 20 gwei.
+  Pricing the rows at the fork's own figure would describe the fork rather than
+  Arc, so they are normalised to a realistic Arc base fee instead. At 20 gwei,
+  1 gas = 2e-8 USDC and 100 000 gas = 0.002 USDC.
 
 Three paths for each of the provider's two calls, `setBudget` and `submit`:
 (a) a plain EOA transaction, (b) the same call as a UserOperation from an account
@@ -32,9 +38,20 @@ that already exists, (c) the first UserOperation, which also deploys the account
 Reproduce with `npm run measure` in `packages/aa`; the raw numbers are in
 `packages/aa/measurements.json`.
 
+**Base fee and gas price are two different numbers on Arc, and this repository
+uses both.** 20 gwei is the base fee. About 22 gwei is the gas price, the base
+fee plus the priority fee, and that is what a receipt reports as
+`effectiveGasPrice`: the live measurement further down and
+[docs/deploy/gas.md](../deploy/gas.md) are at 22.1728 gwei, the price the
+2026-09-07 acceptance run's receipts carry. The fork table below is at the base
+fee because it is a normalisation and not a receipt. Wherever this document, the
+[AA package README](../../packages/aa/README.md) or the
+[x402 decision record](./x402-facilitator.md) says 20 gwei it means the base
+fee, and wherever one of them says about 22 gwei it means the gas price.
+
 ## Measurements
 
-| Call | Path | Tx gas used | Cost (USDC) | Overhead vs EOA (gas) | Overhead (USDC) | Charged to the account (gas) |
+| Call | Path | Tx gas used | Cost at 20 gwei (USDC) | Overhead vs EOA (gas) | Overhead at 20 gwei (USDC) | Charged to the account (gas) |
 |---|---|---:|---:|---:|---:|---:|
 | `setBudget` | EOA | 43,969 | 0.00088 | 0 | 0 | n/a |
 | `setBudget` | UserOp, account deployed | 102,678 | 0.00205 | 58,709 | 0.00117 | 106,944 |
@@ -43,7 +60,7 @@ Reproduce with `npm run measure` in `packages/aa`; the raw numbers are in
 | `submit` | UserOp, account deployed | 141,247 | 0.00282 | 58,709 | 0.00117 | 145,682 |
 | `submit` | UserOp, deploys the account | 311,647 | 0.00623 | 229,109 | 0.00458 | 316,487 |
 
-What the numbers say:
+What the numbers say, with every USDC figure at the 20 gwei base fee:
 
 - The steady-state cost of going through the EntryPoint is **58,709 gas per call,
   0.00117 USDC**, identical for both calls: it is EntryPoint bookkeeping plus the
