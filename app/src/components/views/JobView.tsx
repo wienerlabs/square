@@ -68,7 +68,7 @@ function ActionCard({
     <div className="flex flex-col gap-4 rounded-2xl border border-fog bg-paper-white p-6">
       <div>
         <h3 className="text-body font-medium text-carbon">{title}</h3>
-        <p className="mt-1 text-caption text-graphite">{description}</p>
+        <div className="mt-1 flex flex-col gap-2 text-caption text-graphite">{description}</div>
       </div>
       {children}
       <div className="flex flex-wrap items-center gap-3">
@@ -274,7 +274,37 @@ function VoteAction({ ctx, detail }: { ctx: ActionContext; detail: JobDetail }) 
   );
 }
 
-function ListClaimAction({ ctx, detail }: { ctx: ActionContext; detail: JobDetail }) {
+function ReceivableOutcomes({ detail, now, audience }: { detail: JobDetail; now: number; audience: "buyer" | "seller" }) {
+  const paid = audience === "buyer" ? "you receive" : "the buyer receives";
+  const disputed = detail.disputed || detail.dispute.disputedAt !== 0;
+  const windowOpen = detail.challengeEnd > 0 && now < detail.challengeEnd;
+  return (
+    <>
+      <p>The claim is paid at finalize and nowhere else, and what finalize pays is not settled while the client can still challenge the submission.</p>
+      <ul className="list-disc space-y-1 pl-4">
+        <li>If the client disputes and the arbiters reject the job, the whole budget goes back to the client and {paid} nothing.</li>
+        <li>If the arbiters decide a split instead, {paid} the provider share of the net payout, which is below the face value, and the rest goes back to the client.</li>
+        <li>If the job expires with nothing settled, the refund credits the client and not the payee, because claimRefund is not hookable; the kernel allows it only once the evaluator can no longer resolve the payout.</li>
+      </ul>
+      <p>
+        {disputed
+          ? "This job is already disputed, so the arbiters decide what finalize pays."
+          : windowOpen
+            ? `The challenge window is open with ${formatCountdown(detail.challengeEnd, now).toLowerCase()}, closing ${formatTimestamp(detail.challengeEnd)}. The client may still dispute until then.`
+            : detail.challengeEnd > 0
+              ? `The challenge window closed ${formatTimestamp(detail.challengeEnd)} without a dispute, so the client can no longer open one and finalize pays the whole net payout to the payee.`
+              : "The keeper evaluator does not hold this job, so no challenge window is published for it and the evaluator on the record decides the payout."}
+      </p>
+      <p>
+        {audience === "buyer"
+          ? "The discount on the face value is the price of these outcomes."
+          : "The discount you give on the face value is what the buyer is paid for carrying these outcomes."}
+      </p>
+    </>
+  );
+}
+
+function ListClaimAction({ ctx, detail, now }: { ctx: ActionContext; detail: JobDetail; now: number }) {
   const [value, setValue] = useState("");
   const price = parseUsdc(value);
   const face = detail.netPayout;
@@ -282,7 +312,12 @@ function ListClaimAction({ ctx, detail }: { ctx: ActionContext; detail: JobDetai
   return (
     <ActionCard
       title="List the receivable"
-      description="Sells the right to this job's net payout. The buyer becomes the payee at finalize; reputation stays with the agent."
+      description={
+        <>
+          <p>Sells the right to this job's net payout. The buyer becomes the payee at finalize; reputation stays with the agent.</p>
+          <ReceivableOutcomes detail={detail} now={now} audience="seller" />
+        </>
+      }
       buttonLabel="List claim"
       disabled={!valid}
       onClick={() => {
@@ -763,14 +798,22 @@ export function JobView() {
                 send={(client) => client.lapse(id)}
               />
             ) : null}
-            {showList ? <ListClaimAction ctx={ctx} detail={detail} /> : null}
+            {showList ? <ListClaimAction ctx={ctx} detail={detail} now={now} /> : null}
             {showBuy ? (
               <SimpleAction
                 ctx={ctx}
                 title="Buy the receivable"
                 label="Buy claim"
                 buttonLabel={`Buy for ${formatUsdc(listing.price)} USDC`}
-                description={`Pays the seller ${formatUsdc(listing.price)} USDC for a face value of ${formatUsdc(listing.faceValue)} USDC. The transaction is bound to this price and reverts if the seller relists at another one. An approval is sent first if the allowance is short.`}
+                description={
+                  <>
+                    <p>
+                      Pays the seller {formatUsdc(listing.price)} USDC for a face value of {formatUsdc(listing.faceValue)} USDC, and makes you the payee at finalize. The
+                      transaction is bound to this price and reverts if the seller relists at another one. An approval is sent first if the allowance is short.
+                    </p>
+                    <ReceivableOutcomes detail={detail} now={now} audience="buyer" />
+                  </>
+                }
                 send={(client) => client.buyClaim(id, { expectedPrice: listing.price })}
               />
             ) : null}
