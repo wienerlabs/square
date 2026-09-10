@@ -334,9 +334,9 @@ export function hookWriteFailures(options: HookWriteFailuresOptions = {}): Alert
       const failures = numeric(snapshot.hookWriteFailures);
       if (failures === undefined) return { firing: false, detail: "no hook write sample" };
       if (failures > max) {
-        return { firing: true, detail: `${failures} ERC-8004 registry writes failed, these should never fire` };
+        return { firing: true, detail: `${failures} hook writes or hook calls failed, these should never fire` };
       }
-      return { firing: false, detail: "no ERC-8004 registry write has failed" };
+      return { firing: false, detail: "no hook write or hook call has failed" };
     },
   };
 }

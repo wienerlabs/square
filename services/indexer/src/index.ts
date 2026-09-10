@@ -2,6 +2,7 @@ export * from "./reducer.js";
 export {
   Indexer,
   ledgerBalanceOf,
+  DERIVED_TABLES,
   MAX_TRACKED_QUARANTINE,
   type IndexerOptions,
   type SyncResult,

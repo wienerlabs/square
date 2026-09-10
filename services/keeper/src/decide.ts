@@ -31,7 +31,9 @@ export type KeeperAction =
 
 export function expiryIsNear(candidate: Pick<KeeperCandidate, "expiredAt">, now: bigint): boolean {
   const expiredAt = candidate.expiredAt ?? null;
-  return expiredAt !== null && expiredAt - now <= EXPIRY_WARNING_SECONDS;
+  if (expiredAt === null) return false;
+  const left = expiredAt - now;
+  return left > 0n && left <= EXPIRY_WARNING_SECONDS;
 }
 
 export function keeperFee(budget: bigint, evaluatorFeeBP: number): bigint {
@@ -42,8 +44,8 @@ export function gasCostInUsdc(gasPriceWei: bigint, gas: bigint): bigint {
   return (gasPriceWei * gas) / NATIVE_TO_USDC_DIVISOR;
 }
 
-export function minimumProfitableBudget(evaluatorFeeBP: number, gasPriceWei: bigint, gas: bigint, marginBps = 0): bigint {
-  if (evaluatorFeeBP <= 0) return -1n;
+export function minimumProfitableBudget(evaluatorFeeBP: number, gasPriceWei: bigint, gas: bigint, marginBps = 0): bigint | null {
+  if (evaluatorFeeBP <= 0) return null;
   const cost = gasCostInUsdc(gasPriceWei, gas);
   const required = (cost * (FULL_BPS + BigInt(marginBps))) / FULL_BPS;
   const budget = (required * FULL_BPS) / BigInt(evaluatorFeeBP);

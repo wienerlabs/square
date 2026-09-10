@@ -384,6 +384,14 @@ inherit OpenZeppelin's `Ownable2Step`, so each of them declares the same pair.
 | `OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner)` | `transferOwnership` nominated a new owner; nothing has changed yet |
 | `OwnershipTransferred(address indexed previousOwner, address indexed newOwner)` | the nominee called `acceptOwnership`, or the constructor set the first owner. This is the transfer |
 
+An event that should never fire needs a consumer in the change that adds it.
+`HookFailed`, `ReputationWriteFailed`, `ValidationWriteFailed` and
+`PayoutUnresolvable` all mean "the design tolerated something it did not want",
+and a tolerated failure nobody reads is an unobserved one. So the same change
+that adds such an event adds the reader: a reducer branch, a metric or a mirror
+column, and where it warrants attention an alert rule. A pull request that adds
+one without a consumer is incomplete, whatever the event records.
+
 ## When the ERC-8004 registries are written
 
 | Moment | Registry | Call | Who is credited |
