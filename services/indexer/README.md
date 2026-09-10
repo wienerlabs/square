@@ -33,6 +33,17 @@ proves it by comparing the rebuilt state with the chain field by field.
   earlier deployment on the same chain and resuming from it would silently skip
   every event of the new contracts, so the indexer refuses to start unless
   `ON_DEPLOYMENT_CHANGE=restart` tells it to reindex from `START_BLOCK`.
+- `ON_DEPLOYMENT_CHANGE=restart` is destructive on purpose: before it reindexes
+  it deletes every derived row of that chain (`jobs`, `disputes`,
+  `claim_listings`, `ledger_balances`, `arbiter_sets` and the `job_events`
+  journal) in one transaction, and drops the in-memory state with them. Without
+  that deletion the earlier deployment's jobs stayed in the mirror and
+  `/jobs/open`, `/jobs/:id`, `/listings` and `/disputes/open` served them as
+  current while `/status` counted only the rebuilt state, so one service
+  answered two ways. Rows of another chain are untouched, and a job of the new
+  deployment is written again from its own logs. The alternative that keeps both
+  deployments side by side is a deployment-keyed row, recorded as deferred in
+  `docs/design/data-layer.md`.
 - No reorg handling. Arc has deterministic finality: a block is either final or
   absent, so `latest` is safe to index.
 - `api.ts` serves `/jobs/open`, `/jobs/in-window`, `/jobs/finalizable`,
@@ -81,7 +92,7 @@ export MAX_SYNC_AGE_MS=120000         # no successful sync for this long fails t
 export STARTUP_GRACE_MS=60000         # how long an unmeasured lag stays healthy after start
 export ALERT_INTERVAL_MS=30000
 export ALERT_WEBHOOK_URL=             # empty logs the alerts instead of posting them
-export ON_DEPLOYMENT_CHANGE=fail      # or restart, to reindex from START_BLOCK after a redeploy
+export ON_DEPLOYMENT_CHANGE=fail      # or restart, to delete this chain's derived rows and reindex from START_BLOCK
 npx square-data migrate up
 npm install --install-links && npm run build && npm start
 ```
@@ -94,8 +105,9 @@ itself, because there is nothing to preserve.
 
 `npm test` runs the reducer suite and the isolation suite hermetically, the
 second one driving encoded logs through a PGlite journal to cover the poison
-event, the rolled-back batch, the deployment change and the stalled health
-check. Two more suites run hermetically as well: the API suite drives
+event, the rolled-back batch, the deployment change and the rows it deletes,
+the hook call the kernel could not complete, the refund a dead resolver forced,
+and the stalled health check. Two more suites run hermetically as well: the API suite drives
 `app.fetch` with an `Origin` header and reads the header off the `GET` answer,
 and the checks suite runs the four health checks over an empty database that
 never synced, a checkpointed restart, a normal run and a frozen loop. With an
