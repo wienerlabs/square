@@ -87,6 +87,6 @@ providerMayCall("DELIVERED", "complete");  // false
 $ npm test
 ```
 
-83 tests, no network. The end-to-end suite runs a real HTTP server and drives it
+94 tests, no network. The end-to-end suite runs a real HTTP server and drives it
 with the real client, so the handshake is exercised over a socket rather than
 mocked.

@@ -2,7 +2,6 @@ import {
   isJsonRpcResponse,
   rpcRequest,
   type JsonRpcResponse,
-  type TaskCancelResult,
   type TaskCreateParams,
   type TaskCreateResult,
   type TaskMethod,
@@ -41,7 +40,7 @@ export class A2AError extends Error {
 export interface A2AClientOptions {
   /** Concurrent tasks per endpoint. The cap protects the provider, not us. */
   maxConcurrentPerEndpoint?: number;
-  /** Timeout for task/create and task/cancel. */
+  /** Timeout for task/create. */
   dispatchTimeoutMs?: number;
   /** Timeout for a single task/status poll. Shorter: it runs in a loop. */
   pollTimeoutMs?: number;
@@ -195,16 +194,6 @@ export class A2AClient {
   /** One poll. Not retried: the polling loop is the retry. */
   async taskStatus(endpoint: string, taskId: string): Promise<TaskStatusResult> {
     return this.rpc<TaskStatusResult>(endpoint, "task/status", { taskId }, this.opts.pollTimeoutMs, 1);
-  }
-
-  async cancelTask(endpoint: string, taskId: string): Promise<TaskCancelResult> {
-    return this.rpc<TaskCancelResult>(
-      endpoint,
-      "task/cancel",
-      { taskId },
-      this.opts.dispatchTimeoutMs,
-      1,
-    );
   }
 
   /**

@@ -25,6 +25,7 @@ export {
   isJsonRpcResponse,
 } from "./messages.js";
 export type {
+  JsonRpcId,
   JsonRpcRequest,
   JsonRpcResponse,
   JsonRpcError,
@@ -33,8 +34,6 @@ export type {
   TaskCreateResult,
   TaskStatusParams,
   TaskStatusResult,
-  TaskCancelParams,
-  TaskCancelResult,
 } from "./messages.js";
 
 export { TaskMachine, TaskTransitionError } from "./task-machine.js";

@@ -2,9 +2,9 @@ import {
   RpcErrorCode,
   rpcError,
   rpcResult,
+  type JsonRpcId,
   type JsonRpcRequest,
   type JsonRpcResponse,
-  type TaskCancelParams,
   type TaskCreateParams,
   type TaskStatusParams,
 } from "./messages.js";
@@ -22,6 +22,12 @@ import { TaskMachine, TaskTransitionError, type TaskRecord } from "./task-machin
  * What it will not do is settle. `task/complete` is not a method, because
  * completion is not the provider's to declare — the provider delivers, and the
  * work of turning that into money belongs to the evaluator.
+ *
+ * Nor is `task/cancel`. `create` acknowledges before it returns, so no caller
+ * ever sees a task SUBMITTED, and SUBMITTED is the only state a cancel is
+ * allowed from. `TaskMachine.cancel` stays for a host that holds the machine
+ * itself and chooses to accept later; over this wire the method would have
+ * been an error with a name.
  */
 
 /** Runs the actual work. Resolving means delivered; throwing means failed. */
@@ -68,10 +74,12 @@ export class A2AServer {
   /** Parsed JSON-RPC request in, JSON-RPC response out. Never throws. */
   async handle(request: unknown): Promise<JsonRpcResponse> {
     if (typeof request !== "object" || request === null) {
-      return rpcError("", RpcErrorCode.InvalidRequest, "request is not an object");
+      return rpcError(null, RpcErrorCode.InvalidRequest, "request is not an object");
     }
     const req = request as Partial<JsonRpcRequest>;
-    const id = typeof req.id === "string" ? req.id : "";
+    // Echoed as received. JSON-RPC 2.0 lets it be a string, a number or null,
+    // and asks for null when the request did not carry a usable one.
+    const id: JsonRpcId = typeof req.id === "string" || typeof req.id === "number" ? req.id : null;
     if (req.jsonrpc !== "2.0") {
       return rpcError(id, RpcErrorCode.InvalidRequest, "jsonrpc must be \"2.0\"");
     }
@@ -82,14 +90,12 @@ export class A2AServer {
         return this.create(id, params);
       case "task/status":
         return this.status(id, params as unknown as TaskStatusParams);
-      case "task/cancel":
-        return this.cancel(id, params as unknown as TaskCancelParams);
       default:
         return rpcError(id, RpcErrorCode.MethodNotFound, `unknown method: ${String(req.method)}`);
     }
   }
 
-  private create(id: string, raw: Record<string, unknown>): JsonRpcResponse {
+  private create(id: JsonRpcId, raw: Record<string, unknown>): JsonRpcResponse {
     for (const field of REQUIRED_CREATE_FIELDS) {
       if (typeof raw[field] !== "string" || !(raw[field] as string)) {
         return rpcError(id, RpcErrorCode.InvalidParams, `missing or empty ${field}`);
@@ -150,14 +156,14 @@ export class A2AServer {
       try {
         this.machine.fail(taskId, err instanceof Error ? err.message : String(err));
       } catch {
-        /* already terminal — cancelled while the handler was running */
+        /* already terminal: a host that shares the machine failed it from outside while the handler ran */
       }
     } finally {
       this.running -= 1;
     }
   }
 
-  private status(id: string, params: TaskStatusParams): JsonRpcResponse {
+  private status(id: JsonRpcId, params: TaskStatusParams): JsonRpcResponse {
     if (typeof params.taskId !== "string" || !params.taskId) {
       return rpcError(id, RpcErrorCode.InvalidParams, "missing taskId");
     }
@@ -170,18 +176,5 @@ export class A2AServer {
       ...(task.reason !== undefined ? { reason: task.reason } : {}),
       updatedAt: task.updatedAt,
     });
-  }
-
-  private cancel(id: string, params: TaskCancelParams): JsonRpcResponse {
-    if (typeof params.taskId !== "string" || !params.taskId) {
-      return rpcError(id, RpcErrorCode.InvalidParams, "missing taskId");
-    }
-    try {
-      const task = this.machine.cancel(params.taskId);
-      return rpcResult(id, { taskId: task.id, state: task.state });
-    } catch (err) {
-      const message = err instanceof TaskTransitionError ? err.message : String(err);
-      return rpcError(id, RpcErrorCode.InvalidParams, message);
-    }
   }
 }
