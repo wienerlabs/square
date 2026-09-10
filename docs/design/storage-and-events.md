@@ -331,6 +331,14 @@ institution's compliance state filters on the poster address.
 A refused release emits nothing: `recordSpend` reverts, and the revert
 propagates out of `SquareJob.complete`, so there is no partial state to observe.
 
+An event that should never fire needs a consumer in the change that adds it.
+`HookFailed`, `ReputationWriteFailed`, `ValidationWriteFailed` and
+`PayoutUnresolvable` all mean "the design tolerated something it did not want",
+and a tolerated failure nobody reads is an unobserved one. So the same change
+that adds such an event adds the reader: a reducer branch, a metric or a mirror
+column, and where it warrants attention an alert rule. A pull request that adds
+one without a consumer is incomplete, whatever the event records.
+
 ## When the ERC-8004 registries are written
 
 | Moment | Registry | Call | Who is credited |
