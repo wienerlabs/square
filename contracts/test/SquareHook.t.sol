@@ -9,6 +9,7 @@ import {SquareHook} from "../src/SquareHook.sol";
 import {MockComplianceModule} from "./mocks/MockComplianceModule.sol";
 import {MockReputationRegistry} from "./mocks/MockRegistries.sol";
 import {IClaimMarket} from "../src/interfaces/IClaimMarket.sol";
+import {KernelBatcher} from "./mocks/KernelBatcher.sol";
 
 contract SquareHookTest is BaseTest {
     uint256 internal constant BUDGET = 1_000 * USDC;
@@ -388,17 +389,16 @@ contract SquareHookTest is BaseTest {
         uint256 second = _hookedJobWithoutAHorizon(abi.encode(AGENT_ID, secondRequest));
         bytes memory data = abi.encode(bytes32(0), bytes(""));
 
-        vm.prank(address(kernel));
-        hook.beforeAction(first, ISquareJob.complete.selector, data);
-        vm.prank(address(kernel));
-        hook.afterAction(second, ISquareJob.complete.selector, data);
+        address logic = makeAddr("kernel logic");
+        vm.etch(logic, address(kernel).code);
+        vm.etch(address(kernel), address(new KernelBatcher(logic)).code);
+        KernelBatcher batched = KernelBatcher(payable(address(kernel)));
+
+        batched.completeHooksOf(hook, first, second, data);
         (address responder,,) = validation.responses(secondRequest);
         assertEq(responder, address(0), "the first job's outcome does not leak into the second");
 
-        vm.prank(address(kernel));
-        hook.beforeAction(first, ISquareJob.complete.selector, data);
-        vm.prank(address(kernel));
-        hook.afterAction(first, ISquareJob.complete.selector, data);
+        batched.completeHooksOf(hook, first, first, data);
         (address firstResponder, uint8 response,) = validation.responses(REQUEST_HASH);
         assertEq(firstResponder, address(hook));
         assertEq(response, 100, "and the job the check ran for gets its verdict");
