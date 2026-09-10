@@ -111,16 +111,22 @@ export class AipDidResolver {
     // Pin every read to one block. didDocumentMetadata.versionId claims to be
     // the block the state was read at, and reading the number afterwards would
     // make that a guess — a block can land between the reads and the report.
-    let blockNumber: bigint | undefined;
+    //
+    // Without the number there is no pin, and that is a failure, not a
+    // degraded success: three reads at `latest` can straddle a Transfer, so
+    // `owner` from before it and `agentWallet` or `tokenURI` from after it
+    // land in one document that belongs to no single moment, with no
+    // versionId to say so. The spec forbids exactly that document (§10.2),
+    // and a caller that gets networkError retries; one that got a quiet
+    // document would trust it.
+    let blockNumber: bigint;
     try {
       blockNumber = await client.getBlockNumber();
-    } catch { /* versionId is best-effort; the reads still work */ }
+    } catch (err) {
+      return failure("networkError", `block number read failed, so the reads could not be pinned: ${String(err)}`);
+    }
 
-    const contract = {
-      address: parsed.registry,
-      abi: IDENTITY_REGISTRY_ABI,
-      ...(blockNumber !== undefined ? { blockNumber } : {}),
-    } as const;
+    const contract = { address: parsed.registry, abi: IDENTITY_REGISTRY_ABI, blockNumber } as const;
 
     let owner: string;
     try {
@@ -189,7 +195,7 @@ export class AipDidResolver {
         ...(warnings.length ? { warnings } : {}),
       },
       didDocumentMetadata: {
-        ...(blockNumber !== undefined ? { versionId: blockNumber.toString() } : {}),
+        versionId: blockNumber.toString(),
         agentRegistry: parsed.agentRegistry,
         ...(inactive ? { deactivated: true, deactivationReason: "registrationInactive" as const } : {}),
         ...(registrationKnown ? {} : { registrationFile: "unavailable" as const }),

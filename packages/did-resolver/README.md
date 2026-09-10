@@ -73,6 +73,13 @@ Every chain read is pinned to one block, and that block is what
 guess: a block can land between the reads and the report, and on a sub-second chain it
 routinely would.
 
+The guarantee has one way to fail, and it fails loudly: if the block number itself cannot
+be read, resolution returns `networkError` rather than reading at `latest`. Three unpinned
+reads can straddle a `Transfer`, giving a document whose `owner` is from before it and
+whose `agentWallet` is from after, with no `versionId` to say so; the driver maps
+`networkError` to 502, which tells the caller to retry, and a retry is the right answer to
+an RPC that dropped one call.
+
 ## Tests
 
 ```bash

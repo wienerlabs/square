@@ -226,6 +226,20 @@ describe("resolve — block pinning", () => {
       expect((call[0] as any).blockNumber).toBe(12345n);
     }
   });
+
+  it("does not read unpinned when the block number cannot be had", async () => {
+    // The one way the guarantee can fail. Silently falling back to `latest`
+    // would let three reads straddle a Transfer and produce a document from
+    // no single moment, with no versionId to say so; networkError tells the
+    // caller to retry instead, and nothing is read in the meantime.
+    const chain = fakeChain({ ownerOf: () => OWNER, tokenURI: () => "" });
+    chain.getBlockNumber.mockRejectedValueOnce(new Error("rate limited"));
+    const res = await resolverWith(chain).resolve(DID(2));
+    expect(res.didDocument).toBeNull();
+    expect(res.didResolutionMetadata.error).toBe("networkError");
+    expect(res.didResolutionMetadata.errorMessage).toMatch(/pinned/);
+    expect(chain.readContract).not.toHaveBeenCalled();
+  });
 });
 
 describe("resolve — registry allowlist", () => {
