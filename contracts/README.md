@@ -113,7 +113,9 @@ cd packages/core && ARC_FORK_RPC_URL=http://127.0.0.1:8546 npm test
 
 The windows are testnet values chosen so the acceptance run finishes in minutes;
 production values are days. The run itself, with every transaction and its gas,
-is [docs/deploy/lifecycle-5042002.md](../docs/deploy/lifecycle-5042002.md).
+is [docs/deploy/lifecycle-5042002-2026-09-09.md](../docs/deploy/lifecycle-5042002-2026-09-09.md);
+`docs/deploy/lifecycle-5042002.md` is the same report as the latest and is
+rewritten on every run.
 
 ## Measured gas
 

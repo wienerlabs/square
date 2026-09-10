@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createPublicClient,
@@ -36,7 +36,7 @@ const deploymentFile = process.env["SQUARE_DEPLOYMENT_FILE"] ?? join(here, "..",
 const reportFile = process.env["LIFECYCLE_REPORT"] ?? join(here, "..", "..", "..", "docs", "deploy", `lifecycle-${chainId}.md`);
 const actorsFile = process.env["LIFECYCLE_ACTORS_FILE"];
 const funderKey = process.env["DEPLOYER_PRIVATE_KEY"] as Hex | undefined;
-const nativeGasPriceWei = BigInt(process.env["GAS_PRICE_WEI"] ?? "20000000000");
+const fallbackGasPriceWei = BigInt(process.env["GAS_PRICE_WEI"] ?? "20000000000");
 const explorer = process.env["EXPLORER_URL"] ?? (chainId === 5042002 ? "https://testnet.arcscan.app" : "");
 
 const ANVIL_MNEMONIC = "test test test test test test test test test test test junk";
@@ -56,6 +56,8 @@ interface Row {
   step: string;
   txHash: Hex;
   gasUsed: bigint;
+  gasPriceWei: bigint;
+  costWei: bigint;
 }
 
 const chain: Chain = defineChain({
@@ -68,6 +70,7 @@ const chain: Chain = defineChain({
 const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
 const testClient = createTestClient({ chain, mode: "anvil", transport: http(rpcUrl) });
 const rows: Row[] = [];
+let rowsPricedByFallback = 0;
 
 function loadActors(): Actors {
   if (actorsFile && existsSync(actorsFile)) {
@@ -118,8 +121,18 @@ function actor(deployment: SquareDeployment, key: Hex): SquareClient {
 }
 
 function record(path: string, step: string, receipt: TransactionReceipt): void {
-  rows.push({ path, step, txHash: receipt.transactionHash, gasUsed: receipt.gasUsed });
-  console.log(`${path} | ${step} | ${receipt.transactionHash} | ${receipt.gasUsed} gas`);
+  const carriesPrice = typeof receipt.effectiveGasPrice === "bigint" && receipt.effectiveGasPrice > 0n;
+  if (!carriesPrice) rowsPricedByFallback += 1;
+  const gasPriceWei = carriesPrice ? receipt.effectiveGasPrice : fallbackGasPriceWei;
+  rows.push({
+    path,
+    step,
+    txHash: receipt.transactionHash,
+    gasUsed: receipt.gasUsed,
+    gasPriceWei,
+    costWei: receipt.gasUsed * gasPriceWei,
+  });
+  console.log(`${path} | ${step} | ${receipt.transactionHash} | ${receipt.gasUsed} gas at ${formatUnits(gasPriceWei, 9)} gwei`);
 }
 
 async function now(): Promise<bigint> {
@@ -204,7 +217,7 @@ async function expectRevert(label: string, fn: () => Promise<unknown>, pattern: 
     const message = error instanceof Error ? error.message : String(error);
     if (pattern.test(message)) {
       console.log(`adversarial | ${label} | reverted as expected (${pattern.source})`);
-      rows.push({ path: "adversarial", step: `${label}: reverted with ${pattern.source}`, txHash: "0x", gasUsed: 0n });
+      rows.push({ path: "adversarial", step: `${label}: reverted with ${pattern.source}`, txHash: "0x", gasUsed: 0n, gasPriceWei: 0n, costWei: 0n });
       return;
     }
     throw new Error(`${label} reverted with an unexpected error: ${message}`);
@@ -309,14 +322,37 @@ async function main(): Promise<void> {
   if ((await client.getJobRecord(expiring.jobId)).status !== JobStatus.Expired) throw new Error("expiry did not apply");
 
   const totalGas = rows.reduce((sum, row) => sum + row.gasUsed, 0n);
-  const perPath = new Map<string, bigint>();
-  for (const row of rows) perPath.set(row.path, (perPath.get(row.path) ?? 0n) + row.gasUsed);
-  const usdcOf = (gas: bigint): string => formatUnits((gas * nativeGasPriceWei) / 1_000_000_000_000n, 6);
+  const totalCostWei = rows.reduce((sum, row) => sum + row.costWei, 0n);
+  const perPathGas = new Map<string, bigint>();
+  const perPathCostWei = new Map<string, bigint>();
+  for (const row of rows) {
+    perPathGas.set(row.path, (perPathGas.get(row.path) ?? 0n) + row.gasUsed);
+    perPathCostWei.set(row.path, (perPathCostWei.get(row.path) ?? 0n) + row.costWei);
+  }
+  const usdcOf = (costWei: bigint): string => formatUnits(costWei / 1_000_000_000_000n, 6);
   const link = (hash: Hex): string => (hash === "0x" ? "" : explorer ? `[${hash.slice(0, 10)}...](${explorer}/tx/${hash})` : hash);
+  const pricedRows = rows.filter((row) => row.gasUsed > 0n);
+  const prices = pricedRows.map((row) => row.gasPriceWei);
+  const lowestPrice = prices.reduce((low, price) => (price < low ? price : low), prices[0] ?? fallbackGasPriceWei);
+  const highestPrice = prices.reduce((high, price) => (price > high ? price : high), prices[0] ?? fallbackGasPriceWei);
+  const priceRange =
+    lowestPrice === highestPrice
+      ? `${formatUnits(lowestPrice, 9)} gwei on every row`
+      : `${formatUnits(lowestPrice, 9)} to ${formatUnits(highestPrice, 9)} gwei`;
+  const runAt = new Date();
+  const reportExtension = extname(reportFile);
+  const datedReportFile = join(
+    dirname(reportFile),
+    `${basename(reportFile, reportExtension)}-${runAt.toISOString().slice(0, 10)}${reportExtension}`,
+  );
   const lines = [
     `# Lifecycle run on chain ${chainId}`,
     "",
-    `Run at ${new Date().toISOString()} against ${rpcUrl}. Gas price used for the USDC column: ${formatUnits(nativeGasPriceWei, 9)} gwei (1 gas = ${formatUnits(nativeGasPriceWei, 18)} USDC).`,
+    `Run at ${runAt.toISOString()} against ${rpcUrl}.`,
+    "",
+    `The USDC column prices every row at its own receipt's \`effectiveGasPrice\`, ${priceRange} on this run. \`GAS_PRICE_WEI\` (${formatUnits(fallbackGasPriceWei, 9)} gwei) is a fallback for a receipt that carries no effective price and nothing else; it priced ${rowsPricedByFallback} of the ${pricedRows.length} rows below.`,
+    "",
+    `This run is also kept as [${basename(datedReportFile)}](./${basename(datedReportFile)}), which nothing overwrites. \`${basename(reportFile)}\` is rewritten on every run, so a document that quotes a figure by number should link the dated file instead.`,
     "",
     "| Path | Step | Transaction | Gas |",
     "|---|---|---|---|",
@@ -326,8 +362,10 @@ async function main(): Promise<void> {
     "",
     "| Path | Gas | USDC |",
     "|---|---|---|",
-    ...[...perPath.entries()].filter(([, gas]) => gas > 0n).map(([path, gas]) => `| ${path} | ${gas} | ${usdcOf(gas)} |`),
-    `| all | ${totalGas} | ${usdcOf(totalGas)} |`,
+    ...[...perPathGas.entries()]
+      .filter(([, gas]) => gas > 0n)
+      .map(([path, gas]) => `| ${path} | ${gas} | ${usdcOf(perPathCostWei.get(path) ?? 0n)} |`),
+    `| all | ${totalGas} | ${usdcOf(totalCostWei)} |`,
     "",
     "## Deployment",
     "",
@@ -339,8 +377,10 @@ async function main(): Promise<void> {
     "",
   ];
   mkdirSync(dirname(reportFile), { recursive: true });
-  writeFileSync(reportFile, lines.join("\n"));
-  console.log(`report written to ${reportFile}`);
+  const report = lines.join("\n");
+  writeFileSync(datedReportFile, report);
+  writeFileSync(reportFile, report);
+  console.log(`report written to ${datedReportFile} and refreshed at ${reportFile}`);
   const counter = await publicClient.readContract({ abi: squareJobAbi, address: deployment.squareJob, functionName: "jobCounter" });
   console.log(`jobs on chain: ${counter}`);
 }

@@ -162,23 +162,38 @@ npm run measure
 Starts its own fork on port 8562, deploys the stack, drives the provider's `setBudget` and
 `submit` as (a) EOA transactions, (b) UserOperations from a deployed account and (c) a
 first UserOperation that also deploys the account, prints the table and writes
-`measurements.json`. Cost is at 20 gwei, the base fee observed on Arc testnet
-(1 gas = 2e-8 USDC). Rerunning moves the figures by a few dozen gas because the
-calldata bytes (addresses, nonces) change.
+`measurements.json`. Every USDC figure in the table is at 20 gwei, which is Arc
+testnet's base fee (1 gas = 2e-8 USDC) and a normalisation chosen for these rows,
+not the price the fork charged: the six receipts in `measurements.json` carry
+2.550639404 down to 2.212450663 gwei, which is an empty fork draining its own
+EIP-1559 base fee block by block, on average 8.5 times under 20 gwei. Base fee
+and gas price are different numbers on Arc, and
+[the decision record](../../docs/decisions/erc4337-sponsorship.md) says which is
+which. Rerunning moves the figures by a few dozen gas because the calldata bytes
+(addresses, nonces) change.
 
-| Call | Path | Tx gas used | Cost at 20 gwei (USDC) | Overhead vs EOA (gas) | Overhead (USDC) | Charged to account (gas) | Keeper net (USDC) |
-|---|---|---:|---:|---:|---:|---:|---:|
-| `setBudget` | EOA transaction | 43,969 | 0.00087938 | 0 | 0 | n/a | n/a |
-| `setBudget` | UserOperation, account already deployed | 102,678 | 0.00205356 | 58,709 | 0.00117418 | 106,944 | 0.000009644343408648 |
-| `setBudget` | UserOperation, first op deploys the account | 273,066 | 0.00546132 | 229,097 | 0.00458194 | 277,823 | 0.000011146222824699 |
-| `submit` | EOA transaction | 82,538 | 0.00165076 | 0 | 0 | n/a | n/a |
-| `submit` | UserOperation, account already deployed | 141,247 | 0.00282494 | 58,709 | 0.00117418 | 145,682 | 0.000010144314364285 |
-| `submit` | UserOperation, first op deploys the account | 311,647 | 0.00623294 | 229,109 | 0.00458218 | 316,487 | 0.00001070826120892 |
+| Call | Path | Tx gas used | Cost at 20 gwei (USDC) | Overhead vs EOA (gas) | Overhead at 20 gwei (USDC) | Charged to account (gas) | Keeper net at 20 gwei (USDC) | `actualGasCost` from the receipt (USDC) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `setBudget` | EOA transaction | 43,969 | 0.00087938 | 0 | 0 | n/a | n/a | n/a |
+| `setBudget` | UserOperation, account already deployed | 102,678 | 0.00205356 | 58,709 | 0.00117418 | 106,944 | 0.00008532 | 0.000241773244607232 |
+| `setBudget` | UserOperation, first op deploys the account | 273,066 | 0.00546132 | 229,097 | 0.00458194 | 277,823 | 0.00009514 | 0.000650972685269361 |
+| `submit` | EOA transaction | 82,538 | 0.00165076 | 0 | 0 | n/a | n/a | n/a |
+| `submit` | UserOperation, account already deployed | 141,247 | 0.00282494 | 58,709 | 0.00117418 | 145,682 | 0.0000887 | 0.000333223000049102 |
+| `submit` | UserOperation, first op deploys the account | 311,647 | 0.00623294 | 229,109 | 0.00458218 | 316,487 | 0.0000968 | 0.000700211872980881 |
 
-"Keeper net" is `actualGasCost` received minus the gas the keeper paid, at the fork's
-effective gas price; positive means the keeper was made whole with a margin. The
-conclusion drawn from these numbers, no paymaster in phase 1 and a one-time deposit per
-agent, is in the decision document linked above.
+"Keeper net" is the gas the account was charged minus the gas the keeper paid, 4,266 to
+4,840 gas, priced at 20 gwei like every other normalised column here; positive means the
+keeper was made whole with a margin. It used to be quoted at the fork's own price, which
+made it about nine times smaller than the columns standing next to it.
+
+The last column is the raw `actualGasCost` the EntryPoint took from the account's
+deposit. That one is a receipt figure, so it stays at the fork's 2.21 to 2.55 gwei and
+cannot be normalised without changing what the receipt said. Two bases, then, and each
+column header names the one it uses. `npm run measure` prints exactly this table, so the
+headers here are the headers the script writes.
+
+The conclusion drawn from these numbers, no paymaster in phase 1 and a one-time deposit
+per agent, is in the decision document linked above.
 
 ## Verified on Arc Testnet
 

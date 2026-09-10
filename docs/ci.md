@@ -14,9 +14,9 @@ pull request.
 | Check | What a green run means |
 |---|---|
 | `build, test, gas` | The whole Foundry suite, `forge build --sizes`, a gas report on the pull request and a coverage table on the run summary. |
-| `@squaresdk/core against anvil` | The SDK drives all five settlement paths against a locally deployed stack. |
+| `@squaresdk/core against anvil` | The SDK drives all five settlement paths against a locally deployed stack, and the committed ABI modules match a fresh `forge build` and document every event they declare. |
 | `verifies on Arc Testnet` | A proof the prover produced verifies against Arc's own `0x06`/`0x07`/`0x08`, not revm's. |
-| `circuits` | `payment.circom` compiles, a proving key builds, and 49 constraint tests ran against them. |
+| `circuits` | `payment.circom` compiles, a proving key builds, and the whole constraint suite runs against them. How many tests passed is on the run summary, not in this table: a count written by hand here drifts the moment a test is added. |
 | `prover (real proving key)` | The prover agrees with the circuit, and its Solidity calldata matches `snarkjs`. |
 | `services/prover (hermetic)` | The rule evaluator and the encoding with no artifacts — a contributor's `npm test`. |
 | `packages/data`, `packages/hardening`, `packages/observability` | Hermetic package suites. |
@@ -72,13 +72,20 @@ Four further guards are *inverse* — `skipIf(HAVE_BUILD)` and the prover's thre
 `skipIf(HAVE_*)`. They fire only when the artifact is **absent** and exist to say
 so out loud. Seeing one skipped is the correct state.
 
-Measured, with the artifacts moved aside and the suites unchanged, on a clean
-checkout after `npm ci`:
+Measured on 2026-09-07, with the artifacts moved aside and the suites unchanged,
+on a clean checkout after `npm ci`. The figure in brackets is what vitest
+**collected**, not what ran:
 
 ```
-circuits   npm test →  4 passed | 45 skipped (49)   exit 0
-prover     npm test → 63 passed |  6 skipped (69)   exit 0
+circuits   npm test →  4 passed | 45 skipped (49 collected)   exit 0
+prover     npm test → 63 passed |  6 skipped (69 collected)   exit 0
 ```
+
+Both lines are an observation from that date rather than a current count, and
+the same two lines head
+[.github/workflows/circuits.yml](../.github/workflows/circuits.yml). A rerun
+collects whatever the suites hold on the day; the run summary is the live
+number.
 
 And measured on `main` before this branch, where the `(anvil)` jobs were named
 for a chain they never started:
@@ -113,6 +120,35 @@ So, two mechanisms:
 kept: it is the contributor's `npm test` and it should stay green. It is not a
 substitute for `prover (real proving key)`, which runs the five tests the
 hermetic job skips.
+
+## Documented events
+
+`@squaresdk/core against anvil` runs two checks in a row on the committed ABI
+modules, and the order is what makes the second one worth anything:
+
+```bash
+npm run generate:abi
+git diff --exit-code -- src/abi
+npm run check:events
+```
+
+The first two prove the committed ABI modules are the ones a fresh `forge build`
+produces. Only then is the third worth running, because the event names it reads
+are the contracts' own rather than whatever was last committed by hand.
+
+`check:events` is `packages/core/scripts/check-events-documented.mjs`. It reads
+every event name out of `packages/core/src/abi/*.ts` and fails when one of them
+appears nowhere in
+[docs/design/storage-and-events.md](design/storage-and-events.md). That document
+is normative: `services/indexer/README.md` says the reducer does what it
+specifies, so an event it never mentions is a hole in the specification, and
+[#167](https://github.com/wienerlabs/square/issues/167) found seven of them at
+once. Adding an event to a contract now fails the run until the document names
+it.
+
+`erc20.ts` is skipped. It is a hand-written interface for a token this
+repository does not ship, so its `Transfer` has no place in a document about
+Square's own storage.
 
 ## Pinned tooling
 

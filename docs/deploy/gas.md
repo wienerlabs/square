@@ -4,9 +4,13 @@ Every number here is a measurement. The estimates the port started from
 (ERC-20 transfer ~0.0014 USDC, Groth16 verification ~0.006 USDC) are replaced
 by what the suite and the chain report.
 
-Conversion used throughout: Arc Testnet gas price observed at 20 gwei on the
-native interface, whose unit is USDC with 18 decimals, so **1 gas = 2 × 10⁻⁸
-USDC** and 100 000 gas = 0.002 USDC.
+Conversion used in the Foundry section: Arc Testnet's **base fee**, observed at
+20 gwei on the native interface, whose unit is USDC with 18 decimals, so **1 gas
+= 2 × 10⁻⁸ USDC** and 100 000 gas = 0.002 USDC. The base fee is not the gas
+price: a transaction pays the base fee plus a priority fee, about 22 gwei on
+Arc, and the measured sections below are at the price their own receipts carry
+rather than at this one. [erc4337-sponsorship.md](../decisions/erc4337-sponsorship.md)
+states the distinction once for the whole repository.
 
 ## Foundry, full stack with the hook and mock ERC-8004 registries
 
@@ -72,7 +76,7 @@ which still leaves half the limit unused.
 
 Receipts from the acceptance run of 2026-09-07, against the settlement stack deployed that day. **That stack is superseded**: the contracts were redeployed on 2026-09-08 at new addresses ([redeploy-2026-09-08.md](./redeploy-2026-09-08.md)), so every hash below points into the history of a contract the SDK, the app and the README no longer reference. Real USDC, provider registered as ERC-8004 agent 892531. Gas price 22.17 gwei on the native interface (1 gas = 2.217 x 10^-8 USDC). The seventeen receipts below are the whole record this run left; no per-transaction table of it was kept.
 
-[lifecycle-5042002.md](./lifecycle-5042002.md) is **a different run**, made on 2026-09-08 against the current stack, and it does carry every transaction of its own. It shares no transaction hash with the receipts here, so it is not the table behind them. What it is, is the check on them, and that check is in [Checked against the current stack](#checked-against-the-current-stack) below.
+[lifecycle-5042002-2026-09-09.md](./lifecycle-5042002-2026-09-09.md) is **a different run**, made on 2026-09-09 against the stack deployed that day, and it does carry every transaction of its own. It shares no transaction hash with the receipts here, so it is not the table behind them. What it is, is the check on them, and that check is in [Checked against the 2026-09-09 stack](#checked-against-the-2026-09-09-stack) below. It is linked by its dated name and not as `lifecycle-5042002.md`, which every run of the lifecycle overwrites: the comparison below used to name a 2026-09-08 run that no file in this repository holds any more. [docs/deploy/README.md](./README.md) lists what a redeploy invalidates.
 
 | Step | Gas (receipt) | Transaction |
 |---|---|---|
@@ -110,19 +114,25 @@ Per path, real chain:
 
 The chain charges slightly more than Foundry measures for the same calls (a `finalize` with the real registries and a first-touch storage slot on the ERC-8004 reputation registry lands at 465 486 gas against 417 852 in the suite), which is the registry writes being real rather than mocked. Everything else is within a few thousand gas of the local figure.
 
-### Checked against the current stack
+### Checked against the 2026-09-09 stack
 
-The 2026-09-08 lifecycle run walks the same seven paths against the redeployed contracts and carries its own per-path table. Comparing the two is what tells a reader whether the figures on this page still describe the system as it stands:
+The lifecycle run of 2026-09-09 walks the same seven paths against the contracts deployed that day and carries its own per-path table. Comparing the two is what tells a reader whether the figures on this page still describe the system as it stands:
 
-| Path | Here, 2026-09-07 stack | [lifecycle-5042002.md](./lifecycle-5042002.md), 2026-09-08 stack | Difference |
+| Path | Here, 2026-09-07 stack | [lifecycle-5042002-2026-09-09.md](./lifecycle-5042002-2026-09-09.md), 2026-09-09 run | Difference |
 |---|---|---|---|
-| 1-optimistic | 1042338 | 1018521 | +2.34 % |
-| 2a-dispute-client-wins | 1177480 | 1182041 | -0.39 % |
-| 2b-dispute-provider-wins | 1310200 | 1308167 | +0.16 % |
-| 2c-dispute-split | 1359706 | 1357651 | +0.15 % |
-| 3-expiry | 485122 | 487505 | -0.49 % |
-| 4-cancel-before-funding | 342730 | 344957 | -0.65 % |
-| 6-receivable | 1077188 | 1088091 | -1.00 % |
-| The seven together | 6794764 | 6786933 | +0.115 % |
+| 1-optimistic | 1042338 | 1041780 | +0.05 % |
+| 2a-dispute-client-wins | 1177480 | 1197538 | -1.67 % |
+| 2b-dispute-provider-wins | 1310200 | 1333854 | -1.77 % |
+| 2c-dispute-split | 1359706 | 1454640 | -6.53 % |
+| 3-expiry | 485122 | 507882 | -4.48 % |
+| 4-cancel-before-funding | 342730 | 367742 | -6.80 % |
+| 6-receivable | 1077188 | 1116459 | -3.52 % |
+| The seven together | 6794764 | 7019895 | -3.21 % |
 
-The last row drops this page's `0-identity` line (106 883 gas for one `IdentityRegistry.register`), because the lifecycle run has no register step to compare it with; 6 901 647 minus 106 883 is the 6 794 764 above. The redeploy changed storage layouts and constructor signatures (#89, #90, #91, #92), and the cost of every path survived it within two and a half per cent. The one path that moved more than one per cent is `1-optimistic`, and all 23 817 gas of its difference sit in a single step: `finalize` cost 465 486 here against 437 220 there. That is the cold-slot effect the paragraph above already describes on that same call, not a change in what the call does.
+The last row drops this page's `0-identity` line (106 883 gas for one `IdentityRegistry.register`), because the lifecycle run has no register step to compare it with; 6 901 647 minus 106 883 is the 6 794 764 above. A negative difference means the current stack costs **more** than this page records.
+
+**Every path but the optimistic one grew.** Six of the seven now cost more than they did on 2026-09-07, three of them by over four per cent (`4-cancel-before-funding` 6.80 %, `2c-dispute-split` 6.53 %, `3-expiry` 4.48 %), and the seven together cost 225 131 gas more, 3.21 % of the newer total. The direction is uniform enough to have a cause, and the cause is #145: hook calls on `complete` and `reject` became tolerant (`_callHookTolerant`), `_resolvePayout` moved onto `complete`'s path and `_payoutResolvable` was added. Tolerance is not free and this table is where its price shows up.
+
+**`1-optimistic` is now the steadiest path rather than the one that moved.** It differs by 558 gas, 0.05 %, but not because nothing inside it changed: `finalize` is 15 593 gas cheaper (465 486 here against 449 893 there) and `createJob` 22 531 gas dearer, and those two nearly cancel. The 558 gas is what is left over.
+
+Both conclusions replace their opposites. This section used to say that every path survived the redeploy within two and a half per cent and that `1-optimistic` was the only one to move more than one per cent, and it compared against a 2026-09-08 run whose numbers are in no file here any more, including a `finalize` of 437 220 gas that exists nowhere. `lifecycle-5042002.md` is rewritten by every run, so a comparison that links it silently stops describing what it says it describes. That is what the dated report exists to stop.
