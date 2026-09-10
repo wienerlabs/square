@@ -14,7 +14,7 @@ The reference web application for Square, the compliance-gated settlement protoc
 | Route | Purpose |
 |---|---|
 | `/` | Landing page with live numbers (jobs opened, USDC escrowed, settled, last activity), the three settlement layers, the lifecycle and a live network strip. |
-| `/dashboard` | Metric tiles, the escrow flow and pipeline charts, a jobs table with phase filters, a search by id or address and a button that reads 50 older jobs at a time, and, with a wallet connected, the pull-payment balances with Withdraw buttons plus an inbox of the jobs waiting on that wallet: deliverable to submit, escrow to fund, budget to agree, challenge window open, ready to finalize, refund available. |
+| `/dashboard` | Metric tiles, the escrow flow and pipeline charts, a jobs table with phase filters, a search by id or address and a button that reads 50 older jobs at a time, and, with a wallet connected, the pull-payment balances with Withdraw buttons plus an inbox of the jobs waiting on that wallet: deliverable to submit before the expiry less the job's settlement horizon, escrow to fund, budget to agree, challenge window open, ready to finalize, refund available. |
 | `/job?id=N` | The full job record, a timeline built from the record's timestamps, listing and dispute details, a box that checks a pasted spec against the hash on chain, and every lifecycle action the connected wallet may take: set provider, set budget, fund (with automatic USDC approval), submit, finalize, dispute, vote, apply a decision, lapse, list, buy or cancel a claim, reject, claim refund, withdraw, record expiry. |
 | `/new` | Create a job: provider, expiry (at least twice the settlement horizon away, so the job is still submittable after it is funded), a JSON spec hashed to `spec:0x...` that can be copied or downloaded and stays on screen after the job is created, and an optional budget set right after creation. |
 | `/network` | Keeper windows, fees and treasury, the arbiter set and threshold, bond parameters, registry addresses, the read path and links to the design notes. |
@@ -62,7 +62,7 @@ $ npm run build
 
 `--install-links` copies the two workspace packages into `node_modules` instead of symlinking them, so the app and the SDK share one copy of viem. The order is the same one `.github/workflows/packages.yml` uses in its `app (static export)` job; skipping the first two steps leaves `@squaresdk/core` and `@squaresdk/did-resolver` without a build output and every import of them unresolved.
 
-`npm test` runs the unit tests with Vitest: the phase derivation, the formatters, the chart aggregation, the wallet inbox and the live statistics are pure modules under `src/lib` and are tested without a chain.
+`npm test` runs the unit tests with Vitest: the phase derivation, the formatters, the chart aggregation, the action gates, the wallet inbox and the live statistics are pure modules under `src/lib` and are tested without a chain.
 
 `npm run build` writes the static site to `out/`. Serve it with any static file server, for example:
 

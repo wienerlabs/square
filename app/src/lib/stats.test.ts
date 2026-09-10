@@ -19,6 +19,7 @@ const job = (over: Partial<JobSummary>): JobSummary => ({
   platformFeeBP: 100,
   evaluatorFeeBP: 50,
   providerBps: 0,
+  settlementHorizon: 0,
   ...over,
 });
 

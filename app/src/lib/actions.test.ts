@@ -1,6 +1,6 @@
 import { JobStatus } from "@squaresdk/core";
 import { describe, expect, it } from "vitest";
-import { minimumExpiry, refundAvailable } from "./actions";
+import { minimumExpiry, refundAvailable, submitAvailable, submitDeadline } from "./actions";
 import { classify } from "./inbox";
 import type { JobSummary } from "./square";
 
@@ -25,6 +25,7 @@ const job = (over: Partial<JobSummary>): JobSummary => ({
   platformFeeBP: 100,
   evaluatorFeeBP: 50,
   providerBps: 0,
+  settlementHorizon: 0,
   ...over,
 });
 
@@ -63,6 +64,64 @@ describe("the inbox and the job page agree", () => {
     const fromInbox = cases.filter((entry) => classify(entry, client, keeper, now) === "refund").map((entry) => entry.id);
     expect(fromInbox).toEqual(fromJobPage);
     expect(fromJobPage).toEqual([1n, 4n]);
+  });
+});
+
+describe("submitAvailable", () => {
+  const horizon = 1_020;
+
+  it("follows SquareJob.submit: funded, before the expiry, and a whole settlement horizon short of it", () => {
+    const funded = job({ status: JobStatus.Funded, expiredAt: 10_000, settlementHorizon: horizon });
+    expect(submitAvailable(funded, 8_000)).toBe(true);
+    expect(submitAvailable(funded, 8_980)).toBe(true);
+    expect(submitAvailable(funded, 8_981)).toBe(false);
+    expect(submitAvailable(funded, 10_000)).toBe(false);
+    expect(submitAvailable(funded, 10_001)).toBe(false);
+  });
+
+  it("names the deadline the contract enforces, not the expiry", () => {
+    expect(submitDeadline({ expiredAt: 10_000, settlementHorizon: horizon })).toBe(8_980);
+    expect(submitDeadline({ expiredAt: 10_000, settlementHorizon: 0 })).toBe(10_000);
+  });
+
+  it("is closed on every status other than Funded", () => {
+    expect(submitAvailable(job({ status: JobStatus.Open, expiredAt: 10_000, settlementHorizon: horizon }), 1_000)).toBe(false);
+    expect(submitAvailable(job({ status: JobStatus.Submitted, expiredAt: 10_000, settlementHorizon: horizon }), 1_000)).toBe(false);
+    expect(submitAvailable(job({ status: JobStatus.Completed, expiredAt: 10_000, settlementHorizon: horizon }), 1_000)).toBe(false);
+  });
+
+  it("reads the horizon snapshotted on the job, not one shared by every job", () => {
+    const now = 9_500;
+    expect(submitAvailable(job({ status: JobStatus.Funded, expiredAt: 10_000, settlementHorizon: 0 }), now)).toBe(true);
+    expect(submitAvailable(job({ status: JobStatus.Funded, expiredAt: 10_000, settlementHorizon: horizon }), now)).toBe(false);
+  });
+});
+
+describe("the inbox and the job page agree on the submit gate", () => {
+  const now = 20_000;
+  const horizon = 1_020;
+  const cases: JobSummary[] = [
+    job({ id: 1n, status: JobStatus.Funded, fundedAt: 2_000, expiredAt: 30_000, settlementHorizon: horizon }),
+    job({ id: 2n, status: JobStatus.Funded, fundedAt: 2_000, expiredAt: 21_020, settlementHorizon: horizon }),
+    job({ id: 3n, status: JobStatus.Funded, fundedAt: 2_000, expiredAt: 21_019, settlementHorizon: horizon }),
+    job({ id: 4n, status: JobStatus.Funded, fundedAt: 2_000, expiredAt: 19_000, settlementHorizon: horizon }),
+    job({ id: 5n, status: JobStatus.Funded, fundedAt: 2_000, expiredAt: 20_000, settlementHorizon: 0 }),
+    job({ id: 6n, status: JobStatus.Submitted, submittedAt: 9_000, challengeEnd: 9_120, expiredAt: 30_000, settlementHorizon: horizon }),
+    job({ id: 7n, status: JobStatus.Open, expiredAt: 30_000, settlementHorizon: horizon }),
+  ];
+
+  it("proposes the submit for exactly the same jobs", () => {
+    const fromJobPage = cases.filter((entry) => submitAvailable(entry, now)).map((entry) => entry.id);
+    const fromInbox = cases.filter((entry) => classify(entry, provider, keeper, now) === "submit").map((entry) => entry.id);
+    expect(fromInbox).toEqual(fromJobPage);
+    expect(fromJobPage).toEqual([1n, 2n]);
+  });
+
+  it("leaves a funded job inside its last settlement horizon out of the submit group", () => {
+    const inTheLastHorizon = job({ id: 3n, status: JobStatus.Funded, fundedAt: 2_000, expiredAt: 21_019, settlementHorizon: horizon });
+    expect(inTheLastHorizon.expiredAt).toBeGreaterThan(now);
+    expect(submitAvailable(inTheLastHorizon, now)).toBe(false);
+    expect(classify(inTheLastHorizon, provider, keeper, now)).toBeNull();
   });
 });
 

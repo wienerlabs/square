@@ -19,7 +19,7 @@ import { PanelCard } from "@/components/PanelCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { StatusPill, listingTone, outcomeTone, phaseTone } from "@/components/StatusPill";
 import { addressInputError, readAddressInput } from "@/lib/address";
-import { challengeWindowClosed, disputeAvailable, keeperEvaluates as evaluatedByKeeper, refundAvailable } from "@/lib/actions";
+import { challengeWindowClosed, disputeAvailable, keeperEvaluates as evaluatedByKeeper, refundAvailable, submitAvailable, submitDeadline } from "@/lib/actions";
 import { chartColors, formatCompactUsdc, payoutSplit, settlementClock } from "@/lib/charts";
 import { formatBps, formatCountdown, formatDuration, formatTimestamp, formatUsdc, isZeroAddress, parseUsdc, shortAddress, shortHash, statusLabel } from "@/lib/format";
 import {
@@ -29,7 +29,6 @@ import {
   OUTCOME_LABELS,
   PHASE_LABELS,
   useJob,
-  useNetwork,
   useNow,
   usePositions,
   useSquare,
@@ -191,18 +190,23 @@ function parseAgent(input: string): { agentId?: bigint; did?: string; error?: st
   return { agentId: BigInt(trimmed) };
 }
 
-function SubmitAction({ ctx, detail, horizon, now }: { ctx: ActionContext; detail: JobDetail; horizon: number | undefined; now: number }) {
+function SubmitAction({ ctx, detail, now }: { ctx: ActionContext; detail: JobDetail; now: number }) {
   const [content, setContent] = useState("");
   const [agent, setAgent] = useState("");
   const deliverable = useMemo(() => (content.length > 0 ? hashDeliverable(content) : null), [content]);
   const parsedAgent = useMemo(() => parseAgent(agent), [agent]);
-  const tooClose = horizon !== undefined && detail.record.expiredAt < now + horizon;
+  const horizon = detail.record.settlementHorizon;
+  const open = submitAvailable(detail.record, now);
   return (
     <ActionCard
       title="Submit"
-      description="Posts the keccak256 hash of the deliverable. Binding an ERC-8004 agent lets the hook write reputation for it at settlement."
+      description={
+        horizon > 0
+          ? `Posts the keccak256 hash of the deliverable. Binding an ERC-8004 agent lets the hook write reputation for it at settlement. The deadline is ${formatTimestamp(submitDeadline(detail.record))}, which is the expiry less the settlement horizon of ${formatDuration(horizon)} snapshotted on this job.`
+          : `Posts the keccak256 hash of the deliverable. Binding an ERC-8004 agent lets the hook write reputation for it at settlement. This job's evaluator published no settlement horizon, so the deadline is the expiry itself, ${formatTimestamp(detail.record.expiredAt)}.`
+      }
       buttonLabel="Submit deliverable"
-      disabled={deliverable === null || parsedAgent.error !== undefined || tooClose}
+      disabled={deliverable === null || parsedAgent.error !== undefined || !open}
       onClick={() => {
         if (deliverable === null) return;
         const { agentId, did } = parsedAgent;
@@ -220,11 +224,11 @@ function SubmitAction({ ctx, detail, horizon, now }: { ctx: ActionContext; detai
       <Field label="Agent (optional)" htmlFor="agent" hint="ERC-8004 agent id, or a did:aip v2 identifier." error={parsedAgent.error ?? null}>
         <input id="agent" className={inputClass} value={agent} onChange={(event) => setAgent(event.target.value)} placeholder="Agent id or did:aip identifier" />
       </Field>
-      {tooClose && horizon !== undefined ? (
+      {open ? null : (
         <p className="text-caption text-magenta" role="alert">
-          The expiry is closer than the settlement horizon of {formatDuration(horizon)}; submit would revert with ExpiryTooShort.
+          The deadline of {formatTimestamp(submitDeadline(detail.record))} has passed; the expiry is now closer than this job's settlement horizon of {formatDuration(horizon)}, so submit would revert with ExpiryTooShort.
         </p>
-      ) : null}
+      )}
     </ActionCard>
   );
 }
@@ -402,7 +406,6 @@ export function JobView() {
   const raw = params.get("id");
   const id = raw !== null && /^\d+$/.test(raw) ? BigInt(raw) : null;
   const job = useJob(id);
-  const network = useNetwork();
   const { address, chainId } = useAccount();
   const positions = usePositions(address);
   const now = useNow();
@@ -718,7 +721,7 @@ export function JobView() {
                 send={(client) => client.fund(id, record.budget)}
               />
             ) : null}
-            {showSubmit ? <SubmitAction ctx={ctx} detail={detail} horizon={network.data?.settlementHorizon} now={now} /> : null}
+            {showSubmit ? <SubmitAction ctx={ctx} detail={detail} now={now} /> : null}
             {showFinalize ? (
               <SimpleAction
                 ctx={ctx}
