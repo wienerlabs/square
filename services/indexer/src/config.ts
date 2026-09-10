@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { deploymentFor, deploymentFromJson, type SquareDeployment } from "@squaresdk/core";
+import { ARC_TESTNET_CHAIN_ID, deploymentFor, deploymentFromJson, type SquareDeployment } from "@squaresdk/core";
 import type { DeploymentChangePolicy } from "./sync.js";
 
 export interface IndexerConfig {
@@ -56,7 +56,7 @@ function deploymentChangePolicy(): DeploymentChangePolicy {
 }
 
 export function configFromEnv(): IndexerConfig {
-  const chainId = integer("CHAIN_ID", 5042002);
+  const chainId = integer("CHAIN_ID", ARC_TESTNET_CHAIN_ID);
   return {
     chainId,
     rpcUrl: required("RPC_URL"),

@@ -2,3 +2,13 @@ node_modules
 dist
 **/node_modules
 **/dist
+.git
+**/.git
+circuits/build
+contracts/out
+contracts/cache
+contracts/broadcast
+app/.next
+app/out
+services/prover/artifacts/*.wasm
+services/prover/artifacts/*.zkey
