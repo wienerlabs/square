@@ -35,6 +35,12 @@ const BLOCKED = '0x2222222222222222222222222222222222222222';
 // The test asserts these back out of the public signals.
 const BASE = {
   policy_id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
+  // square#45: the secret the eight leaf salts derive from. Fixed, so a
+  // regenerated fixture differs only where the proof does.
+  policy_salt: '7777777777777777777777777777777777777777777777777777777777777',
+  // square#45: the secret the eight leaf salts derive from. Fixed, so a
+  // regenerated fixture differs only where the proof does.
+  policy_salt: '7777777777777777777777777777777777777777777777777777777777777',
   operator_id: '0x3333333333333333333333333333333333333333',
   max_daily_spend: '100000000',
   max_per_transaction: '10000000',
@@ -94,6 +100,15 @@ const out = {
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, `${JSON.stringify(out, null, 2)}\n`);
 process.stdout.write(
-  `\nwrote ${path.relative(ROOT, OUT)}\n`
-  + `zkey sha256 ${zkeySha256 ?? '(the key was not on disk; recorded as null)'}\n`,
+  `
+wrote ${path.relative(ROOT, OUT)}
+`
+  + `zkey sha256 ${zkeySha256 ?? '(the key was not on disk; recorded as null)'}
+`,
 );
+
+// snarkjs leaves handles open after fullProve — a worker pool it does not tear
+// down — so the process finishes its work and then sits there. Every byte is on
+// disk by this line; anything still running is not ours to wait for, and a
+// script that never returns hangs whatever called it.
+process.exit(0);
