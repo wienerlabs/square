@@ -1,6 +1,6 @@
 import { JobStatus } from "@squaresdk/core";
 import { isAddressEqual, zeroAddress, type Address } from "viem";
-import { keeperEvaluates, refundAvailable } from "./actions";
+import { keeperEvaluates, refundAvailable, submitAvailable } from "./actions";
 import type { JobSummary } from "./square";
 
 export type InboxKind = "submit" | "fund" | "budget" | "dispute" | "finalize" | "refund";
@@ -13,7 +13,7 @@ export interface InboxGroup {
 }
 
 const COPY: Record<InboxKind, { title: string; body: string }> = {
-  submit: { title: "Waiting for your deliverable", body: "You are the provider and the escrow is funded. Submit the hash before the expiry." },
+  submit: { title: "Waiting for your deliverable", body: "You are the provider and the escrow is funded. Submit the hash before the deadline shown on each job, which is its expiry less the settlement horizon snapshotted on it." },
   fund: { title: "Waiting for your funding", body: "The budget is agreed. Approve USDC and fund to fix the fees and start the clock." },
   budget: { title: "Needs a budget", body: "You opened these jobs without a budget. Agree one before funding." },
   dispute: { title: "Your challenge window is open", body: "The provider submitted. You may still dispute with a bond until the window closes." },
@@ -39,7 +39,7 @@ export function classify(job: JobSummary, address: Address, keeperEvaluator: Add
       if (job.budget === 0n) return "budget";
       return same(job.provider, zeroAddress) ? null : "fund";
     case JobStatus.Funded:
-      return provider && live ? "submit" : null;
+      return provider && submitAvailable(job, now) ? "submit" : null;
     case JobStatus.Submitted:
       if (job.disputed) return null;
       if (!keeperEvaluates(job, keeperEvaluator)) return null;

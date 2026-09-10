@@ -2,7 +2,16 @@ import type { Hex } from "viem";
 import { JobStatus, squareHookAbi, type SquareClient } from "@squaresdk/core";
 import { disputes, jobs, keeperActions, type Database } from "@squaresdk/data";
 import type { Logger, Metrics } from "@squaresdk/observability";
-import { decide, expiryIsNear, gasCostInUsdc, keeperFee, oldestPendingAge, type KeeperCandidate, type KeeperEconomics } from "./decide.js";
+import {
+  decide,
+  expiryIsNear,
+  EXPIRY_WARNING_SECONDS,
+  gasCostInUsdc,
+  keeperFee,
+  oldestPendingAge,
+  type KeeperCandidate,
+  type KeeperEconomics,
+} from "./decide.js";
 
 export interface KeeperRetryPolicy {
   baseDelaySeconds: bigint;
@@ -10,6 +19,9 @@ export interface KeeperRetryPolicy {
   giveUpAfter: number;
   maxJournalRowsPerJob: number;
 }
+
+export const DEFAULT_EXPIRY_BATCH_SIZE = 25;
+export const DEFAULT_EXPIRY_INTERVAL_MS = 60_000;
 
 export const DEFAULT_RETRY_POLICY: KeeperRetryPolicy = {
   baseDelaySeconds: 60n,
@@ -28,6 +40,8 @@ export interface KeeperOptions {
   defaultFinalizeGas: bigint;
   defaultFinalizeDecidedGas: bigint;
   recordExpiries: boolean;
+  expiryBatchSize?: number;
+  expiryIntervalMs?: number;
   ephemeralMirror?: boolean;
   retryPolicy?: KeeperRetryPolicy;
   complianceProofFor?: (jobId: bigint) => Promise<Hex>;
@@ -45,10 +59,16 @@ export interface TickReport {
   applied: bigint[];
   lapsed: bigint[];
   skipped: Array<{ jobId: bigint; reason: string }>;
-  expiriesRecorded: bigint[];
   nearExpiry: bigint[];
   pending: number;
   oldestPendingAgeSeconds: number;
+}
+
+export interface ExpirySweepReport {
+  scanned: number;
+  recorded: bigint[];
+  alreadyRecorded: bigint[];
+  failed: bigint[];
 }
 
 function usdc(amount: bigint): number {
@@ -57,12 +77,21 @@ function usdc(amount: bigint): number {
 
 export class Keeper {
   private readonly journaledSkips = new Set<string>();
+  private readonly warnedNearExpiry = new Set<string>();
   private readonly retries = new Map<string, RetryState>();
 
   constructor(private readonly options: KeeperOptions) {}
 
   private get retryPolicy(): KeeperRetryPolicy {
     return this.options.retryPolicy ?? DEFAULT_RETRY_POLICY;
+  }
+
+  private get expiryBatchSize(): number {
+    return this.options.expiryBatchSize ?? DEFAULT_EXPIRY_BATCH_SIZE;
+  }
+
+  private get expiryIntervalMs(): number {
+    return this.options.expiryIntervalMs ?? DEFAULT_EXPIRY_INTERVAL_MS;
   }
 
   private backoffSeconds(attempts: number): bigint {
@@ -139,7 +168,7 @@ export class Keeper {
 
   async tick(now = BigInt(Math.floor(Date.now() / 1000))): Promise<TickReport> {
     const { db, chainId, client, logger, metrics } = this.options;
-    const report: TickReport = { finalized: [], applied: [], lapsed: [], skipped: [], expiriesRecorded: [], nearExpiry: [], pending: 0, oldestPendingAgeSeconds: 0 };
+    const report: TickReport = { finalized: [], applied: [], lapsed: [], skipped: [], nearExpiry: [], pending: 0, oldestPendingAgeSeconds: 0 };
     const economics = await this.economics();
     const evaluator = client.deployment.keeperEvaluator;
     const mirrored = [
@@ -161,11 +190,12 @@ export class Keeper {
     metrics?.setFinalizePending(report.pending);
     metrics?.setOldestPendingAgeSeconds(report.oldestPendingAgeSeconds);
     metrics?.setDisputesOpen((await disputes.listOpen(db, chainId)).length);
+    this.forgetJobsThatLeft(confirmed);
 
     for (const candidate of confirmed) {
       if (expiryIsNear(candidate, now)) {
         report.nearExpiry.push(candidate.jobId);
-        logger.warn("keeper.expiry_near", { jobId: candidate.jobId.toString(), expiredAt: (candidate.expiredAt ?? 0n).toString() });
+        this.warnOnceOnNearExpiry(candidate, now);
       }
       const action = decide(candidate, now, economics);
       if (action.kind !== "skip") {
@@ -228,38 +258,78 @@ export class Keeper {
       }
     }
 
-    if (this.options.recordExpiries) await this.recordExpiries(report);
     metrics?.recordKeeperTick();
     return report;
   }
 
-  private async recordExpiries(report: TickReport): Promise<void> {
+  private forgetJobsThatLeft(confirmed: KeeperCandidate[]): void {
+    const present = new Set(confirmed.map((candidate) => candidate.jobId.toString()));
+    for (const key of this.warnedNearExpiry) {
+      if (!present.has(key)) this.warnedNearExpiry.delete(key);
+    }
+  }
+
+  private warnOnceOnNearExpiry(candidate: KeeperCandidate, now: bigint): void {
+    const key = candidate.jobId.toString();
+    if (this.warnedNearExpiry.has(key)) return;
+    this.warnedNearExpiry.add(key);
+    const left = (candidate.expiredAt ?? 0n) - now;
+    this.options.logger.warn("keeper.expiry_near", {
+      jobId: key,
+      reason: `expires in ${left}s, inside the ${EXPIRY_WARNING_SECONDS}s warning window`,
+    });
+  }
+
+  async sweepExpiries(): Promise<ExpirySweepReport> {
     const { db, chainId, client, logger, metrics } = this.options;
-    for (const row of await jobs.listExpiredWithAgent(db, chainId)) {
+    const report: ExpirySweepReport = { scanned: 0, recorded: [], alreadyRecorded: [], failed: [] };
+    const rows = await jobs.listExpiredWithAgent(db, chainId, client.deployment.keeperEvaluator, this.expiryBatchSize);
+    report.scanned = rows.length;
+    for (const row of rows) {
       const recorded = await client.publicClient.readContract({
         abi: squareHookAbi,
         address: client.deployment.squareHook,
         functionName: "recorded",
         args: [row.jobId],
       });
-      if (recorded) continue;
+      if (recorded) {
+        await keeperActions.append(db, { chainId, jobId: row.jobId, action: "recordExpiry" });
+        report.alreadyRecorded.push(row.jobId);
+        logger.info("keeper.expiry_already_recorded", {
+          jobId: row.jobId.toString(),
+          reason: "the hook already carries this expiry, journaled so the sweep stops asking the chain about it",
+        });
+        continue;
+      }
       try {
         const result = await client.recordExpiry(row.jobId);
         await keeperActions.append(db, { chainId, jobId: row.jobId, action: "recordExpiry", txHash: result.hash, gasUsed: result.receipt.gasUsed });
         metrics?.recordKeeperAction("recordExpiry", "success");
-        report.expiriesRecorded.push(row.jobId);
+        report.recorded.push(row.jobId);
       } catch (error) {
+        report.failed.push(row.jobId);
+        metrics?.recordKeeperAction("recordExpiry", "failure");
         logger.warn("keeper.record_expiry_failed", { jobId: row.jobId.toString(), error: error instanceof Error ? error.message : String(error) });
       }
     }
+    return report;
   }
 
   async run(pollIntervalMs: number, signal: AbortSignal): Promise<void> {
+    let nextExpirySweepAt = 0;
     while (!signal.aborted) {
       try {
         await this.tick();
       } catch (error) {
         this.options.logger.error("keeper.tick_failed", { error: error instanceof Error ? error.message : String(error) });
+      }
+      if (this.options.recordExpiries && Date.now() >= nextExpirySweepAt) {
+        try {
+          await this.sweepExpiries();
+        } catch (error) {
+          this.options.logger.error("keeper.expiry_sweep_failed", { error: error instanceof Error ? error.message : String(error) });
+        }
+        nextExpirySweepAt = Date.now() + this.expiryIntervalMs;
       }
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, pollIntervalMs);

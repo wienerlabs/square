@@ -7,6 +7,7 @@ import {
   PROOF_FAILURE_REASONS,
   UNPARSABLE_ENDPOINT_LABEL,
 } from "../src/metrics.js";
+import { indexerLagging } from "../src/alerts.js";
 
 interface MetricValue {
   value: number;
@@ -108,14 +109,23 @@ describe("helpers update the registry", () => {
 
   it("derives indexer lag from the two heads", async () => {
     const metrics = createMetrics({ service: "indexer", defaultMetrics: false });
+    expect(metrics.snapshot().indexerLagBlocks).toBeUndefined();
     metrics.setIndexerHead(500);
-    expect(metrics.snapshot().indexerLagBlocks).toBe(0);
+    expect(metrics.snapshot().indexerLagBlocks).toBeUndefined();
     metrics.setChainHead(560n);
     expect(metrics.snapshot()).toMatchObject({ indexerHeadBlock: 500, chainHeadBlock: 560, indexerLagBlocks: 60 });
     metrics.setIndexerHead(560);
     expect(await valueOf(metrics.registry, metrics.names.indexerLag)).toBe(0);
     expect(await valueOf(metrics.registry, metrics.names.indexerHead)).toBe(560);
     expect(await valueOf(metrics.registry, metrics.names.chainHead)).toBe(560);
+  });
+
+  it("keeps the lag gauge at its default until both heads are sampled", async () => {
+    const metrics = createMetrics({ service: "indexer", defaultMetrics: false });
+    metrics.setIndexerHead(500);
+    expect(await valueOf(metrics.registry, metrics.names.indexerLag)).toBe(0);
+    expect(await valueOf(metrics.registry, metrics.names.indexerHead)).toBe(500);
+    expect(indexerLagging().evaluate({ ...metrics.snapshot() }, { now: 0 })).toEqual({ firing: false, detail: "no lag sample" });
   });
 
   it("times proofs and counts attempts and failures", async () => {

@@ -36,6 +36,7 @@ export interface JobRecord {
   disputed: boolean;
   agentId: bigint | null;
   updatedBlock: bigint;
+  refundReason: string | null;
 }
 
 interface JobRow {
@@ -62,10 +63,11 @@ interface JobRow {
   disputed: boolean;
   agent_id: string | null;
   updated_block: string;
+  refund_reason: string | null;
 }
 
 const COLUMNS =
-  "chain_id, job_id, client, provider, evaluator, hook, description, budget, status, expired_at, created_at, funded_at, submitted_at, challenge_end, platform_fee_bp, evaluator_fee_bp, deliverable, payee, provider_bps, reason, disputed, agent_id, updated_block";
+  "chain_id, job_id, client, provider, evaluator, hook, description, budget, status, expired_at, created_at, funded_at, submitted_at, challenge_end, platform_fee_bp, evaluator_fee_bp, deliverable, payee, provider_bps, reason, disputed, agent_id, updated_block, refund_reason";
 
 function rowToJob(row: JobRow): JobRecord {
   return {
@@ -92,13 +94,14 @@ function rowToJob(row: JobRow): JobRecord {
     disputed: row.disputed,
     agentId: nullableToBigInt(row.agent_id),
     updatedBlock: toBigInt(row.updated_block),
+    refundReason: row.refund_reason,
   };
 }
 
 export async function upsert(db: Database, job: JobRecord): Promise<boolean> {
   const { rowCount } = await db.query(
     `insert into jobs (${COLUMNS})
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
      on conflict (chain_id, job_id) do update set
        client = excluded.client,
        provider = excluded.provider,
@@ -120,7 +123,8 @@ export async function upsert(db: Database, job: JobRecord): Promise<boolean> {
        reason = excluded.reason,
        disputed = excluded.disputed,
        agent_id = excluded.agent_id,
-       updated_block = excluded.updated_block
+       updated_block = excluded.updated_block,
+       refund_reason = excluded.refund_reason
      where jobs.updated_block <= excluded.updated_block`,
     [
       job.chainId,
@@ -146,6 +150,7 @@ export async function upsert(db: Database, job: JobRecord): Promise<boolean> {
       job.disputed,
       nullableBigIntParam(job.agentId),
       job.updatedBlock.toString(),
+      job.refundReason,
     ],
   );
   return rowCount === 1;
@@ -205,10 +210,30 @@ export async function listDisputedSubmitted(db: Database, chainId: number, evalu
   return rows.map(rowToJob);
 }
 
-export async function listExpiredWithAgent(db: Database, chainId: number): Promise<JobRecord[]> {
+export async function listExpiredWithAgent(db: Database, chainId: number, evaluator?: Hex, limit?: number): Promise<JobRecord[]> {
+  const params: unknown[] = [chainId];
+  let filter = "";
+  if (evaluator !== undefined) {
+    params.push(hexToBytes(evaluator));
+    filter = ` and jobs.evaluator = $${params.length}`;
+  }
+  let bound = "";
+  if (limit !== undefined) {
+    params.push(limit);
+    bound = ` limit $${params.length}`;
+  }
   const { rows } = await db.query<JobRow>(
-    `select ${COLUMNS} from jobs where chain_id = $1 and status = ${JOB_STATUS.expired} and agent_id is not null order by job_id`,
-    [chainId],
+    `select ${COLUMNS} from jobs
+     where jobs.chain_id = $1 and jobs.status = ${JOB_STATUS.expired} and jobs.agent_id is not null${filter}
+       and not exists (
+         select 1 from keeper_actions
+         where keeper_actions.chain_id = jobs.chain_id
+           and keeper_actions.job_id = jobs.job_id
+           and keeper_actions.action = 'recordExpiry'
+           and keeper_actions.reason is null
+       )
+     order by jobs.job_id${bound}`,
+    params,
   );
   return rows.map(rowToJob);
 }

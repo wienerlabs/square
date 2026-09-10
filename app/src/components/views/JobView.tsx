@@ -4,7 +4,7 @@ import { agentFromDid, hashDeliverable, JobStatus, Outcome, specHashFromDescript
 import { InvalidDidError } from "@squaresdk/did-resolver";
 import { useSearchParams } from "next/navigation";
 import { useMemo, useState, type ReactNode } from "react";
-import { getAddress, isAddress, isAddressEqual, type Address } from "viem";
+import { isAddressEqual, type Address } from "viem";
 import { useAccount } from "wagmi";
 import { AddressLink } from "@/components/AddressLink";
 import { AmountUsdc } from "@/components/AmountUsdc";
@@ -14,12 +14,14 @@ import { Chip } from "@/components/Chip";
 import { EmptyState } from "@/components/EmptyState";
 import { Field, inputClass } from "@/components/Field";
 import { GhostButton } from "@/components/GhostButton";
+import { JsonEditor } from "@/components/JsonEditor";
 import { PanelCard } from "@/components/PanelCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { StatusPill, listingTone, outcomeTone, phaseTone } from "@/components/StatusPill";
-import { keeperEvaluates as evaluatedByKeeper, refundAvailable } from "@/lib/actions";
+import { addressInputError, readAddressInput } from "@/lib/address";
+import { challengeWindowClosed, disputeAvailable, keeperEvaluates as evaluatedByKeeper, refundAvailable, submitAvailable, submitDeadline } from "@/lib/actions";
 import { chartColors, formatCompactUsdc, payoutSplit, settlementClock } from "@/lib/charts";
-import { formatBps, formatCountdown, formatDuration, formatTimestamp, formatUsdc, isZeroAddress, parseUsdc, shortHash, statusLabel } from "@/lib/format";
+import { formatBps, formatCountdown, formatDuration, formatTimestamp, formatUsdc, isZeroAddress, parseUsdc, shortAddress, shortHash, statusLabel } from "@/lib/format";
 import {
   countVotes,
   jobPhase,
@@ -27,12 +29,12 @@ import {
   OUTCOME_LABELS,
   PHASE_LABELS,
   useJob,
-  useNetwork,
   useNow,
   usePositions,
   useSquare,
   type JobDetail,
 } from "@/lib/square";
+import { checkSpec } from "@/lib/spec";
 import { describeError, useTx } from "@/lib/tx";
 import { activeChain, deployment } from "@/lib/wagmi";
 
@@ -66,7 +68,7 @@ function ActionCard({
     <div className="flex flex-col gap-4 rounded-2xl border border-fog bg-paper-white p-6">
       <div>
         <h3 className="text-body font-medium text-carbon">{title}</h3>
-        <p className="mt-1 text-caption text-graphite">{description}</p>
+        <div className="mt-1 flex flex-col gap-2 text-caption text-graphite">{description}</div>
       </div>
       {children}
       <div className="flex flex-wrap items-center gap-3">
@@ -107,15 +109,16 @@ function SimpleAction({
 
 function SetProviderAction({ ctx }: { ctx: ActionContext }) {
   const [value, setValue] = useState("");
-  const valid = isAddress(value) && !isZeroAddress(value);
+  const parsed = readAddressInput(value);
+  const provider = parsed.kind === "valid" && !isZeroAddress(parsed.address) ? parsed.address : null;
   return (
     <ActionCard
       title="Set provider"
       description="The job was opened without a provider, so funding reverts with ProviderNotSet. Only the client may name one, only while the job is open, and only once."
       buttonLabel="Set provider"
-      disabled={!valid}
+      disabled={provider === null}
       onClick={() => {
-        if (valid) void ctx.run("Set provider", () => ctx.square.setProvider(ctx.id, getAddress(value)));
+        if (provider !== null) void ctx.run("Set provider", () => ctx.square.setProvider(ctx.id, provider));
       }}
       ctx={ctx}
     >
@@ -123,7 +126,7 @@ function SetProviderAction({ ctx }: { ctx: ActionContext }) {
         label="Provider address"
         htmlFor="provider"
         hint="An agent's wallet on this chain. It is fixed once set."
-        error={value.length > 0 && !valid ? "Enter a 0x address of 40 hex characters." : null}
+        error={addressInputError(parsed)}
       >
         <input
           id="provider"
@@ -135,6 +138,13 @@ function SetProviderAction({ ctx }: { ctx: ActionContext }) {
           spellCheck={false}
         />
       </Field>
+      {parsed.kind === "checksum" ? (
+        <div>
+          <GhostButton size="sm" onClick={() => setValue(parsed.suggestion)}>
+            Use {shortAddress(parsed.suggestion)}
+          </GhostButton>
+        </div>
+      ) : null}
     </ActionCard>
   );
 }
@@ -180,18 +190,23 @@ function parseAgent(input: string): { agentId?: bigint; did?: string; error?: st
   return { agentId: BigInt(trimmed) };
 }
 
-function SubmitAction({ ctx, detail, horizon, now }: { ctx: ActionContext; detail: JobDetail; horizon: number | undefined; now: number }) {
+function SubmitAction({ ctx, detail, now }: { ctx: ActionContext; detail: JobDetail; now: number }) {
   const [content, setContent] = useState("");
   const [agent, setAgent] = useState("");
   const deliverable = useMemo(() => (content.length > 0 ? hashDeliverable(content) : null), [content]);
   const parsedAgent = useMemo(() => parseAgent(agent), [agent]);
-  const tooClose = horizon !== undefined && detail.record.expiredAt < now + horizon;
+  const horizon = detail.record.settlementHorizon;
+  const open = submitAvailable(detail.record, now);
   return (
     <ActionCard
       title="Submit"
-      description="Posts the keccak256 hash of the deliverable. Binding an ERC-8004 agent lets the hook write reputation for it at settlement."
+      description={
+        horizon > 0
+          ? `Posts the keccak256 hash of the deliverable. Binding an ERC-8004 agent lets the hook write reputation for it at settlement. The deadline is ${formatTimestamp(submitDeadline(detail.record))}, which is the expiry less the settlement horizon of ${formatDuration(horizon)} snapshotted on this job.`
+          : `Posts the keccak256 hash of the deliverable. Binding an ERC-8004 agent lets the hook write reputation for it at settlement. This job's evaluator published no settlement horizon, so the deadline is the expiry itself, ${formatTimestamp(detail.record.expiredAt)}.`
+      }
       buttonLabel="Submit deliverable"
-      disabled={deliverable === null || parsedAgent.error !== undefined || tooClose}
+      disabled={deliverable === null || parsedAgent.error !== undefined || !open}
       onClick={() => {
         if (deliverable === null) return;
         const { agentId, did } = parsedAgent;
@@ -209,11 +224,11 @@ function SubmitAction({ ctx, detail, horizon, now }: { ctx: ActionContext; detai
       <Field label="Agent (optional)" htmlFor="agent" hint="ERC-8004 agent id, or a did:aip v2 identifier." error={parsedAgent.error ?? null}>
         <input id="agent" className={inputClass} value={agent} onChange={(event) => setAgent(event.target.value)} placeholder="Agent id or did:aip identifier" />
       </Field>
-      {tooClose && horizon !== undefined ? (
+      {open ? null : (
         <p className="text-caption text-magenta" role="alert">
-          The expiry is closer than the settlement horizon of {formatDuration(horizon)}; submit would revert with ExpiryTooShort.
+          The deadline of {formatTimestamp(submitDeadline(detail.record))} has passed; the expiry is now closer than this job's settlement horizon of {formatDuration(horizon)}, so submit would revert with ExpiryTooShort.
         </p>
-      ) : null}
+      )}
     </ActionCard>
   );
 }
@@ -259,7 +274,37 @@ function VoteAction({ ctx, detail }: { ctx: ActionContext; detail: JobDetail }) 
   );
 }
 
-function ListClaimAction({ ctx, detail }: { ctx: ActionContext; detail: JobDetail }) {
+function ReceivableOutcomes({ detail, now, audience }: { detail: JobDetail; now: number; audience: "buyer" | "seller" }) {
+  const paid = audience === "buyer" ? "you receive" : "the buyer receives";
+  const disputed = detail.disputed || detail.dispute.disputedAt !== 0;
+  const windowOpen = detail.challengeEnd > 0 && now < detail.challengeEnd;
+  return (
+    <>
+      <p>The claim is paid at finalize and nowhere else, and what finalize pays is not settled while the client can still challenge the submission.</p>
+      <ul className="list-disc space-y-1 pl-4">
+        <li>If the client disputes and the arbiters reject the job, the whole budget goes back to the client and {paid} nothing.</li>
+        <li>If the arbiters decide a split instead, {paid} the provider share of the net payout, which is below the face value, and the rest goes back to the client.</li>
+        <li>If the job expires with nothing settled, the refund credits the client and not the payee, because claimRefund is not hookable; the kernel allows it only once the evaluator can no longer resolve the payout.</li>
+      </ul>
+      <p>
+        {disputed
+          ? "This job is already disputed, so the arbiters decide what finalize pays."
+          : windowOpen
+            ? `The challenge window is open with ${formatCountdown(detail.challengeEnd, now).toLowerCase()}, closing ${formatTimestamp(detail.challengeEnd)}. The client may still dispute until then.`
+            : detail.challengeEnd > 0
+              ? `The challenge window closed ${formatTimestamp(detail.challengeEnd)} without a dispute, so the client can no longer open one and finalize pays the whole net payout to the payee.`
+              : "The keeper evaluator does not hold this job, so no challenge window is published for it and the evaluator on the record decides the payout."}
+      </p>
+      <p>
+        {audience === "buyer"
+          ? "The discount on the face value is the price of these outcomes."
+          : "The discount you give on the face value is what the buyer is paid for carrying these outcomes."}
+      </p>
+    </>
+  );
+}
+
+function ListClaimAction({ ctx, detail, now }: { ctx: ActionContext; detail: JobDetail; now: number }) {
   const [value, setValue] = useState("");
   const price = parseUsdc(value);
   const face = detail.netPayout;
@@ -267,7 +312,12 @@ function ListClaimAction({ ctx, detail }: { ctx: ActionContext; detail: JobDetai
   return (
     <ActionCard
       title="List the receivable"
-      description="Sells the right to this job's net payout. The buyer becomes the payee at finalize; reputation stays with the agent."
+      description={
+        <>
+          <p>Sells the right to this job's net payout. The buyer becomes the payee at finalize; reputation stays with the agent.</p>
+          <ReceivableOutcomes detail={detail} now={now} audience="seller" />
+        </>
+      }
       buttonLabel="List claim"
       disabled={!valid}
       onClick={() => {
@@ -284,6 +334,45 @@ function ListClaimAction({ ctx, detail }: { ctx: ActionContext; detail: JobDetai
         <input id="price" inputMode="decimal" className={inputClass} value={value} onChange={(event) => setValue(event.target.value)} placeholder="0.00" />
       </Field>
     </ActionCard>
+  );
+}
+
+function SpecCheck({ description }: { description: string }) {
+  const [text, setText] = useState("");
+  const result = useMemo(() => checkSpec(text, description), [text, description]);
+  return (
+    <PanelCard
+      title="Check the spec"
+      description="The chain carries the hash, not the words. Paste the spec text you were sent and this page canonicalizes and hashes it the same way the form did, so you can see whether it is the text this job was opened with."
+    >
+      <Field
+        label="Spec (JSON)"
+        htmlFor="spec-check"
+        error={result.kind === "invalid" ? result.message : null}
+        hint={<span className="break-all font-mono text-[12px]">On chain: {description}</span>}
+      >
+        <JsonEditor
+          id="spec-check"
+          value={text}
+          onChange={setText}
+          error={result.kind === "invalid" ? result.message : null}
+          placeholder={'{\n  "task": "...",\n  "deliverable": "...",\n  "acceptance": "..."\n}'}
+          minHeight={180}
+        />
+      </Field>
+      {result.kind === "match" ? (
+        <p className="mt-4 flex items-center gap-2 text-caption text-carbon" role="status">
+          <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-mint" />
+          This text hashes to the description on chain, so it is the spec this job was opened with.
+        </p>
+      ) : null}
+      {result.kind === "mismatch" ? (
+        <p className="mt-4 flex flex-wrap items-center gap-2 text-caption text-magenta" role="status">
+          <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-magenta" />
+          <span className="break-all">This text hashes to spec:{result.hash}, which is not the description on chain. Ask for the exact text that was hashed.</span>
+        </p>
+      ) : null}
+    </PanelCard>
   );
 }
 
@@ -352,7 +441,6 @@ export function JobView() {
   const raw = params.get("id");
   const id = raw !== null && /^\d+$/.test(raw) ? BigInt(raw) : null;
   const job = useJob(id);
-  const network = useNetwork();
   const { address, chainId } = useAccount();
   const positions = usePositions(address);
   const now = useNow();
@@ -388,7 +476,7 @@ export function JobView() {
   const isProvider = sameAddress(address, record.provider);
   const keeperEvaluates = evaluatedByKeeper(record, deployment.keeperEvaluator);
   const hookIsSquare = isAddressEqual(record.hook, deployment.squareHook);
-  const windowClosed = detail.challengeEnd > 0 && now >= detail.challengeEnd;
+  const windowClosed = challengeWindowClosed(detail.challengeEnd, now);
   const neverDisputed = detail.keeperDispute.disputedAt === 0;
   const disputeOpen = detail.dispute.disputedAt !== 0 && detail.dispute.outcome === 0;
   const isArbiter = address !== undefined && detail.arbiters.some((arbiter) => isAddressEqual(arbiter, address));
@@ -402,7 +490,10 @@ export function JobView() {
   const showFund = record.status === JobStatus.Open && isClient && record.budget > 0n && !isZeroAddress(record.provider) && now < record.expiredAt;
   const showSubmit = record.status === JobStatus.Funded && isProvider && now < record.expiredAt;
   const showFinalize = record.status === JobStatus.Submitted && keeperEvaluates && neverDisputed && windowClosed;
-  const showDispute = record.status === JobStatus.Submitted && keeperEvaluates && isClient && neverDisputed && !windowClosed;
+  const showDispute =
+    isClient &&
+    neverDisputed &&
+    disputeAvailable({ evaluator: record.evaluator, status: record.status, challengeEnd: detail.challengeEnd }, deployment.keeperEvaluator, now);
   const showVote = disputeOpen && isArbiter;
   const showLapse = disputeOpen && now >= detail.dispute.resolveBy;
   const showFinalizeDecided =
@@ -531,6 +622,11 @@ export function JobView() {
                   {specHash ? `spec:${shortHash(specHash)}` : record.description}
                 </span>
               )}
+              {specHash ? (
+                <span className="mt-1 block text-caption text-graphite">
+                  Only this hash is on chain. The client hands the spec text to the provider off chain, over whatever channel they already use; paste it under Check the spec below to prove it is the text this hash was made from.
+                </span>
+              ) : null}
             </Row>
             <Row label="Agent">{detail.agentId !== 0n ? <span className="tabular-nums">ERC-8004 agent #{detail.agentId.toString()}</span> : <span className="text-ash">Not bound</span>}</Row>
             <Row label="Created">{formatTimestamp(record.createdAt)}</Row>
@@ -569,6 +665,8 @@ export function JobView() {
           ) : null}
         </PanelCard>
       </div>
+
+      {specHash ? <SpecCheck description={record.description} /> : null}
 
       {listing.status !== 0 || detail.dispute.disputedAt !== 0 ? (
         <div className={`grid gap-4 ${listing.status !== 0 && detail.dispute.disputedAt !== 0 ? "lg:grid-cols-2" : ""}`}>
@@ -658,7 +756,7 @@ export function JobView() {
                 send={(client) => client.fund(id, record.budget)}
               />
             ) : null}
-            {showSubmit ? <SubmitAction ctx={ctx} detail={detail} horizon={network.data?.settlementHorizon} now={now} /> : null}
+            {showSubmit ? <SubmitAction ctx={ctx} detail={detail} now={now} /> : null}
             {showFinalize ? (
               <SimpleAction
                 ctx={ctx}
@@ -700,14 +798,22 @@ export function JobView() {
                 send={(client) => client.lapse(id)}
               />
             ) : null}
-            {showList ? <ListClaimAction ctx={ctx} detail={detail} /> : null}
+            {showList ? <ListClaimAction ctx={ctx} detail={detail} now={now} /> : null}
             {showBuy ? (
               <SimpleAction
                 ctx={ctx}
                 title="Buy the receivable"
                 label="Buy claim"
                 buttonLabel={`Buy for ${formatUsdc(listing.price)} USDC`}
-                description={`Pays the seller ${formatUsdc(listing.price)} USDC for a face value of ${formatUsdc(listing.faceValue)} USDC. The transaction is bound to this price and reverts if the seller relists at another one. An approval is sent first if the allowance is short.`}
+                description={
+                  <>
+                    <p>
+                      Pays the seller {formatUsdc(listing.price)} USDC for a face value of {formatUsdc(listing.faceValue)} USDC, and makes you the payee at finalize. The
+                      transaction is bound to this price and reverts if the seller relists at another one. An approval is sent first if the allowance is short.
+                    </p>
+                    <ReceivableOutcomes detail={detail} now={now} audience="buyer" />
+                  </>
+                }
                 send={(client) => client.buyClaim(id, { expectedPrice: listing.price })}
               />
             ) : null}

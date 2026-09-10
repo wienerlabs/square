@@ -3,10 +3,11 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { createPublicClient, createWalletClient, defineChain, http, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { createSquareClient, deploymentFor, deploymentFromJson } from "@squaresdk/core";
+import { ARC_TESTNET_CHAIN_ID, createSquareClient, deploymentFor, deploymentFromJson, networks } from "@squaresdk/core";
 import { keeperActions, migrate, MIGRATIONS_DIR, pgDatabase, pgliteDatabase } from "@squaresdk/data";
 import { createAlerting, createHealth, createLogger, createMetrics, keeperStalled, logNotifier, webhookNotifier } from "@squaresdk/observability";
 import { observabilityRoutes } from "@squaresdk/observability/hono";
+import { keeperChecks } from "./checks.js";
 import { Keeper } from "./run.js";
 
 function required(name: string): string {
@@ -24,16 +25,20 @@ function integer(name: string, fallback: number): number {
 }
 
 async function main(): Promise<void> {
-  const chainId = integer("CHAIN_ID", 5042002);
+  const chainId = integer("CHAIN_ID", ARC_TESTNET_CHAIN_ID);
   const rpcUrl = required("RPC_URL");
   const version = process.env["SQUARE_VERSION"] ?? "0.1.0";
   const deploymentFile = process.env["SQUARE_DEPLOYMENT_FILE"];
   const deployment = deploymentFile ? deploymentFromJson(JSON.parse(readFileSync(deploymentFile, "utf8"))) : deploymentFor(chainId);
   const account = privateKeyToAccount(required("KEEPER_PRIVATE_KEY") as Hex);
+  const finalizeGas = BigInt(integer("FINALIZE_GAS", 450_000));
+  // Known chains carry their own name and unit; an unknown chain id is still
+  // allowed here, because SQUARE_DEPLOYMENT_FILE can point the keeper at one.
+  const profile = networks[chainId];
   const chain = defineChain({
     id: chainId,
-    name: `chain-${chainId}`,
-    nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+    name: profile?.name ?? `chain-${chainId}`,
+    nativeCurrency: profile?.nativeCurrency ?? { name: "USDC", symbol: "USDC", decimals: 18 },
     rpcUrls: { default: { http: [rpcUrl] } },
   });
   const logger = createLogger({ service: "square-keeper", version });
@@ -57,9 +62,11 @@ async function main(): Promise<void> {
     logger,
     metrics,
     minimumMarginBps: integer("MINIMUM_MARGIN_BPS", 2000),
-    defaultFinalizeGas: BigInt(integer("FINALIZE_GAS", 450_000)),
+    defaultFinalizeGas: finalizeGas,
     defaultFinalizeDecidedGas: BigInt(integer("FINALIZE_DECIDED_GAS", 500_000)),
     recordExpiries: process.env["RECORD_EXPIRIES"] !== "false",
+    expiryBatchSize: integer("EXPIRY_BATCH_SIZE", 25),
+    expiryIntervalMs: integer("EXPIRY_INTERVAL_MS", 60_000),
     ephemeralMirror,
     retryPolicy: {
       baseDelaySeconds: BigInt(integer("RETRY_BASE_SECONDS", 60)),
@@ -82,23 +89,15 @@ async function main(): Promise<void> {
   const health = createHealth({
     service: "square-keeper",
     version,
-    checks: {
-      database: { check: async () => ({ ok: (await db.query("select 1")).rowCount === 1 }), critical: true },
-      rpc: { check: async () => ({ ok: (await publicClient.getChainId()) === chainId }), critical: true },
-      balance: {
-        check: async () => {
-          const balance = await publicClient.getBalance({ address: account.address });
-          return { ok: balance > 10n ** 16n, detail: `${balance} wei of native USDC for gas` };
-        },
-        critical: true,
-      },
-      mirror: () => ({
-        ok: !ephemeralMirror,
-        detail: ephemeralMirror
-          ? "DATABASE_URL is not set, the mirror is private to this process and stays empty"
-          : "reading the mirror an indexer writes",
-      }),
-    },
+    checks: keeperChecks({
+      db,
+      publicClient,
+      chainId,
+      account: account.address,
+      finalizeGas,
+      minActionsFunded: integer("MIN_ACTIONS_FUNDED", 3),
+      ephemeralMirror,
+    }),
   });
 
   const app = new Hono();

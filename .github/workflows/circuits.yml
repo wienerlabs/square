@@ -12,9 +12,13 @@ name: circuits
 # jobs therefore build first and then fail if the artifacts are not on disk,
 # and both name every test that was skipped anyway on the run summary.
 #
-# Measured on a clean checkout after `npm ci`, with nothing built:
-#   circuits         4 passed | 45 skipped (49), exit 0
-#   prover          63 passed |  6 skipped (69), exit 0
+# Measured on 2026-09-07 on a clean checkout after `npm ci`, with nothing built.
+# The figure in brackets is what vitest collected, not what ran:
+#   circuits         4 passed | 45 skipped (49 collected), exit 0
+#   prover          63 passed |  6 skipped (69 collected), exit 0
+# That is an observation from that date, not a target and not a current count.
+# A rerun collects whatever the suites hold on the day; the run summary the two
+# jobs below write is the live number.
 #
 # Hermetic apart from one fetch: the phase-1 powers of tau, hash-checked against
 # the adopted file by circuits/scripts/fetch-ptau.mjs, so neither the mirror nor

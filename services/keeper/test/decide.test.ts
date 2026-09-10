@@ -43,9 +43,15 @@ describe("economics", () => {
   it("derives the smallest budget that pays the crank", () => {
     const floor = minimumProfitableBudget(50, 20n * gwei, 420_000n);
     expect(floor).toBe(1_680_000n);
-    expect(keeperFee(floor, 50)).toBeGreaterThanOrEqual(8_400n);
-    expect(keeperFee(floor - 1n, 50)).toBeLessThan(8_400n);
-    expect(minimumProfitableBudget(0, 20n * gwei, 420_000n)).toBe(-1n);
+    expect(keeperFee(floor ?? 0n, 50)).toBeGreaterThanOrEqual(8_400n);
+    expect(keeperFee((floor ?? 0n) - 1n, 50)).toBeLessThan(8_400n);
+  });
+
+  it("says a fee that can never pay the crank has no floor, instead of a value a comparison reads backwards", () => {
+    const floor = minimumProfitableBudget(0, 20n * gwei, 420_000n);
+    expect(floor).toBeNull();
+    expect(decide(candidate({ evaluatorFeeBP: 0, budget: 1n }), 1_000n, economics)).toEqual({ kind: "skip", jobId: 1n, reason: "unprofitable" });
+    expect(minimumProfitableBudget(-1, 20n * gwei, 420_000n)).toBeNull();
   });
 });
 
@@ -76,10 +82,14 @@ describe("decide", () => {
     expect(decide(candidate({ disputed: true, decidedOutcome: null, resolveBy: null }), 9_000n, economics).kind).toBe("skip");
   });
 
-  it("flags a job whose expiry is a day away or less", () => {
+  it("flags a job whose expiry is a day away or less, and nothing that already expired", () => {
     expect(expiryIsNear(candidate({ expiredAt: 87_400n }), 1_000n)).toBe(true);
+    expect(expiryIsNear(candidate({ expiredAt: 1_001n }), 1_000n)).toBe(true);
     expect(expiryIsNear(candidate({ expiredAt: 87_401n }), 1_000n)).toBe(false);
     expect(expiryIsNear(candidate({ expiredAt: null }), 1_000n)).toBe(false);
+    expect(expiryIsNear(candidate({ expiredAt: 1_000n }), 1_000n)).toBe(false);
+    expect(expiryIsNear(candidate({ expiredAt: 999n }), 1_000n)).toBe(false);
+    expect(expiryIsNear(candidate({ expiredAt: 1_000n - 2_592_000n }), 1_000n)).toBe(false);
   });
 
   it("handles disputes: waits for a decision, applies a completion, leaves a rejection alone", () => {

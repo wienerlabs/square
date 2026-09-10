@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0",
+    "@squaresdk/core": "file:../core",
     "@squaresdk/did-resolver": "file:../did-resolver",
     "commander": "^12.1.0",
     "viem": "^2.21.0",

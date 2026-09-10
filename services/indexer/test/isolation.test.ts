@@ -2,8 +2,9 @@ import { describe, it, expect } from "vitest";
 import { encodeAbiParameters, encodeEventTopics, type Abi, type AbiEvent, type Hex, type Log, type PublicClient } from "viem";
 import { deploymentFor, keeperEvaluatorAbi, squareHookAbi, squareJobAbi, type SquareDeployment } from "@squaresdk/core";
 import { checkpoints, jobs, ledgerBalances, migrate, MIGRATIONS_DIR, pgliteDatabase, type Database } from "@squaresdk/data";
-import { createHealth, createMetrics, type Metrics } from "@squaresdk/observability";
+import { createAlerting, createHealth, createMetrics, hookWriteFailures, type Alert, type Metrics } from "@squaresdk/observability";
 import { createApi } from "../src/api.js";
+import { indexerChecks } from "../src/checks.js";
 import { Indexer } from "../src/sync.js";
 
 const CHAIN = 31337;
@@ -102,6 +103,36 @@ function submissionTimed(jobId: bigint, blockNumber: bigint): StagedLog {
   };
 }
 
+function jobExpired(jobId: bigint, blockNumber: bigint): StagedLog {
+  return {
+    abi: squareJobAbi as Abi,
+    address: deployment.squareJob,
+    eventName: "JobExpired",
+    args: { jobId },
+    blockNumber,
+  };
+}
+
+function payoutUnresolvable(jobId: bigint, blockNumber: bigint): StagedLog {
+  return {
+    abi: squareJobAbi as Abi,
+    address: deployment.squareJob,
+    eventName: "PayoutUnresolvable",
+    args: { jobId, hook: deployment.squareHook },
+    blockNumber,
+  };
+}
+
+function hookFailed(jobId: bigint, blockNumber: bigint): StagedLog {
+  return {
+    abi: squareJobAbi as Abi,
+    address: deployment.squareJob,
+    eventName: "HookFailed",
+    args: { jobId, hook: deployment.squareHook, selector: "0x12345678" as Hex, reason: "0xdeadbeef" as Hex },
+    blockNumber,
+  };
+}
+
 function reputationWriteFailed(jobId: bigint, blockNumber: bigint): StagedLog {
   return {
     abi: squareHookAbi as Abi,
@@ -133,6 +164,35 @@ function recordingLogger(sink: Recorded[]) {
     sink.push({ level, event, fields });
   };
   return { debug: at("debug"), info: at("info"), warn: at("warn"), error: at("error"), child: () => recordingLogger(sink) } as never;
+}
+
+function mirroredJob(jobId: bigint): Parameters<typeof jobs.upsert>[1] {
+  return {
+    chainId: CHAIN,
+    jobId,
+    client: "0x1111111111111111111111111111111111111111",
+    provider: "0x2222222222222222222222222222222222222222",
+    evaluator: otherDeployment.keeperEvaluator,
+    hook: otherDeployment.squareJob,
+    description: "a job of the deployment that was replaced",
+    budget: 3_000_000n,
+    status: 1,
+    expiredAt: 1_800_000_000n,
+    createdAt: 1_700_000_000n,
+    fundedAt: 1_700_000_010n,
+    submittedAt: null,
+    challengeEnd: null,
+    platformFeeBp: 100,
+    evaluatorFeeBp: 50,
+    deliverable: null,
+    payee: null,
+    providerBps: null,
+    reason: null,
+    disputed: false,
+    agentId: null,
+    updatedBlock: 900n,
+    refundReason: null,
+  };
 }
 
 async function openDatabase(): Promise<Database> {
@@ -310,6 +370,35 @@ describe("a checkpoint from another deployment", () => {
       await db.close();
     }
   });
+
+  it("deletes the rows of the deployment it is leaving, so the read surface and the status agree", async () => {
+    const db = await openDatabase();
+    try {
+      await checkpoints.set(db, { chainId: CHAIN, contract: "SquareJob", address: otherDeployment.squareJob, lastBlock: 900n });
+      await jobs.upsert(db, mirroredJob(99n));
+      expect((await jobs.listOpen(db, CHAIN)).map((row) => row.jobId)).toEqual([99n]);
+
+      const staged = [windowsConfigured(1n), jobCreated(1n, 2n)];
+      const { indexer, metrics, logs } = build(db, staged, 2n, { onDeploymentChange: "restart" });
+      await indexer.start();
+
+      expect(await jobs.listOpen(db, CHAIN)).toEqual([]);
+      expect(await jobs.get(db, CHAIN, 99n)).toBe(null);
+      expect(indexer.state.jobs.size).toBe(0);
+      expect(logs.some((entry) => entry.event === "indexer.deployment_rows_cleared" && entry.level === "warn")).toBe(true);
+
+      await indexer.syncOnce();
+
+      const health = createHealth({ service: "t", version: "0" });
+      const api = createApi({ db, chainId: CHAIN, indexer, health, metrics });
+      const status = (await (await api.request("/status")).json()) as { jobs: number };
+      const open = (await (await api.request("/jobs/open")).json()) as Array<{ jobId: string }>;
+      expect(open.map((row) => row.jobId)).toEqual(["1"]);
+      expect(status.jobs).toBe(open.length);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 describe("signals the operator can act on", () => {
@@ -350,6 +439,65 @@ describe("signals the operator can act on", () => {
     }
   });
 
+  it("counts a hook call the kernel could not complete and alerts on it", async () => {
+    const db = await openDatabase();
+    try {
+      const staged = [jobCreated(1n, 2n), hookFailed(1n, 3n)];
+      const { indexer, metrics, logs } = build(db, staged, 3n);
+      await indexer.start();
+      await indexer.syncOnce();
+
+      expect(metrics.snapshot().hookWriteFailures).toBe(1);
+      const failure = logs.find((entry) => entry.event === "indexer.hook_write_failed");
+      expect(failure?.level).toBe("error");
+      expect(String(failure?.fields.reason)).toContain("0x12345678");
+
+      const notified: Alert[] = [];
+      const alerting = createAlerting({
+        service: "square-indexer",
+        rules: [hookWriteFailures()],
+        notify: async (alert) => {
+          notified.push(alert);
+        },
+      });
+      await alerting.evaluate({ ...metrics.snapshot() });
+      expect(notified).toHaveLength(1);
+      expect(notified[0]).toMatchObject({ rule: "hookWriteFailures", kind: "firing" });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("tells a refund the resolver forced apart from a job that simply ran out of time", async () => {
+    const db = await openDatabase();
+    try {
+      const staged = [
+        jobCreated(1n, 2n),
+        jobCreated(2n, 2n),
+        payoutUnresolvable(1n, 3n),
+        jobExpired(1n, 3n),
+        jobExpired(2n, 3n),
+      ];
+      const { indexer, metrics } = build(db, staged, 3n);
+      await indexer.start();
+      await indexer.syncOnce();
+
+      const unresolvable = await jobs.get(db, CHAIN, 1n);
+      const timedOut = await jobs.get(db, CHAIN, 2n);
+      expect(unresolvable?.status).toBe(5);
+      expect(unresolvable?.refundReason).toBe("payoutUnresolvable");
+      expect(timedOut?.status).toBe(5);
+      expect(timedOut?.refundReason).toBe(null);
+
+      const health = createHealth({ service: "t", version: "0" });
+      const api = createApi({ db, chainId: CHAIN, indexer, health, metrics });
+      const body = (await (await api.request("/jobs/1")).json()) as { job: { refundReason: string | null } };
+      expect(body.job.refundReason).toBe("payoutUnresolvable");
+    } finally {
+      await db.close();
+    }
+  });
+
   it("reports a stalled indexer as unhealthy instead of 200", async () => {
     const db = await openDatabase();
     try {
@@ -361,20 +509,22 @@ describe("signals the operator can act on", () => {
       const health = createHealth({
         service: "square-indexer",
         version: "0",
-        checks: {
-          lag: {
-            check: () => {
-              const lag = indexer.chainHead - (indexer.lastIndexedBlock ?? 0n);
-              return { ok: lag <= 100n, detail: `${lag} blocks behind` };
-            },
-            critical: true,
-          },
-        },
+        checks: indexerChecks({
+          db,
+          publicClient: { getChainId: async () => CHAIN },
+          chainId: CHAIN,
+          indexer,
+          maxLagBlocks: 100n,
+          maxSyncAgeMs: 120_000,
+          startupGraceMs: 60_000,
+        }),
       });
       const api = createApi({ db, chainId: CHAIN, indexer, health, metrics });
       const response = await api.request("/health");
       expect(response.status).toBe(503);
-      expect(((await response.json()) as { status: string }).status).toBe("unhealthy");
+      const body = (await response.json()) as { status: string; checks: Record<string, { ok: boolean; detail?: string }> };
+      expect(body.status).toBe("unhealthy");
+      expect(body.checks["lag"]).toMatchObject({ ok: false, detail: "4999 blocks behind, limit 100" });
     } finally {
       await db.close();
     }

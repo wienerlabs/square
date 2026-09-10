@@ -28,9 +28,50 @@ describe('observability endpoints', () => {
     expect(response.body.version).toBe('0.1.0');
   });
 
-  it('counts a failed proof', async () => {
-    await request(app).post('/prove').send({});
+  // square#148 split these two. The empty body this used to send is now refused
+  // by validateRequest with 400, and a refused policy is not a failed proof: a
+  // caller's mistyped hour has no business in the service's failure rate, which
+  // is what an operator pages on. So the counter is asserted against a request
+  // that gets past the gate and fails afterwards, and asserted *not* to move for
+  // one that never got past it.
+  const failures = async () => {
     const response = await request(app).get('/metrics');
-    expect(response.text).toMatch(/square_proof_failures_total\{[^}]*\} [1-9]/);
+    const match = /square_proof_failures_total\{[^}]*\} (\d+)/.exec(response.text);
+    return match ? Number(match[1]) : 0;
+  };
+
+  const VALID_SHAPE = {
+    policy_id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
+    policy_salt: '7777777777777777777777777777777777777777777777777777777777777',
+    operator_id: '0x3333333333333333333333333333333333333333',
+    max_daily_spend: '100000000',
+    max_per_transaction: '10000000',
+    allowed_endpoint_categories: ['api-call'],
+    blocked_addresses: ['0x2222222222222222222222222222222222222222'],
+    token_whitelist: ['0x3600000000000000000000000000000000000000'],
+    payment_token: '0x3600000000000000000000000000000000000000',
+    payment_recipient: '0x1111111111111111111111111111111111111111',
+    payment_amount: '5000000',
+    daily_spent_before: '50000000',
+    payment_endpoint_category: 'api-call',
+    current_unix_timestamp: '1788356730',
+  };
+
+  it('counts a failed proof', async () => {
+    const before = await failures();
+    // Passes validateRequest — blocked_addresses is an array of strings — and
+    // fails in normalize, which is inside the proving path. No artifacts needed.
+    const response = await request(app)
+      .post('/prove')
+      .send({ ...VALID_SHAPE, blocked_addresses: ['not-an-address'] });
+    expect(response.status).toBe(500);
+    expect(await failures()).toBe(before + 1);
+  });
+
+  it('does not count a refused request as a failed proof', async () => {
+    const before = await failures();
+    const response = await request(app).post('/prove').send({});
+    expect(response.status).toBe(400);
+    expect(await failures()).toBe(before);
   });
 });

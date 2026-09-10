@@ -3,7 +3,15 @@ import { migrate, migrationStatus, MigrationConflictError, MIGRATIONS_DIR } from
 import { pgliteDatabase } from "../src/pglite.js";
 import type { Database } from "../src/database.js";
 
-const ALL = ["0001_indexer", "0002_hardening", "0003_x402", "0004_hosted_agents", "0005_keeper", "0006_x402_reason"];
+const ALL = [
+  "0001_indexer",
+  "0002_hardening",
+  "0003_x402",
+  "0004_hosted_agents",
+  "0005_keeper",
+  "0006_x402_reason",
+  "0007_refund_reason_and_expiry_sweep",
+];
 
 async function tableNames(db: Database): Promise<string[]> {
   const { rows } = await db.query<{ table_name: string }>(
@@ -20,6 +28,20 @@ async function columnNames(db: Database, table: string): Promise<string[]> {
   return rows.map((row) => row.column_name);
 }
 
+function racedAtFirstTransaction(db: Database, race: () => Promise<unknown>): Database {
+  let raced = false;
+  return {
+    ...db,
+    async transaction(fn) {
+      if (!raced) {
+        raced = true;
+        await race();
+      }
+      return db.transaction(fn);
+    },
+  };
+}
+
 async function schemaSnapshot(db: Database): Promise<unknown> {
   const columns = await db.query(
     `select table_name, column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale
@@ -30,7 +52,7 @@ async function schemaSnapshot(db: Database): Promise<unknown> {
 }
 
 describe("migrations", () => {
-  it("applies all six in order, reverts the last one, and re-applies it", async () => {
+  it("applies all seven in order, reverts the last one, and re-applies it", async () => {
     const db = await pgliteDatabase();
     try {
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(ALL);
@@ -51,11 +73,11 @@ describe("migrations", () => {
         "x402_payments",
       ]);
 
-      expect((await migrate(db, MIGRATIONS_DIR, "down")).applied).toEqual(["0006_x402_reason"]);
-      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL.slice(0, 5), pending: ["0006_x402_reason"] });
-      expect(await columnNames(db, "x402_payments")).not.toContain("reason");
+      expect((await migrate(db, MIGRATIONS_DIR, "down")).applied).toEqual(["0007_refund_reason_and_expiry_sweep"]);
+      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL.slice(0, 6), pending: ["0007_refund_reason_and_expiry_sweep"] });
+      expect(await columnNames(db, "jobs")).not.toContain("refund_reason");
 
-      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0006_x402_reason"]);
+      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0007_refund_reason_and_expiry_sweep"]);
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL, pending: [] });
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual([]);
     } finally {
@@ -63,13 +85,13 @@ describe("migrations", () => {
     }
   });
 
-  it("up, down six steps, up leaves the schema identical", async () => {
+  it("up, down seven steps, up leaves the schema identical", async () => {
     const db = await pgliteDatabase();
     try {
       await migrate(db, MIGRATIONS_DIR, "up");
       const first = await schemaSnapshot(db);
 
-      expect((await migrate(db, MIGRATIONS_DIR, "down", 6)).applied).toEqual([...ALL].reverse());
+      expect((await migrate(db, MIGRATIONS_DIR, "down", 7)).applied).toEqual([...ALL].reverse());
       expect(await tableNames(db)).toEqual(["schema_migrations"]);
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: [], pending: ALL });
 
@@ -102,11 +124,55 @@ describe("migrations", () => {
 
       const status = await migrationStatus(db, MIGRATIONS_DIR);
       expect(status.applied).toEqual(["0001_indexer", "0002_hardening"]);
-      expect(status.pending).toEqual(["0003_x402", "0004_hosted_agents", "0005_keeper", "0006_x402_reason"]);
+      expect(status.pending).toEqual([
+        "0003_x402",
+        "0004_hosted_agents",
+        "0005_keeper",
+        "0006_x402_reason",
+        "0007_refund_reason_and_expiry_sweep",
+      ]);
 
       await db.query("insert into schema_migrations (name) values ('0003_x402')");
-      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0004_hosted_agents", "0005_keeper", "0006_x402_reason"]);
+      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual([
+        "0004_hosted_agents",
+        "0005_keeper",
+        "0006_x402_reason",
+        "0007_refund_reason_and_expiry_sweep",
+      ]);
       expect(await tableNames(db)).toContain("keeper_actions");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("lets two runners race one PGlite database: both return, and every migration is applied exactly once", async () => {
+    const db = await pgliteDatabase();
+    try {
+      const [first, second] = await Promise.all([migrate(db, MIGRATIONS_DIR, "up"), migrate(db, MIGRATIONS_DIR, "up")]);
+
+      expect([...first.applied, ...second.applied].sort()).toEqual(ALL);
+      expect(first.applied.filter((name) => second.applied.includes(name))).toEqual([]);
+
+      const { rows } = await db.query<{ name: string; n: number }>(
+        "select name, count(*)::int as n from schema_migrations group by name order by name",
+      );
+      expect(rows).toEqual(ALL.map((name) => ({ name, n: 1 })));
+      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL, pending: [] });
+      expect(await tableNames(db)).toContain("x402_payments");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("skips, rather than conflicts, when another runner records a migration between the pending scan and the lock", async () => {
+    const db = await pgliteDatabase();
+    try {
+      const loser = racedAtFirstTransaction(db, () => migrate(db, MIGRATIONS_DIR, "up", 1));
+
+      expect((await migrate(loser, MIGRATIONS_DIR, "up", 1)).applied).toEqual([]);
+      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: [ALL[0]], pending: ALL.slice(1) });
+      const { rows } = await db.query<{ n: number }>("select count(*)::int as n from schema_migrations");
+      expect(rows[0]).toEqual({ n: 1 });
     } finally {
       await db.close();
     }

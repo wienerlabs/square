@@ -11,7 +11,7 @@ import {
   daysToBitmask,
 } from './hash.js';
 import { deriveSalts, POLICY_FIELDS } from './commitment.js';
-import { toFieldString, toIdentifier } from './normalize.js';
+import { toFieldString, toHourString, toIdentifier } from './normalize.js';
 import { evaluateRules } from './rules.js';
 import { encodeForSolidity } from './convert.js';
 
@@ -51,7 +51,13 @@ const PUBLIC_SIGNAL_ORDER = [
 
 // Validate that an incoming request carries every field the circuit needs.
 // Field names only — never their values (#4).
-function validateRequest(req) {
+// Exported so the route can run it as a gate and answer 400.
+//
+// It is the one function in this file whose failures are all the caller's: every
+// throw below names a field the request supplied. buildCircuitInput calls it too,
+// so a direct caller -- the end-to-end script, the tests -- gets the same checks
+// without going through HTTP.
+export function validateRequest(req) {
   const required = [
     'policy_id',
     'operator_id',
@@ -135,6 +141,31 @@ function validateRequest(req) {
     if (!Array.isArray(req.time_restrictions)) {
       throw new Error('time_restrictions: must be an array');
     }
+
+    // One window, or none. Anything past the first used to be validated and
+    // then dropped: buildCircuitInput reads `[0]` and nothing else, so a second
+    // record was checked field by field, accepted, and never reached the
+    // circuit. square#181 measured it -- two records in, the first one's window
+    // out, no trace of the second.
+    //
+    // Validating every entry is a statement that plural is supported. It is
+    // not, and it cannot be without a circuit change: the commitment's eighth
+    // field is `time_field = Poseidon(1, days_bitmask, start, end)`
+    // (payment.circom), which is one window and has room for exactly one. A
+    // policy whose second window is invisible to the proof is a policy the
+    // chain's commitment and the caller disagree about.
+    //
+    // So it is refused at the door, the same answer square#148 gave the window
+    // that crosses midnight, and for the same reason: better to say the limit
+    // than to accept a policy and silently honour half of it.
+    if (req.time_restrictions.length > 1) {
+      throw new Error(
+        `time_restrictions: ${req.time_restrictions.length} entries were given and only one `
+        + 'window can be proved. The commitment covers a single window, so anything after '
+        + 'the first would be accepted here and never reach the circuit. Send one entry.',
+      );
+    }
+
     for (const restriction of req.time_restrictions) {
       if (typeof restriction !== 'object' || restriction === null || Array.isArray(restriction)) {
         throw new Error('time_restrictions: each entry must be an object');
@@ -150,6 +181,77 @@ function validateRequest(req) {
       }
       if (!Array.isArray(restriction.allowed_days)) {
         throw new Error('time_restrictions.allowed_days: must be an array');
+      }
+
+      // An empty day list is the same class of value as the defaults refused
+      // above: it forbids every weekday, so the rule can never be satisfied and
+      // every payment under the policy is refused with 'time_window'. A
+      // `.filter()` that matched nothing, or an empty form field, produces it.
+      //
+      // hash.js already throws on a weekday name it does not recognise, "so a
+      // restriction is never silently downgraded". Zero recognised days is the
+      // larger downgrade of the two, and it was the one getting through.
+      //
+      // "No window at all" is a different policy and has its own spelling:
+      // leave time_restrictions out, and the rule is off.
+      if (restriction.allowed_days.length === 0) {
+        throw new Error(
+          'time_restrictions.allowed_days: must name at least one day. An empty list '
+          + 'forbids every weekday, so no payment could ever satisfy the rule; omit '
+          + 'time_restrictions entirely to leave the window unrestricted.',
+        );
+      }
+
+      // The timezone, here rather than in buildCircuitInput.
+      //
+      // It used to be checked on `[0]` only, after validation, which meant a
+      // second record could carry America/New_York and never be looked at --
+      // the same value that is refused when it is sent on its own. With one
+      // record enforced above this is the only record there is, and checking it
+      // with the rest keeps every reason a request is refused in one function
+      // and on one status code.
+      if (restriction.timezone !== undefined && restriction.timezone !== null
+        && restriction.timezone !== 'UTC') {
+        throw new Error("time_restrictions.timezone: only 'UTC' is supported");
+      }
+
+      // The hours, in range, before anything is hashed. openapi.js has declared
+      // 0..23 all along and nothing enforced it; square#148 measured what got
+      // through. 24..31 is accepted by the circuit's Num2Bits(5) and is not an
+      // hour: an end of 31 behaves like 23, a start of 25 empties the window and
+      // every payment under that policy is refused with 'time_window' and no way
+      // to tell a bad payment from a broken policy. 32 and above fails inside
+      // witness generation, where the caller gets a constraint error rather than
+      // the name of the field they got wrong.
+      const startHour = toHourString(
+        restriction.allowed_hours_start, 'time_restrictions.allowed_hours_start',
+      );
+      const endHour = toHourString(
+        restriction.allowed_hours_end, 'time_restrictions.allowed_hours_end',
+      );
+
+      // A window that runs past midnight is refused, and the message says so.
+      //
+      // The circuit computes `hour >= start AND hour <= end` and says in its own
+      // comment that it assumes start <= end; rules.js mirrors the same
+      // limitation deliberately, so that the two agree. They do agree -- on
+      // accepting a policy that can never be satisfied. 22:00 to 06:00 is a
+      // perfectly ordinary thing to want for an agent that works overnight, and
+      // under it *no* hour of *any* day is inside the window, so every payment is
+      // refused. The response is identical to a payment that genuinely missed its
+      // window, and rules_agree stays true, so nothing in the system says which
+      // one happened.
+      //
+      // Modelling it is a circuit change -- an OR branch selected by start > end,
+      // mirrored in rules.js and pinned by circuit-agreement.test.js. Until that
+      // is done the honest answer is to refuse the policy at the door rather than
+      // accept it and refuse everything it covers. See circuits/README.md, rule 6.
+      if (BigInt(startHour) > BigInt(endHour)) {
+        throw new Error(
+          'time_restrictions: allowed_hours_start must not be later than '
+          + 'allowed_hours_end. A window that crosses midnight is not modelled; '
+          + 'express it as two policies, or one window per side of midnight.',
+        );
       }
     }
   }
@@ -175,20 +277,22 @@ export async function buildCircuitInput(request) {
   // Time restriction. Default = inactive. The circuit muxes the time hash to 0
   // when time_active == 0, so the off-chain commitment and the in-circuit one
   // agree on a policy with no window.
+  //
+  // `[0]` is the whole list now, not the head of it: validateRequest refuses a
+  // second entry rather than letting this line drop it (square#181). The
+  // timezone moved there too, so every reason a request is refused is in one
+  // function and answers 400.
   const tr = Array.isArray(request.time_restrictions) ? request.time_restrictions[0] : null;
-  if (tr && tr.timezone && tr.timezone !== 'UTC') {
-    throw new Error("time_restrictions.timezone: only 'UTC' is supported");
-  }
   // No `??` fallbacks any more: validateRequest requires all three when a
   // restriction is present, so a missing field is an error rather than a window
   // of 00:00 to 00:59 with every weekday forbidden.
   const timeActive = tr ? '1' : '0';
   const timeDaysBitmask = tr ? String(daysToBitmask(tr.allowed_days)) : '0';
   const timeStartHourUtc = tr
-    ? toFieldString(tr.allowed_hours_start, 'time_restrictions.allowed_hours_start')
+    ? toHourString(tr.allowed_hours_start, 'time_restrictions.allowed_hours_start')
     : '0';
   const timeEndHourUtc = tr
-    ? toFieldString(tr.allowed_hours_end, 'time_restrictions.allowed_hours_end')
+    ? toHourString(tr.allowed_hours_end, 'time_restrictions.allowed_hours_end')
     : '0';
 
   return {

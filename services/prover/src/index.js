@@ -1,8 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { generateProof } from './prover.js';
-import { logEntriesForProof, proofFailedLogEntry } from './logging.js';
+import { generateProof, validateRequest } from './prover.js';
+import { logEntriesForProof, proofFailedLogEntry, requestRejectedLogEntry } from './logging.js';
 import { openapiSpec } from './openapi.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -49,6 +49,29 @@ const health = createHealth({
 mountObservability(app, { health, metrics });
 
 app.post('/prove', async (req, res) => {
+  // The request is checked before anything else happens, and a request the
+  // caller got wrong is answered 400 rather than 500.
+  //
+  // square#148 asked for this for the hour range, and the reason generalises to
+  // everything validateRequest checks: a 500 tells a caller the service broke,
+  // so a client retries it, an operator reads it as an incident, and a monitor
+  // counts it against the service. None of that is true of a policy with an
+  // hour of 25 in it. Errors raised later -- inside hashing, witness generation
+  // or snarkjs -- are still 500, because that is where this service's own
+  // failures live.
+  //
+  // The proof metrics are untouched on this path: nothing was proved, and
+  // counting a refused policy as a proof failure would be the same conflation
+  // in a different place.
+  try {
+    validateRequest(req.body);
+  } catch (error) {
+    const entry = requestRejectedLogEntry(error);
+    console.error(JSON.stringify(entry));
+    res.status(400).json({ error: entry.error });
+    return;
+  }
+
   const start = Date.now();
   const timer = metrics.startProof();
   try {

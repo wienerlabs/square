@@ -6,6 +6,8 @@ import { applyEvent, cloneState, emptyState, ledgerKey, type IndexerState, type 
 
 const CONTRACTS: IndexedContract[] = ["SquareJob", "KeeperEvaluator", "Arbitration", "ClaimMarket", "SquareHook"];
 
+export const DERIVED_TABLES = ["jobs", "disputes", "claim_listings", "ledger_balances", "arbiter_sets", "job_events"] as const;
+
 interface JournalRow {
   block_number: string;
   log_index: number;
@@ -81,7 +83,8 @@ export class Indexer {
   private readonly addresses: Address[];
   private readonly quarantined: QuarantinedEvent[] = [];
   private cursor: bigint | null = null;
-  private lastHead = 0n;
+  private lastHead: bigint | null = null;
+  private syncedAt: number | null = null;
   private windowsMissing = 0;
 
   constructor(private readonly options: IndexerOptions) {
@@ -98,7 +101,15 @@ export class Indexer {
   }
 
   get chainHead(): bigint {
+    return this.lastHead ?? 0n;
+  }
+
+  get sampledChainHead(): bigint | null {
     return this.lastHead;
+  }
+
+  get lastSyncAt(): number | null {
+    return this.syncedAt;
   }
 
   get quarantinedEvents(): readonly QuarantinedEvent[] {
@@ -118,11 +129,19 @@ export class Indexer {
       if ((this.options.onDeploymentChange ?? "fail") === "fail") {
         throw new Error(
           `indexer checkpoint belongs to a different deployment on chain ${this.options.chainId}: ${summary}. ` +
-            "Point DATABASE_URL at a fresh database, or set ON_DEPLOYMENT_CHANGE=restart to reindex from START_BLOCK.",
+            "Point DATABASE_URL at a fresh database, or set ON_DEPLOYMENT_CHANGE=restart to delete this chain's derived rows " +
+            `(${DERIVED_TABLES.join(", ")}) and reindex from START_BLOCK.`,
         );
       }
       this.options.logger.warn("indexer.deployment_changed", { chainId: this.options.chainId, reason: summary });
-      await this.replayJournal();
+      const cleared = await this.clearDerivedRows();
+      this.options.logger.warn("indexer.deployment_rows_cleared", {
+        chainId: this.options.chainId,
+        count: cleared,
+        reason: `deleted ${cleared} derived rows of the earlier deployment from ${DERIVED_TABLES.join(", ")} before reindexing`,
+      });
+      this.current = emptyState();
+      this.persistedLedger.clear();
       this.cursor = null;
       this.options.logger.info("indexer.started", { chainId: this.options.chainId, blockNumber: 0, count: this.current.jobs.size });
       return;
@@ -134,6 +153,17 @@ export class Indexer {
       chainId: this.options.chainId,
       blockNumber: this.cursor === null ? 0 : Number(this.cursor),
       count: this.current.jobs.size,
+    });
+  }
+
+  private async clearDerivedRows(): Promise<number> {
+    return this.options.db.transaction(async (tx) => {
+      let deleted = 0;
+      for (const table of DERIVED_TABLES) {
+        const { rowCount } = await tx.query(`delete from ${table} where chain_id = $1`, [this.options.chainId]);
+        deleted += rowCount;
+      }
+      return deleted;
     });
   }
 
@@ -186,6 +216,14 @@ export class Indexer {
       });
       return;
     }
+    if (notice.code === "hookFailed") {
+      logger.error("indexer.hook_write_failed", {
+        jobId: notice.jobId.toString(),
+        reason: `the kernel call to hook ${notice.hook} for selector ${notice.selector} did not complete`,
+      });
+      if (counted) metrics?.recordHookWriteFailure("hookCall");
+      return;
+    }
     if (notice.code === "reputationWriteFailed") {
       logger.error("indexer.hook_write_failed", { jobId: notice.jobId.toString(), reason: "reputation" });
       if (counted) metrics?.recordHookWriteFailure("reputation");
@@ -221,6 +259,7 @@ export class Indexer {
     const from = this.cursor === null ? this.options.startBlock : this.cursor + 1n;
     if (from > head) {
       this.options.metrics?.setIndexerHead(this.cursor ?? 0n);
+      this.syncedAt = Date.now();
       return null;
     }
     const to = from + this.options.batchBlocks - 1n < head ? from + this.options.batchBlocks - 1n : head;
@@ -228,6 +267,7 @@ export class Indexer {
     const events = decodeSquareLogs(logs, this.options.deployment);
     const batch = await this.applyBatch(events, to);
     this.cursor = to;
+    this.syncedAt = Date.now();
     this.options.metrics?.setIndexerHead(to);
     this.options.logger.info("indexer.synced", { blockNumber: Number(to), count: events.length, applied: batch.applied });
     return { fromBlock: from, toBlock: to, head, events: events.length, applied: batch.applied, quarantined: batch.quarantined };
@@ -344,6 +384,7 @@ export class Indexer {
         disputed: job.disputed,
         agentId: job.agentId,
         updatedBlock: job.updatedBlock,
+        refundReason: job.refundReason,
       });
     }
     for (const jobId of dirty.disputes) {

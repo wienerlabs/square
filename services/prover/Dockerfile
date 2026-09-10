@@ -18,12 +18,20 @@ COPY --chown=prover:nodejs services/prover/src ./src
 COPY --chown=prover:nodejs services/prover/package.json ./package.json
 
 # The circuit artifacts are not in the repository — payment.zkey is gitignored
-# and payment.wasm is generated. Mount them at run time, or add a build stage
-# that compiles the circuit, and point PROVER_ARTIFACTS_DIR at the result.
+# and payment.wasm is generated — so they are mounted rather than copied in.
+# compose.yaml fills the volume from circuits/Dockerfile, which compiles the
+# circuit and produces the key; anything else that mounts a directory holding
+# payment.wasm and payment.zkey works the same way.
 ENV PROVER_ARTIFACTS_DIR=/artifacts
 VOLUME ["/artifacts"]
 
 USER prover
 EXPOSE 3003
+
+# /health checks that the artifacts above are readable, so an empty or unmounted
+# /artifacts shows up as an unhealthy container rather than as a failed proof on
+# the first request.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PROVER_SERVICE_PORT||3003)+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
 
 CMD ["node", "src/index.js"]

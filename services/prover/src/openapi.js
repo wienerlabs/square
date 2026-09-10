@@ -61,10 +61,19 @@ export const openapiSpec = {
               'application/json': { schema: { $ref: '#/components/schemas/ProveResponse' } },
             },
           },
+          400: {
+            description:
+              'The request was refused before any proving started: a required field ' +
+              'is missing, a list is not a list, or a time restriction is out of range. ' +
+              'The message names the offending field but never its value. Retrying an ' +
+              'unchanged request will not help.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
           500: {
             description:
-              'Prover error. The message names the offending field but never its ' +
-              'value, so it is safe to surface and to log.',
+              'The prover failed after accepting the request — hashing, witness ' +
+              'generation or the proving system. The message names the offending field ' +
+              'but never its value, so it is safe to surface and to log.',
             content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
           },
         },
@@ -85,14 +94,26 @@ export const openapiSpec = {
       TimeRestriction: {
         type: 'object',
         description:
-          'Optional window the payment must fall inside. Only the first entry is read. '
+          'Optional window the payment must fall inside. Exactly one entry: the commitment '
+          + 'covers a single window, so a second one could not be proved and is refused with '
+          + '400 rather than accepted and dropped. '
           + 'The three fields below are required when a restriction is given: there are no '
           + 'defaults, because a missing day list means every weekday forbidden and missing '
-          + 'hours mean a window of 00:00 to 00:59, and neither is what an omission means.',
+          + 'hours mean a window of 00:00 to 00:59, and neither is what an omission means. '
+          + 'The window cannot cross midnight: allowed_hours_start must not be later than '
+          + 'allowed_hours_end, and a window like 22 to 6 is refused with 400 rather than '
+          + 'accepted as one that no hour satisfies. Express an overnight window as two '
+          + 'policies. The 0..23 bounds below are enforced by the service, not only '
+          + 'declared here.',
         required: ['allowed_days', 'allowed_hours_start', 'allowed_hours_end'],
         properties: {
           allowed_days: {
             type: 'array',
+            minItems: 1,
+            description:
+              'At least one day. An empty list forbids every weekday, so no payment could '
+              + 'satisfy the rule; omit time_restrictions entirely to leave the window '
+              + 'unrestricted. Enforced by the service, not only declared here.',
             items: { type: 'string', enum: [
               'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
             ] },
@@ -171,7 +192,13 @@ export const openapiSpec = {
             description: 'Poseidon receipt commitment for the Stripe path; 0 otherwise.',
           },
           time_restrictions: {
-            type: 'array', items: { $ref: '#/components/schemas/TimeRestriction' }, maxItems: 1,
+            type: 'array',
+            items: { $ref: '#/components/schemas/TimeRestriction' },
+            maxItems: 1,
+            description:
+              'maxItems was declared here from the start and enforced nowhere: a second entry '
+              + 'was validated field by field and then dropped by the builder, which reads only '
+              + 'the first. square#181 made the service enforce what this schema says.',
           },
         },
       },

@@ -24,6 +24,7 @@ const DOWN_SUFFIX = ".down.sql";
 const ENSURE_SCHEMA_MIGRATIONS =
   "create table if not exists schema_migrations (name text primary key, applied_at timestamptz not null default now())";
 const LOCK_SCHEMA_MIGRATIONS = "lock table schema_migrations in access exclusive mode";
+const IS_APPLIED = "select 1 from schema_migrations where name = $1";
 
 export class MigrationConflictError extends Error {
   readonly migration: string;
@@ -71,17 +72,21 @@ async function migrateUp(db: Database, dir: string, steps: number | undefined): 
   const scripts = await readScripts(dir, selected, UP_SUFFIX);
   const applied: string[] = [];
   for (const { name, sql } of scripts) {
+    let wrote: boolean;
     try {
-      await db.transaction(async (tx) => {
+      wrote = await db.transaction(async (tx) => {
         await tx.query(LOCK_SCHEMA_MIGRATIONS);
+        const { rows } = await tx.query(IS_APPLIED, [name]);
+        if (rows.length > 0) return false;
         await tx.query(sql);
         await tx.query("insert into schema_migrations (name) values ($1)", [name]);
+        return true;
       });
     } catch (error) {
       if (isDuplicateObject(error)) throw new MigrationConflictError(name, error);
       throw error;
     }
-    applied.push(name);
+    if (wrote) applied.push(name);
   }
   return { applied };
 }

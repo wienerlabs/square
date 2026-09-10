@@ -41,20 +41,34 @@ export type {
   ReplayStore,
   UnsettledPayment,
 } from "./replay-store.js";
-export { RECONCILE_REASON, receiptStatusFromClient, reconcileSettlements } from "./reconcile.js";
+export {
+  RECONCILE_REASON,
+  blockTimestampFromClient,
+  receiptStatusFromClient,
+  reconcileSettlements,
+  wallClockSeconds,
+} from "./reconcile.js";
 export type {
+  ReconcileClock,
   ReconcileOptions,
   ReconcileReport,
   SettlementReceiptLookup,
   SettlementReceiptStatus,
 } from "./reconcile.js";
-export { BEFORE_HANDLER_UNSUPPORTED, createGatewayApp, createPaidRoutes, parseRoutePattern } from "./server.js";
+export {
+  BEFORE_HANDLER_UNSUPPORTED,
+  createGatewayApp,
+  createPaidRoutes,
+  parseRoutePattern,
+  routePatternKey,
+} from "./server.js";
 export type {
   GatewayAppOptions,
   GatewayHandler,
   GatewayRoute,
   PaidRouteConfig,
   PaidRoutesOptions,
+  ParsedRoutePattern,
   SettlementMode,
 } from "./server.js";
 export { createPayingClient, createPayingFetch, toClientSigner } from "./client.js";
