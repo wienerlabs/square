@@ -74,6 +74,7 @@ function job(overrides: Partial<jobs.JobRecord>): jobs.JobRecord {
     disputed: false,
     agentId: null,
     updatedBlock: 1_000n,
+    refundReason: null,
     ...overrides,
   };
 }

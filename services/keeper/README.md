@@ -29,11 +29,37 @@ with a margin.
    capped at `RETRY_MAX_JOURNAL_ROWS` plus one row for the give-up, so a job that
    reverts on every tick costs a bounded number of rows instead of one per tick.
    A successful send clears the state for that job.
+6. A job whose expiry is inside the next day is warned about once
+   (`keeper.expiry_near`), not once per tick: an unprofitable job stays a
+   candidate forever, and the warning is about the deadline approaching, not
+   about a state that repeats. The warning is armed again only after the job
+   leaves the candidate set. An expiry that already passed is not near, it is
+   the expiry sweep's business.
 
 Transactions are sent one at a time from a single key, so nonces never race.
-Run one keeper per key. Two keepers on different keys compete honestly: the
-kernel pays whichever lands first and the other's transaction reverts with
-`NotSubmitted`, which is journaled as a failure and costs the loser a revert.
+The expiry sweep below shares that key and runs between ticks, never beside
+one, for the same reason. Run one keeper per key. Two keepers on different keys
+compete honestly: the kernel pays whichever lands first and the other's
+transaction reverts with `NotSubmitted`, which is journaled as a failure and
+costs the loser a revert.
+
+## The expiry sweep
+
+Recording an expiry for reputation is not on the finalize path. `tick()` decides
+and sends settlement; the sweep runs on its own `EXPIRY_INTERVAL_MS` schedule
+between ticks and reads at most `EXPIRY_BATCH_SIZE` jobs per pass, so a tick
+costs the same whether the mirror holds one dead job or ten thousand and the
+finalize of a profitable job never waits behind them.
+
+The candidate query is what keeps the set shrinking. `listExpiredWithAgent`
+returns expired jobs with a bound agent, under our evaluator, that carry no
+successful `recordExpiry` row in `keeper_actions`, ordered by job id and paged.
+An expiry this keeper recorded leaves the set through its journal row; an expiry
+another keeper recorded is journaled on the first pass that reads it from the
+chain (`keeper.expiry_already_recorded`) and leaves the set the same way; a
+failed attempt keeps no such row and is retried on the next pass. `status = 5`
+is covered by the partial index `jobs_expired_with_agent`, so the query does not
+scan a table that only grows. `RECORD_EXPIRIES=false` turns the sweep off.
 
 ## Running your own
 
@@ -48,6 +74,11 @@ export DATABASE_URL=postgres://...   # shared with an indexer, or empty for in-m
 export POLL_INTERVAL_MS=15000
 export MINIMUM_MARGIN_BPS=2000
 export FINALIZE_GAS=450000
+export FINALIZE_DECIDED_GAS=500000
+export MIN_ACTIONS_FUNDED=3          # the balance check demands gas for this many finalizes
+export RECORD_EXPIRIES=true
+export EXPIRY_INTERVAL_MS=60000      # how often the expiry sweep runs, between ticks
+export EXPIRY_BATCH_SIZE=25          # how many expired jobs one sweep may look at
 export RETRY_BASE_SECONDS=60
 export RETRY_MAX_SECONDS=3600
 export RETRY_GIVE_UP_AFTER=6
@@ -68,7 +99,9 @@ degraded. Contract addresses come from `@squaresdk/core` for known chains or
 from `SQUARE_DEPLOYMENT_FILE`.
 
 Endpoints: `/health`, `/metrics` (Prometheus), `/version`, `/actions` (last
-50 journal rows).
+50 journal rows). In `/actions`, a `recordExpiry` row with no `reason` means the
+expiry is recorded on chain: with a transaction hash this keeper sent it,
+without one it found it already recorded.
 
 ## Signals
 
@@ -95,7 +128,16 @@ and the gauge holds its last value, or zero on a fresh process. Alerts go to
 
 `/health` marks `balance` critical: a keeper out of gas answers 503, because on
 Arc gas is USDC and an unfunded keeper stops the protocol's optimistic
-settlement entirely.
+settlement entirely. The threshold is not a constant. The check reads the live
+gas price, multiplies it by `FINALIZE_GAS` and asks how many finalize sends the
+balance buys, failing below `MIN_ACTIONS_FUNDED` (3 by default) and saying the
+number it counted in `detail`. A fixed wei threshold cannot do that: the 0.01
+USDC it used to demand covered 0.89 finalizes at 25 gwei, so the check answered
+healthy for a keeper that could not send its next transaction, and its meaning
+moved with every gas price change.
+
+The four checks live in `src/checks.ts` and are exported, so a test runs the
+same code the service serves rather than a copy of it.
 
 ## Economics
 

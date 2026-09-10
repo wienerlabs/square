@@ -71,12 +71,15 @@ The threshold is computed by `minimumProfitableBudget` in
 `services/keeper/src/decide.ts`:
 
 ```ts
-minimumProfitableBudget(evaluatorFeeBP: number, gasPriceWei: bigint, gas: bigint, marginBps = 0): bigint
+minimumProfitableBudget(evaluatorFeeBP: number, gasPriceWei: bigint, gas: bigint, marginBps = 0): bigint | null
 ```
 
 It returns the smallest budget in USDC base units whose evaluator fee covers
-`gas × gasPriceWei` plus `marginBps`, and `-1n` when `evaluatorFeeBP` is zero,
-because no budget makes a zero fee profitable. `packages/core` does not export
+`gas × gasPriceWei` plus `marginBps`, and `null` when `evaluatorFeeBP` is zero
+or negative, because no budget makes a zero fee profitable. `null` rather than a
+sentinel number: the natural use of a floor is `budget >= floor`, and the `-1n`
+this function used to return made that comparison answer "every budget pays",
+the exact opposite of what it meant. `packages/core` does not export
 it: it is keeper-side arithmetic, not part of the SDK surface, so a client that
 wants the floor before funding has to compute it the same way or ask a keeper.
 
