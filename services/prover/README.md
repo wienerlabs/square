@@ -43,7 +43,12 @@ anything. `payment.zkey` is gitignored repository-wide, and the 5 MB
 `payment.wasm` is not worth carrying in history when it is reproducible from
 source in seconds.
 
-The circuit lives in [`circuits/`](../../circuits/) and builds its own key:
+`make up` at the repository root fills it for you: a container compiles the
+circuit and produces the key, and the prover mounts the result. Nothing has to
+be installed to do that. See [the local stack](../../docs/deploy/local-stack.md).
+
+To build them on the host instead, the circuit lives in
+[`circuits/`](../../circuits/) and builds its own key:
 
 ```bash
 cd ../../circuits

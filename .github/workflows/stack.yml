@@ -1,0 +1,108 @@
+name: stack
+
+# Brings the whole local stack up on a runner and asks every service whether it
+# is healthy.
+#
+# It is here because the four Dockerfiles in this repository had never been run
+# before #49 and three of them did not work: two images could not resolve their
+# own dependencies at run time, one could not build at all, and anvil bound the
+# loopback interface so nothing on the compose network could reach it. None of
+# that shows up in a unit suite -- every one of those services passes its tests
+# on a laptop. Only starting the containers finds it, so the containers get
+# started on every pull request.
+#
+# What this proves: the images build, the contracts reach a chain, the schema
+# applies, the circuit artifacts are produced from source, and all four services
+# answer /health with a passing status over their published ports.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "compose.yaml"
+      - "Makefile"
+      - "scripts/health.sh"
+      - ".env.example"
+      - "**/Dockerfile"
+      - ".dockerignore"
+      - "services/**"
+      - "packages/**"
+      - "app/**"
+      - "circuits/**"
+      - "contracts/**"
+      - ".github/workflows/stack.yml"
+  # No path filter on pull_request, for the reason given in circuits.yml: a
+  # required check that a filter skips never reports, and the merge waits on a
+  # run that will not happen.
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stack-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-stack:
+    name: local stack (make up)
+    runs-on: ubuntu-latest
+    # Measured at 38 s to all-healthy with images cached, and about six minutes
+    # building them from nothing. The cap is here so a container that never
+    # becomes healthy fails the job instead of holding a runner for six hours.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          submodules: recursive
+
+      # circuits/Dockerfile is linux/amd64, which is native on this runner, so
+      # no emulation is set up here. It is only needed on an arm64 host.
+      - name: Bring the stack up
+        run: make up
+
+      - name: The contracts are on the chain, not just in a file
+        run: |
+          set -euo pipefail
+          test -f contracts/deployments/31337.json
+          cat contracts/deployments/31337.json
+          chain=$(curl -s -X POST -H 'content-type: application/json' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' \
+            http://localhost:8545 | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).result')
+          test "$chain" = "0x7a69"
+          for name in SquareJob USDC IdentityRegistry; do
+            address=$(node -pe "require('./contracts/deployments/31337.json')['$name']")
+            code=$(curl -s -X POST -H 'content-type: application/json' \
+              --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getCode\",\"params\":[\"$address\",\"latest\"]}" \
+              http://localhost:8545 | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).result')
+            test "${#code}" -gt 2 || { echo "$name has no code at $address"; exit 1; }
+            echo "$name $address $(( (${#code} - 2) / 2 )) bytes"
+          done
+
+      # Healthy is not the same as working. This asks the prover for a real
+      # proof, using the key the circuits container built from source.
+      - name: The prover proves
+        run: |
+          set -euo pipefail
+          body=$(curl -sf -X POST -H 'content-type: application/json' \
+            --data @.github/fixtures/prove-request.json http://localhost:3003/prove)
+          node -e '
+            const proof = JSON.parse(process.argv[1]);
+            if (proof.is_compliant !== true) throw new Error("expected a compliant verdict");
+            if (proof.raw_public.length !== 8) throw new Error("expected 8 public signals");
+            if (!/^0x[0-9a-f]{64}$/.test(proof.solidity.a[0])) throw new Error("no proof point");
+            console.log("proof.a[0]", proof.solidity.a[0]);
+          ' "$body"
+
+      - name: What each service said
+        if: always()
+        run: make health || true
+
+      - name: Logs, if anything failed
+        if: failure()
+        run: docker compose logs --tail 100
+
+      - name: Tear down
+        if: always()
+        run: make clean

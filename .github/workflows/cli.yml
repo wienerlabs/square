@@ -11,6 +11,7 @@ on:
     branches: [main]
     paths:
       - "packages/cli/**"
+      - "packages/core/**"
       - "packages/did-resolver/**"
       - "docs/smoke/**"
       - "docs/agent-card/schema.json"
@@ -35,14 +36,23 @@ jobs:
         with:
           node-version: "20"
 
-      # The CLI depends on the resolver by path, so the resolver has to be built
-      # before the CLI can typecheck against its declarations.
+      # The CLI depends on the resolver and on @squaresdk/core by path, and
+      # core depends on the resolver, so both have to be built in that order
+      # before the CLI can typecheck against their declarations. #49 moved the
+      # chain id, the endpoint and the registry address into core, so the CLI
+      # reads them from there rather than keeping a second copy.
       - name: Build @squaresdk/did-resolver
         working-directory: packages/did-resolver
         run: |
           npm install
           npm run build
           npm test
+
+      - name: Build @squaresdk/core
+        working-directory: packages/core
+        run: |
+          npm install --install-links
+          npm run build
 
       - name: Install @squaresdk/cli
         working-directory: packages/cli
@@ -116,6 +126,12 @@ jobs:
         working-directory: packages/did-resolver
         run: |
           npm install
+          npm run build
+
+      - name: Build @squaresdk/core
+        working-directory: packages/core
+        run: |
+          npm install --install-links
           npm run build
 
       - name: Build @squaresdk/cli

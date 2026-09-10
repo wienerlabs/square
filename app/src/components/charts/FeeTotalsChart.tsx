@@ -30,7 +30,7 @@ export function FeeTotalsChart({ totals, scanned, loading, error }: { totals: Fe
         { key: "net", label: "Paid to payees", value: totals.netPaid, color: chartColors.lavender },
         { key: "platform", label: "Platform fees", value: totals.platform, color: chartColors.carbon },
         { key: "evaluator", label: "Evaluator fees", value: totals.evaluator, color: chartColors.amber },
-        { key: "refunded", label: "Refunded", value: totals.refunded, color: chartColors.magenta },
+        { key: "refunded", label: "Refunded to clients", value: totals.refunded, color: chartColors.magenta },
       ]
     : [];
   const nothing = totals !== null && totals.completed === 0 && totals.rejected === 0;
@@ -40,7 +40,7 @@ export function FeeTotalsChart({ totals, scanned, loading, error }: { totals: Fe
       description="Where escrowed USDC went on the jobs that reached a terminal status."
       caption={
         totals
-          ? `${totals.completed} completed and ${totals.rejected} rejected among the ${scanned} most recent jobs. Fees are the snapshotted basis points applied to each budget; the kernel keeps per-account balances, not per-job settlement rows.`
+          ? `${totals.completed} completed and ${totals.rejected} rejected among the ${scanned} most recent jobs. Fees are the snapshotted basis points applied to each budget, and what is paid to a payee is the provider share of the net that the settlement decided${totals.splitToClient > 0 ? `; split decisions sent ${formatCompactUsdc(totals.splitToClient)} USDC of that net back to clients, counted as refunded` : ""}. The kernel keeps per-account balances, not per-job settlement rows.`
           : `Computed over the ${scanned} most recent job records.`
       }
     >
