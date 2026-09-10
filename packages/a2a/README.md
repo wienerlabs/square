@@ -34,8 +34,11 @@ not do the work has answered the question, and the caller's next move is the
 same either way: wait for the evaluator.
 
 Carried over from the predecessor and kept: retry with exponential backoff on
-429 and 5xx only, `Retry-After` when the provider sends one, a per-endpoint
-concurrency cap, and separate timeouts for dispatch and polling.
+429, 5xx, a timeout and a failed connection, never on a JSON-RPC error, which is
+an answer; `Retry-After` when the provider sends one; a per-endpoint concurrency
+cap; and separate timeouts for dispatch and polling. `task/create` is safe to
+retry: it is idempotent on `taskId`, so a retry after a lost response gets the
+task as it stands rather than a second task or an error.
 
 `findA2AEndpoint` is the one rule for where a task may go, and `WellKnownCache`
 holds the request it makes by itself to the same rule: https, or either scheme
@@ -59,11 +62,28 @@ const agent = new A2AServer({
 });
 
 // framework-free: parsed request in, response out
-const response = await agent.handle(await req.json());
+const response = await agent.handle(await req.json(), { callerDid: authenticatedCallerDid });
 ```
 
 Resolving means delivered. Throwing means failed. There is no third option and
 no `task/complete` method, because completion is not the provider's to declare.
+
+**`callerDid` in the body is a claim.** This package carries no identity on the
+wire: no signatures, no sessions. That is the host's transport, and
+`@squaresdk/hardening`'s signed messages are one way to get it. Once the host
+has authenticated the caller it passes the DID as the second argument, and the
+server holds the body to it: a `task/create` naming another `callerDid` is
+refused, and `task/status` shows a task only to the caller that created it
+(anyone else is told there is no such task). With no second argument the body
+is taken at its word. That is the right default for a handler on `localhost`
+and the wrong one for anything that can be reached, so a host that skips it is
+choosing to trust every caller with every `jobId`.
+
+**`handlerTimeoutMs`** bounds a handler. When it passes, the task fails with a
+reason that says so, the handler's `signal` aborts, and the concurrency slot
+comes back; without it a handler that never settles holds its slot for the life
+of the process, and `maxConcurrent` of those (five by default) turn every honest
+caller away with `Busy`.
 
 ## What it will not do
 
@@ -96,6 +116,6 @@ providerMayCall("DELIVERED", "complete");  // false
 $ npm test
 ```
 
-94 tests, no network. The end-to-end suite runs a real HTTP server and drives it
+109 tests, no network. The end-to-end suite runs a real HTTP server and drives it
 with the real client, so the handshake is exercised over a socket rather than
 mocked.

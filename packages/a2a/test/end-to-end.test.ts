@@ -166,6 +166,22 @@ describe("an agent takes a task and returns a result", () => {
     expect(body.id).toBe(42);
   }, 20_000);
 
+  it("answers a retried task/create with the task as it stands, over the socket", async () => {
+    // The retry a client sends after a lost response: same taskId, same
+    // fields. It is not an error, and it does not start the work twice.
+    const client = new A2AClient();
+    const params = { taskId: "e2e-8", capability: "text.summarize", input: "one two three four", callerDid: CALLER_DID, jobId: "48" };
+    const first = await client.createTask(endpoint, params);
+    expect(first.state).toBe(TaskState.Working);
+    await new Promise((r) => setTimeout(r, 50));
+    const again = await client.createTask(endpoint, params);
+    expect(again.taskId).toBe("e2e-8");
+    expect(again.state).toBe(TaskState.Delivered);
+    expect(agent.machine.list().filter((t) => t.id === "e2e-8")).toHaveLength(1);
+
+    await expect(client.createTask(endpoint, { ...params, input: "different" })).rejects.toThrow(/already in use/);
+  }, 20_000);
+
   it("finds the endpoint from an agent card the way a caller would", () => {
     // The card shape is docs/agent-card/schema.json; the caller reads the A2A
     // service out of it rather than being handed a URL.

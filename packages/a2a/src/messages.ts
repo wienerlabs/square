@@ -53,8 +53,10 @@ export const RpcErrorCode = {
   CapabilityNotOffered: -32000,
   /** The provider is at its concurrency limit. Retryable. */
   Busy: -32001,
-  /** No such task at this provider. */
+  /** No such task at this provider, or not one this caller may see. */
   TaskNotFound: -32002,
+  /** The taskId is already in use for a task with different content. A retry of the same request is not this. */
+  TaskIdInUse: -32003,
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCode)[keyof typeof RpcErrorCode];
@@ -84,7 +86,12 @@ export interface TaskCreateParams {
 
 export interface TaskCreateResult {
   taskId: string;
-  state: typeof TaskState.Working;
+  /**
+   * WORKING on a first dispatch. `task/create` is idempotent on `taskId`:
+   * a repeat with the same five fields (a retry after a lost response) is
+   * answered with the task's current state, which may already be terminal.
+   */
+  state: TaskState;
   acceptedAt: string;
 }
 

@@ -101,6 +101,18 @@ The `deliverable` that comes back on `DELIVERED` is a reference to the work
 rather than the work itself, sized for ERC-8183's `bytes32` — a hash or a CID.
 Keeping the same shape on the wire and on chain stops the two from drifting.
 
+`task/create` is idempotent on `taskId`. The caller chooses the id, the client
+retries the call, and the answer to a request that created and started the task
+can be lost on the way back; the retry, carrying the same five fields, is
+answered with the task as it stands. The same id with different content is
+refused with `-32003`, which is not what a bad request gets.
+
+`callerDid` on the wire is a claim. Nothing in the envelope proves it, so the
+host that has authenticated the caller by its own transport tells the server
+who is asking, and the server holds the body to that: a create naming another
+caller is refused, and a task is visible only to the caller that created it.
+`packages/a2a/README.md` has the shape.
+
 ## Cancellation has no window
 
 The state machine allows a cancel from `SUBMITTED` and from nowhere else. Once
