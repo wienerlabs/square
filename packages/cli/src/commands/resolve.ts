@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { AipDidResolver, type DidResolutionResult } from "@squaresdk/did-resolver";
+import { ARC_TESTNET_ID, KNOWN_CHAINS } from "../core/chains.js";
 import { loadConfig, rpcMap } from "../core/config.js";
 import { ValidationError } from "../core/errors.js";
 import { log } from "../core/logger.js";
@@ -27,7 +28,7 @@ export function resolveCommand(): Command {
       "after",
       `
 Examples:
-  $ square resolve did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2
+  $ square resolve did:aip:eip155:${ARC_TESTNET_ID}:${KNOWN_CHAINS[ARC_TESTNET_ID]!.identityRegistry}:2
   $ square resolve <did> --json | jq .didDocument.service
 
 The document is printed to stdout; everything else goes to stderr, so --json

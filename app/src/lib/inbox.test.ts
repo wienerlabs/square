@@ -24,6 +24,7 @@ const job = (over: Partial<JobSummary>): JobSummary => ({
   platformFeeBP: 100,
   evaluatorFeeBP: 50,
   providerBps: 0,
+  settlementHorizon: 0,
   ...over,
 });
 
@@ -41,6 +42,14 @@ describe("classify", () => {
     expect(classify(job({ status: JobStatus.Funded }), me, keeper, now)).toBeNull();
     expect(classify(job({ status: JobStatus.Funded, expiredAt: 1_500 }), me, keeper, now)).toBe("refund");
     expect(classify(job({ status: JobStatus.Submitted, expiredAt: 1_500, challengeEnd: 3_000 }), me, keeper, now)).toBeNull();
+  });
+
+  it("stops asking for the deliverable once the expiry is inside the job's settlement horizon", () => {
+    const mine = { status: JobStatus.Funded, client: other, provider: me } as const;
+    expect(classify(job({ ...mine, expiredAt: 10_000, settlementHorizon: 1_020 }), me, keeper, now)).toBe("submit");
+    expect(classify(job({ ...mine, expiredAt: 3_020, settlementHorizon: 1_020 }), me, keeper, now)).toBe("submit");
+    expect(classify(job({ ...mine, expiredAt: 3_019, settlementHorizon: 1_020 }), me, keeper, now)).toBeNull();
+    expect(classify(job({ ...mine, expiredAt: 2_500, settlementHorizon: 1_020 }), me, keeper, now)).toBeNull();
   });
 
   it("offers the refund on an expired submission the keeper does not evaluate, whatever the challenge window says", () => {

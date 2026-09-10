@@ -231,8 +231,8 @@ export function renderMarkdownTable(measurement: Measurement): string {
   const price = measurement.gasPriceWei;
   const gwei = formatUnits(price, 9);
   const lines = [
-    `| Call | Path | Tx gas used | Cost at ${gwei} gwei (USDC) | Overhead vs EOA (gas) | Overhead (USDC) | Charged to account (gas) | Keeper net (USDC) |`,
-    "|---|---|---:|---:|---:|---:|---:|---:|",
+    `| Call | Path | Tx gas used | Cost at ${gwei} gwei (USDC) | Overhead vs EOA (gas) | Overhead at ${gwei} gwei (USDC) | Charged to account (gas) | Keeper net at ${gwei} gwei (USDC) | \`actualGasCost\` from the receipt (USDC) |`,
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|",
   ];
   for (const operation of ["setBudget", "submit"] as const) {
     for (const path of ["eoa", "userop-deployed", "userop-deploying"] as const) {
@@ -240,9 +240,10 @@ export function renderMarkdownTable(measurement: Measurement): string {
       if (!row) continue;
       const over = measurement.overhead.find((candidate) => candidate.operation === operation && candidate.path === path);
       const keeperNet =
-        row.keeperNetWei === null ? "n/a" : formatUnits(row.keeperNetWei, 18);
+        row.actualGasUsed === null ? "n/a" : usdcAtObservedPrice(row.actualGasUsed - row.gasUsed, price);
+      const actualCost = row.actualGasCost === null ? "n/a" : formatUnits(row.actualGasCost, 18);
       lines.push(
-        `| \`${operation}\` | ${pathLabel[path]} | ${formatGas(row.gasUsed)} | ${usdcAtObservedPrice(row.gasUsed, price)} | ${over ? formatGas(over.gas) : "0"} | ${over ? over.usdc : "0"} | ${row.actualGasUsed === null ? "n/a" : formatGas(row.actualGasUsed)} | ${keeperNet} |`,
+        `| \`${operation}\` | ${pathLabel[path]} | ${formatGas(row.gasUsed)} | ${usdcAtObservedPrice(row.gasUsed, price)} | ${over ? formatGas(over.gas) : "0"} | ${over ? usdcAtObservedPrice(over.gas, price) : "0"} | ${row.actualGasUsed === null ? "n/a" : formatGas(row.actualGasUsed)} | ${keeperNet} | ${actualCost} |`,
       );
     }
   }

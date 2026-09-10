@@ -142,6 +142,7 @@ jobs:
           npm install --install-links
           npm run generate:abi
           git diff --exit-code -- src/abi
+          npm run check:events
           npm run typecheck
           npm test -- --reporter=default --reporter=json --outputFile.json=/tmp/core.json
           npm run build

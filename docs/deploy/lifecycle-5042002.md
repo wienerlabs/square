@@ -2,6 +2,20 @@
 
 Run at 2026-09-09T14:40:02.527Z against https://rpc.testnet.arc.io. Gas price used for the USDC column: 21.2 gwei (1 gas = 0.0000000212 USDC).
 
+This file always holds the latest run and is rewritten every time the runner is
+used. The dated record of this run is
+[lifecycle-5042002-2026-09-09.md](./lifecycle-5042002-2026-09-09.md), which
+nothing overwrites, and that is the file a document quoting a figure by number
+should link.
+
+The 21.2 gwei above is `GAS_PRICE_WEI` as this run set it and not a price any
+receipt carried: the four settlement receipts carry exactly 21.0 gwei, so the
+USDC column here reads about one per cent high. The gas column is unaffected.
+`packages/core/scripts/lifecycle.ts` now prices every row from its own receipt's
+`effectiveGasPrice` and keeps the constant only as a fallback for a receipt that
+carries no effective price, so a run after this one takes the column from the
+chain.
+
 | Path | Step | Transaction | Gas |
 |---|---|---|---|
 | 1-optimistic | createJob | [0xcf3f57aa...](https://testnet.arcscan.app/tx/0xcf3f57aa8cda4ae51a685e92e63cea2932bd64dd0187e00459032949cad32ff7) | 275284 |

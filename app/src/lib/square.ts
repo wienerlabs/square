@@ -63,6 +63,7 @@ export interface JobSummary {
   platformFeeBP: number;
   evaluatorFeeBP: number;
   providerBps: number;
+  settlementHorizon: number;
 }
 
 export interface JobsSnapshot {
@@ -94,6 +95,7 @@ async function readJobSummary(id: bigint): Promise<JobSummary> {
     platformFeeBP: record.platformFeeBP,
     evaluatorFeeBP: record.evaluatorFeeBP,
     providerBps: record.providerBps,
+    settlementHorizon: record.settlementHorizon,
   };
 }
 

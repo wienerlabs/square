@@ -360,8 +360,19 @@ template PaymentCompliance(MAX_WHITELIST, MAX_BLOCKED, MAX_CATEGORIES) {
     signal day_active;
     day_active <== day_active_acc[7];
 
-    // hour_in_window = (hour >= start) AND (hour <= end). Assumes start <= end;
-    // windows spanning midnight are not modelled, here or in the dashboard.
+    // hour_in_window = (hour >= start) AND (hour <= end).
+    //
+    // Assumes start <= end. A window that runs past midnight is not modelled
+    // here, in rules.js, or in the dashboard, and under one no hour of any day
+    // is inside the window -- so every payment the policy covers is refused,
+    // with the same 'time_window' the service returns for a payment that
+    // genuinely missed its window.
+    //
+    // That assumption is now enforced instead of merely stated: square#148 made
+    // validateRequest refuse start > end with 400 before anything is hashed, so
+    // a policy that reaches this comparison has already been checked. Modelling
+    // the wrapped window is an OR branch selected by start > end, mirrored in
+    // rules.js and pinned by circuit-agreement.test.js; it is not done here.
     component hour_ge_start = GreaterEqThan(8);
     hour_ge_start.in[0] <== hour;
     hour_ge_start.in[1] <== time_start_hour_utc;

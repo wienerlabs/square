@@ -66,6 +66,15 @@ jobs:
           npm install
           npm run build
 
+      # The CLI reads the chain id, the endpoint and the registry address from
+      # @squaresdk/core rather than keeping a second copy of them (#49), so
+      # core has to be built before the CLI can compile against it.
+      - name: Build @squaresdk/core
+        working-directory: packages/core
+        run: |
+          npm install --install-links
+          npm run build
+
       # test:live drives dist/index.js, not the library: the criterion is about
       # the command, so the command is what gets exercised.
       - name: Build @squaresdk/cli

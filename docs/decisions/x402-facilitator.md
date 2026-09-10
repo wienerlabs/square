@@ -38,9 +38,12 @@ Each authorization is verified (allowlist, replay store, EIP-712 signature,
 transaction paid by the facilitator key. Measured on a local anvil against the
 repository's `MockUSDC3009`: **89,786 gas** for the first transfer to a fresh
 recipient; the production FiatToken implementation lands around 60k on a warm
-recipient. At Arc's 20 gwei native gas price that is roughly **0.0012 USDC per
-settlement** (60,000 x 20 gwei), so the model is uneconomic below about
-0.01 USDC per request, where gas is more than a tenth of the price. Above that it
+recipient. At Arc's 20 gwei base fee that is roughly **0.0012 USDC per
+settlement** (60,000 x 20 gwei), and about 0.0013 USDC at the roughly 22 gwei gas
+price a receipt carries once the priority fee is added
+([erc4337-sponsorship.md](./erc4337-sponsorship.md) states the distinction), so
+the model is uneconomic below about 0.01 USDC per request, where gas is more than
+a tenth of the price. Above that it
 needs no third party, works today with the deployer key, and keeps the
 `(chainId, asset, payer, nonce)` replay identity in a table we own.
 
@@ -49,7 +52,7 @@ needs no third party, works today with the deployer key, and keeps the
 | | Own facilitator | Circle Nanopayments |
 |---|---|---|
 | Third-party account | None | Circle developer account + API key |
-| Per-request cost to us | About 0.0012 USDC gas | Zero on chain (batched off chain) |
+| Per-request cost to us | About 0.0012 USDC of gas at the 20 gwei base fee, 0.0013 USDC at the 22 gwei gas price | Zero on chain (batched off chain) |
 | Economic floor per request | About 0.01 USDC | Sub-cent |
 | Where the money sits before settlement | Payer's wallet, until the tx lands | Circle Gateway wallet deposit |
 | Where the ledger lives | Our Postgres (`x402_payments`) | Circle, until withdrawal |
@@ -119,13 +122,22 @@ broadcast but its receipt was not seen, which the library reports as
 `accepted` row and stops, because the payment may still land and writing `failed`
 would make the authoritative ledger wrong.
 
-`reconcileSettlements` is the operator-scheduled pass that closes those rows: a
-successful receipt settles the row, a reverted receipt fails it with
-`settlement_reverted`, an unknown receipt is left alone while the authorization is
-still valid, and once `validBefore` has passed, when the token contract can no longer
-accept it, the row fails with `authorization_expired`. Without it a pending settlement
-sat at `accepted` forever while `has()` kept refusing the authorization, which is safe
-but leaves a payment nobody can account for.
+`reconcileSettlements` is the operator-scheduled pass that closes those rows, and its
+decision table turns on whether a transaction was ever broadcast. With a transaction
+hash on the row: a successful receipt settles it, a reverted receipt fails it with
+`settlement_reverted`, and a receipt that cannot be read leaves it `accepted` and
+unresolved with `settlement_receipt_unreadable`, whatever `validBefore` says. Without a
+transaction hash: the row fails with `authorization_expired` once `validBefore` has
+passed, because a transfer that was never sent can no longer be sent. An expired
+authorization whose receipt is unreadable is not a failure, it is an unknown: the
+transaction may have been mined before `validBefore` with only this node unable to see
+it, and `failed` is a state the ledger never leaves. Without the pass a pending
+settlement sat at `accepted` forever while `has()` kept refusing the authorization,
+which is safe but leaves a payment nobody can account for.
+
+`now` comes from whatever clock the caller passes. `blockTimestampFromClient` reads the
+latest block timestamp, which is the clock EIP-3009 compares `validBefore` against; the
+default is the local wall clock, for callers that hold no public client.
 
 `settlement: "before-handler"` is not supported and is rejected when routes are
 configured. The upfront flow makes the resource server accept the payload without

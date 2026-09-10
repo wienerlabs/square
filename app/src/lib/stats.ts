@@ -21,8 +21,7 @@ export function released(job: JobSummary): bigint {
   const platformFee = (job.budget * BigInt(job.platformFeeBP)) / BPS;
   const evaluatorFee = (job.budget * BigInt(job.evaluatorFeeBP)) / BPS;
   const net = job.budget - platformFee - evaluatorFee;
-  const providerBps = job.providerBps > 0 ? BigInt(job.providerBps) : BPS;
-  return (net * providerBps) / BPS;
+  return (net * BigInt(job.providerBps)) / BPS;
 }
 
 export function liveStats(snapshot: JobsSnapshot): LiveStats {

@@ -326,7 +326,16 @@ interface Database {
 Two implementations, one interface: `pgDatabase(connectionString)` for
 services, `pgliteDatabase()` for tests. Repositories (`jobs`, `idempotency`,
 `rateLimits`, `x402Payments`, `keeperActions`) are functions over `Database`
-and are the only place SQL lives. A service never imports `pg` directly.
+and are the only place SQL lives. A service never imports `pg` directly, and a
+package that owns an HTTP shape over one of these tables owns the shape only:
+`@squaresdk/hardening` delegates `idempotency_keys` to `idempotencyKeys` and
+`@squaresdk/x402` delegates its replay ledger to `x402Payments`, so each table
+has exactly one set of statements.
+
+A row's lifetime is measured on the database's clock, never on the caller's:
+`idempotencyKeys.putIfAbsent` takes a TTL and computes `expires_at` in SQL, so
+the side that writes the expiry and the side that decides it has passed cannot
+disagree when a service's clock drifts.
 
 ## Notes carried to the consuming issues
 
