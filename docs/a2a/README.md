@@ -81,27 +81,43 @@ which a public chain already publishes.
 
 ## The wire
 
-JSON-RPC 2.0 over HTTP POST. Three methods, and the absence of a fourth.
+JSON-RPC 2.0 over HTTP POST. Two methods, and two deliberate absences.
 
 | method | direction | |
 |---|---|---|
 | `task/create` | caller → provider | dispatch; the provider acknowledges immediately and works in the background |
 | `task/status` | caller → provider | poll until a terminal state |
-| `task/cancel` | caller → provider | only before acknowledgement |
 
 There is no `task/complete`. Completion is not the provider's to declare.
+
+There is no `task/cancel` either, for a different reason: see below.
+
+The request `id` is echoed as received. JSON-RPC 2.0 allows a string, a
+number or null, and a caller with several requests in flight matches answers
+to questions by it; a request with no usable id gets `null` back.
 
 `task/create` carries `taskId`, `capability`, `input`, `callerDid` and `jobId`.
 The `deliverable` that comes back on `DELIVERED` is a reference to the work
 rather than the work itself, sized for ERC-8183's `bytes32` — a hash or a CID.
 Keeping the same shape on the wire and on chain stops the two from drifting.
 
-## Cancellation stops at acknowledgement
+## Cancellation has no window
 
-A caller may cancel a `SUBMITTED` task. Once the provider has acknowledged it,
-no. The work may already be done, and the escrow settles through the evaluator
-either way, so "cancelled" would be a claim about the world that the caller is
-not in a position to make.
+The state machine allows a cancel from `SUBMITTED` and from nowhere else. Once
+the provider has acknowledged, the work may already be done, and the escrow
+settles through the evaluator either way, so "cancelled" would be a claim about
+the world that the caller is not in a position to make.
+
+On this server the window that rule leaves open is empty. `task/create`
+creates the task and acknowledges it before it answers, so a caller never
+observes a task in `SUBMITTED`; the first state it can see is `WORKING`. A
+`task/cancel` method here could only ever answer `-32602`, which is why the
+wire does not carry one and `A2AClient` does not offer one.
+
+`TaskMachine.cancel` and the `CANCELLED` state stay. They are for a host that
+holds the machine directly, through `A2AServerOptions.machine`, and chooses to
+create tasks without accepting them at once. That host has a real window, and
+it is the host's to close.
 
 ## Discovery
 

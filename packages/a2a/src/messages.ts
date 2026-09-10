@@ -14,11 +14,19 @@ import { TaskState } from "./states.js";
  * nothing a public chain does not already publish.
  */
 
+/**
+ * JSON-RPC 2.0 allows a String, a Number or Null. The client sends strings;
+ * the server echoes whatever it was given, because a caller with several
+ * requests in flight matches responses to requests by this value, and a
+ * server that rewrote it would hand back answers that match nothing.
+ */
+export type JsonRpcId = string | number | null;
+
 export interface JsonRpcRequest<P = Record<string, unknown>> {
   jsonrpc: "2.0";
   method: string;
   params: P;
-  id: string;
+  id: JsonRpcId;
 }
 
 export interface JsonRpcError {
@@ -31,7 +39,7 @@ export interface JsonRpcResponse<R = unknown> {
   jsonrpc: "2.0";
   result?: R;
   error?: JsonRpcError;
-  id: string;
+  id: JsonRpcId;
 }
 
 /** JSON-RPC 2.0 reserved codes, plus the ones this protocol adds. */
@@ -51,7 +59,14 @@ export const RpcErrorCode = {
 
 export type RpcErrorCode = (typeof RpcErrorCode)[keyof typeof RpcErrorCode];
 
-export const TASK_METHODS = ["task/create", "task/status", "task/cancel"] as const;
+/**
+ * Two methods. `task/complete` is absent because completion is not the
+ * provider's to declare. `task/cancel` is absent because there is no moment
+ * at which it could succeed: the server acknowledges inside `task/create`, so
+ * a caller never observes a task in the one state a cancel is allowed from.
+ * A method that can only ever answer with an error is not a capability.
+ */
+export const TASK_METHODS = ["task/create", "task/status"] as const;
 export type TaskMethod = (typeof TASK_METHODS)[number];
 
 export interface TaskCreateParams {
@@ -91,15 +106,6 @@ export interface TaskStatusResult {
   updatedAt: string;
 }
 
-export interface TaskCancelParams {
-  taskId: string;
-}
-
-export interface TaskCancelResult {
-  taskId: string;
-  state: typeof TaskState.Cancelled;
-}
-
 let counter = 0;
 
 /** Ids are unique per process and monotonic, which is all JSON-RPC asks of them. */
@@ -115,11 +121,11 @@ export function rpcRequest<P extends Record<string, unknown>>(
   return { jsonrpc: "2.0", method, params, id: nextRpcId() };
 }
 
-export function rpcResult<R>(id: string, result: R): JsonRpcResponse<R> {
+export function rpcResult<R>(id: JsonRpcId, result: R): JsonRpcResponse<R> {
   return { jsonrpc: "2.0", result, id };
 }
 
-export function rpcError(id: string, code: number, message: string, data?: unknown): JsonRpcResponse {
+export function rpcError(id: JsonRpcId, code: number, message: string, data?: unknown): JsonRpcResponse {
   return {
     jsonrpc: "2.0",
     error: { code, message, ...(data !== undefined ? { data } : {}) },
@@ -139,6 +145,6 @@ export function isJsonRpcResponse(value: unknown): value is JsonRpcResponse {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   if (v.jsonrpc !== "2.0") return false;
-  if (typeof v.id !== "string") return false;
+  if (typeof v.id !== "string" && typeof v.id !== "number" && v.id !== null) return false;
   return "result" in v || "error" in v;
 }

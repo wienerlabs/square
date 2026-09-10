@@ -26,13 +26,17 @@ The build context is `packages/`, not this directory — the driver depends on
 | `RPC_<chainId>` | Endpoint for one chain, e.g. `RPC_5042002` |
 | `DRIVER_RPC` | The whole map as JSON: `{"5042002":"https://…"}` |
 | `DRIVER_ALLOWED_REGISTRIES` | Comma-separated registries to honour |
-| `DRIVER_PORT` | Default 8080 |
-| `DRIVER_TIMEOUT_MS` | agentURI fetch timeout, default 10000 |
+| `DRIVER_PORT` | 1 to 65535, default 8080 |
+| `DRIVER_TIMEOUT_MS` | agentURI fetch timeout, a whole number of milliseconds, default 10000 |
 
 Both RPC forms may be used together and `RPC_<chainId>` wins — an operator overriding one
-chain should not have to restate the whole map. With no chain configured the process
-**exits at boot** rather than answering every request with 501: a container that starts
-while misconfigured hides the problem until someone tries to resolve something.
+chain should not have to restate the whole map. With no chain configured, or with any of
+these set to something the table does not allow, the process **exits at boot** naming the
+variable, rather than answering every request with 501: a container that starts while
+misconfigured hides the problem until someone tries to resolve something. The timeout is
+the one to be careful with: an unvalidated `DRIVER_TIMEOUT_MS=abc` would have reached
+`setTimeout` as `NaN`, which Node runs as 1 ms, so every registration file would have
+"timed out" while `/health` said ok.
 
 ## Status codes
 

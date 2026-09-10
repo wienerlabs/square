@@ -80,6 +80,13 @@ export interface DidDocumentMetadata {
   deactivated?: boolean;
   /** How deactivation was determined; the two are not equivalent (spec §7). */
   deactivationReason?: "burned" | "registrationInactive";
+  /**
+   * Present when the agent names a Registration File and it could not be
+   * read or parsed. `service` is then empty and `deactivated` unset because
+   * nothing was read, not because the file said so; a consumer that reads
+   * only `deactivated` would otherwise take "unknown" for "active" (spec §6.1).
+   */
+  registrationFile?: "unavailable";
   agentRegistry?: string;
   /** Set on a v1 DID resolved through an injected v1 resolver. */
   deprecated?: boolean;

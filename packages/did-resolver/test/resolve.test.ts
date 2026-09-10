@@ -81,6 +81,8 @@ describe("resolve — the empty agentURI case", () => {
     expect(res.didDocument!.service).toEqual([]);
     expect(res.didDocument!.controller).toBe(`did:pkh:eip155:${CHAIN}:${OWNER_CS}`);
     expect(res.didResolutionMetadata.warnings).toBeUndefined();
+    // No file to read is not the same as a file that could not be read.
+    expect(res.didDocumentMetadata.registrationFile).toBeUndefined();
   });
 });
 
@@ -96,6 +98,23 @@ describe("resolve — an unreachable registration file is a warning", () => {
     expect(res.didResolutionMetadata.warnings?.[0]?.code).toMatch(/agentUri/);
   });
 
+  it("says in the document metadata that the file was not read", async () => {
+    // A deactivated agent whose file cannot be fetched must not come back
+    // looking active. `deactivated` stays unset, because nothing was read,
+    // and `registrationFile` says so next to it, where a consumer deciding
+    // whether to pay the agent is looking.
+    const r = resolverWith(
+      fakeChain({ ownerOf: () => OWNER, tokenURI: () => "ipfs://bafyunreachable" }),
+      { fetchAgentUri: async () => { throw new Error("gateway down"); } }
+    );
+    const res = await r.resolve(DID(2));
+    expect(res.didDocumentMetadata.deactivated).toBeUndefined();
+    expect(res.didDocumentMetadata.registrationFile).toBe("unavailable");
+
+    const reverted = resolverWith(fakeChain({ ownerOf: () => OWNER }));
+    expect((await reverted.resolve(DID(2))).didDocumentMetadata.registrationFile).toBe("unavailable");
+  });
+
   it("warns when the file is not a JSON object", async () => {
     const r = resolverWith(
       fakeChain({ ownerOf: () => OWNER, tokenURI: () => "https://x/card.json" }),
@@ -104,6 +123,7 @@ describe("resolve — an unreachable registration file is a warning", () => {
     const res = await r.resolve(DID(2));
     expect(res.didDocument).not.toBeNull();
     expect(res.didResolutionMetadata.warnings?.[0]?.code).toBe("agentUriMalformed");
+    expect(res.didDocumentMetadata.registrationFile).toBe("unavailable");
   });
 });
 
@@ -169,6 +189,7 @@ describe("resolve — services", () => {
     const res = await r.resolve(DID(2));
     expect(res.didDocumentMetadata.deactivated).toBe(true);
     expect(res.didDocumentMetadata.deactivationReason).toBe("registrationInactive");
+    expect(res.didDocumentMetadata.registrationFile).toBeUndefined();
   });
 });
 

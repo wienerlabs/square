@@ -30,7 +30,10 @@ caller rather than just the lookup. The predecessor made the same promise and it
 
 **An unreachable registration file is a warning, not a failure.** On-chain state is
 authoritative for identity; an identity that vanishes because an IPFS gateway is down is
-not censorship-resistant. You get the document derived from the chain plus a warning.
+not censorship-resistant. You get the document derived from the chain plus a warning, and
+`didDocumentMetadata.registrationFile` is `"unavailable"`: `service` is empty and
+`deactivated` unset because nothing was read, not because the file said so. Check it before
+treating a missing `deactivated` as "active".
 
 **An empty `agentURI` resolves.** Registering with the no-argument `register()` is normal —
 `agentId` 1 on Arc Testnet is exactly this. You get a valid document with no services.

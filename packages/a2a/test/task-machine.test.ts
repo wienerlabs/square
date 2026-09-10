@@ -98,6 +98,29 @@ describe("TaskMachine", () => {
     expect(() => new TaskMachine().accept("nope")).toThrow(/no such task/);
   });
 
+  it("does not invent a state for a task that does not exist", () => {
+    // `from` is read by machines, not people. SUBMITTED there would send a
+    // caller looking for a transition rule when the problem is the id.
+    try {
+      new TaskMachine().accept("nope");
+      expect.unreachable();
+    } catch (err) {
+      expect((err as TaskTransitionError).from).toBeNull();
+      expect((err as TaskTransitionError).attempted).toBe("accept");
+    }
+  });
+
+  it("reports the existing task's state when an id is reused", () => {
+    const m = machineWithTask();
+    m.accept("t1");
+    try {
+      m.create(base);
+      expect.unreachable();
+    } catch (err) {
+      expect((err as TaskTransitionError).from).toBe(TaskState.Working);
+    }
+  });
+
   it("notifies subscribers of every transition, with the previous state", () => {
     const m = machineWithTask();
     const seen: string[] = [];
@@ -105,6 +128,35 @@ describe("TaskMachine", () => {
     m.accept("t1");
     m.deliver("t1", "0xabc");
     expect(seen).toEqual(["SUBMITTED->WORKING", "WORKING->DELIVERED"]);
+  });
+
+  it("announces a creation with no previous state, so it cannot pass for a self-transition", () => {
+    const m = new TaskMachine();
+    const seen: Array<string | null> = [];
+    m.subscribe((_task, previous) => seen.push(previous));
+    m.create(base);
+    expect(seen).toEqual([null]);
+  });
+
+  it("lets a listener that serialises at emit time see the deliverable and the reason", () => {
+    // The documented persistence path is the listener. A listener that keeps
+    // the object reference would see the field eventually; one that writes the
+    // record out as it hears the transition (the one the docstring describes)
+    // sees only what is set at that moment.
+    const snapshots: Record<string, { deliverable?: string; reason?: string }> = {};
+    const m = new TaskMachine();
+    m.subscribe((task) => {
+      snapshots[task.state] = JSON.parse(JSON.stringify(task));
+    });
+
+    m.create({ ...base, id: "d" });
+    m.accept("d");
+    m.deliver("d", "0xdeadbeef");
+    expect(snapshots[TaskState.Delivered]?.deliverable).toBe("0xdeadbeef");
+
+    m.create({ ...base, id: "f" });
+    m.fail("f", "no capacity");
+    expect(snapshots[TaskState.Failed]?.reason).toBe("no capacity");
   });
 
   it("does not let a throwing subscriber break a transition", () => {
@@ -126,19 +178,53 @@ describe("TaskMachine", () => {
     expect(count).toBe(1);
   });
 
-  it("sweeps terminal tasks and keeps live ones", () => {
+  it("sweeps tasks with nothing left to do and keeps live ones", () => {
+    const m = new TaskMachine();
+    m.create({ ...base, id: "failed" });
+    m.fail("failed", "no capacity");
+    m.create({ ...base, id: "cancelled" });
+    m.cancel("cancelled");
+    m.create({ ...base, id: "live" });
+
+    expect(m.sweep(new Date(Date.now() + 1000))).toBe(2);
+    expect(m.get("failed")).toBeNull();
+    expect(m.get("cancelled")).toBeNull();
+    expect(m.get("live")).not.toBeNull();
+  });
+
+  it("does not sweep a DELIVERED task: the provider still owes the chain a submit", () => {
+    // DELIVERED will not change again, which is what makes it terminal. It is
+    // also the state whose deliverable the provider has yet to put on chain,
+    // and the machine holds the only copy. Sweeping it would leave the job
+    // Funded until expiry, and the provider unpaid for work it did.
     const m = new TaskMachine();
     m.create({ ...base, id: "done" });
     m.accept("done");
     m.deliver("done", "0xabc");
-    m.create({ ...base, id: "live" });
 
-    expect(m.sweep(new Date(Date.now() + 1000))).toBe(1);
-    expect(m.get("done")).toBeNull();
-    expect(m.get("live")).not.toBeNull();
+    expect(m.sweep(new Date(Date.now() + 1000))).toBe(0);
+    expect(m.get("done")?.deliverable).toBe("0xabc");
   });
 
-  it("does not sweep a terminal task that is still recent", () => {
+  it("forgets a DELIVERED task when the host says so, and returns the record", () => {
+    const m = new TaskMachine();
+    m.create({ ...base, id: "done" });
+    m.accept("done");
+    m.deliver("done", "0xabc");
+
+    expect(m.forget("done").deliverable).toBe("0xabc");
+    expect(m.get("done")).toBeNull();
+  });
+
+  it("refuses to forget a live task", () => {
+    // A handler still running would deliver into nothing.
+    const m = machineWithTask();
+    m.accept("t1");
+    expect(() => m.forget("t1")).toThrow(/cannot forget/);
+    expect(() => new TaskMachine().forget("nope")).toThrow(/no such task/);
+  });
+
+  it("does not sweep a finished task that is still recent", () => {
     const m = machineWithTask();
     m.cancel("t1");
     expect(m.sweep(new Date(Date.now() - 60_000))).toBe(0);

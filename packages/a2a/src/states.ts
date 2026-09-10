@@ -162,6 +162,21 @@ export function isTerminalTaskState(state: TaskState): boolean {
   return TERMINAL_TASK_STATES.includes(state);
 }
 
+/**
+ * Terminal, and with nothing left for the provider to do.
+ *
+ * `isTerminalTaskState` answers "will this state change again". This answers
+ * "can the record be thrown away", and the two differ in exactly one state.
+ * DELIVERED is terminal, and it is also the only row of STATE_MAPPING with a
+ * `providerAction`: the provider still owes the chain a `submit`, carrying a
+ * deliverable that exists nowhere else. A machine that drops the record there
+ * drops the one value the provider needed in order to be paid.
+ */
+export function isDisposableTaskState(state: TaskState): boolean {
+  if (!isTerminalTaskState(state)) return false;
+  return STATE_MAPPING.find((m) => m.task === state)?.providerAction === null;
+}
+
 export const TERMINAL_JOB_STATUSES: readonly JobStatus[] = [
   JobStatus.Completed,
   JobStatus.Rejected,

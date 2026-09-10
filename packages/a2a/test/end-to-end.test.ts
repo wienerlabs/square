@@ -141,10 +141,12 @@ describe("an agent takes a task and returns a result", () => {
     await expect(client.taskStatus(endpoint, "never-created")).rejects.toThrow(/no such task/);
   }, 20_000);
 
-  it("cancels a task, and refuses to cancel one already running", async () => {
-    // The server accepts on create, so by the time the caller could cancel, the
-    // task is WORKING. That is the intended shape: once a provider is working,
-    // the caller cannot take the work back by saying so.
+  it("does not offer task/cancel, and says so with the caller's own id", async () => {
+    // The server accepts inside task/create, so a caller never observes the
+    // task SUBMITTED, which is the only state a cancel is allowed from. A
+    // method that could only ever answer with an error is not on the wire.
+    // The id is numeric on purpose: JSON-RPC 2.0 allows it, and a caller with
+    // several requests in flight needs it back untouched.
     const client = new A2AClient();
     await client.createTask(endpoint, {
       taskId: "e2e-6",
@@ -153,7 +155,15 @@ describe("an agent takes a task and returns a result", () => {
       callerDid: CALLER_DID,
       jobId: "46",
     });
-    await expect(client.cancelTask(endpoint, "e2e-6")).rejects.toThrow(/cannot cancel/);
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 42, method: "task/cancel", params: { taskId: "e2e-6" } }),
+    });
+    const body = (await res.json()) as { id: unknown; error?: { code: number; message: string } };
+    expect(body.error?.code).toBe(-32601);
+    expect(body.error?.message).toMatch(/unknown method: task\/cancel/);
+    expect(body.id).toBe(42);
   }, 20_000);
 
   it("finds the endpoint from an agent card the way a caller would", () => {
