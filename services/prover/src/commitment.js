@@ -56,7 +56,53 @@ async function getPoseidon() {
   return poseidonPromise;
 }
 
-const toField = (value) => BigInt(value);
+/**
+ * A canonical field element, or null.
+ *
+ * Two jobs, and square#179 is about both.
+ *
+ * It never throws, because `verifyDisclosure` is an untrusted-input boundary
+ * whose whole contract is `{ ok: false, reason }`. It kept that contract for a
+ * bad index and broke it four ways for a bad salt, value or sibling: `BigInt()`
+ * threw and an auditor's service turned a forged disclosure into a 500 instead
+ * of a "no".
+ *
+ * And it never echoes what it was given. `BigInt("abc")` throws
+ * `Cannot convert abc to a BigInt` -- the offending value, verbatim, into the
+ * log and the response. services/prover/src/normalize.js exists because of that
+ * exact leak; the disclosure path had it too.
+ *
+ * Out of field is rejected rather than reduced. The old code reduced the salt
+ * (`% R`) and left the value alone, so a disclosure carrying `v + R` verified
+ * and the caller was handed a non-canonical number as the operator's ceiling.
+ * Whether `v` and `v + R` hash alike is a property of the hash library's input
+ * handling, and this code should not have to know: one encoding per value, and
+ * anything else is refused.
+ */
+function parseFieldElement(value) {
+  if (typeof value === 'bigint') return value >= 0n && value < R ? value : null;
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value < 0) return null;
+    return BigInt(value);
+  }
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!/^(0|[1-9][0-9]*)$/.test(text)) return null;
+  const parsed = BigInt(text);
+  return parsed < R ? parsed : null;
+}
+
+/**
+ * @throws when the argument is not a canonical field element. The message names
+ *         the argument and never its value.
+ */
+function toField(value, label = 'value') {
+  const parsed = parseFieldElement(value);
+  if (parsed === null) {
+    throw new Error(`${label}: must be a non-negative integer below the BN254 scalar field`);
+  }
+  return parsed;
+}
 
 /**
  * The eight leaf salts, derived from one secret the operator keeps with the
@@ -84,11 +130,17 @@ export function randomPolicySalt() {
   return (BigInt(`0x${crypto.randomBytes(32).toString('hex')}`) % R).toString();
 }
 
-/** leaf[i] = Poseidon(3)(i, salt, value) */
+/**
+ * leaf[i] = Poseidon(3)(i, salt, value)
+ *
+ * Both the salt and the value have to be canonical field elements. The salt
+ * used to be reduced with `% R` and the value not reduced at all; the comment
+ * on R said why reduction was needed and the value never got it.
+ */
 export async function leafHash(index, salt, value) {
   const poseidon = await getPoseidon();
   return BigInt(poseidon.F.toString(
-    poseidon([BigInt(index), toField(salt) % R, toField(value)]),
+    poseidon([toField(index, 'index'), toField(salt, 'salt'), toField(value, 'value')]),
   ));
 }
 
@@ -142,6 +194,19 @@ export async function open(values, salts, field) {
  * `expectedRoot` is `PolicyRegistry.commitmentOf(poster)`, so a disclosure that
  * verifies is a statement about the policy that institution registered — not
  * about a policy the discloser made up for the occasion.
+ *
+ * **It never throws.** The caller is checking something handed to them by
+ * somebody whose claim they do not accept yet, so every malformed input is a
+ * `{ ok: false, reason }` and not an exception: an auditor's service written as
+ * `if (!(await verifyDisclosure(d, root)).ok)` must be able to say "no" rather
+ * than fail. square#179 found four paths that threw instead -- a salt, a value
+ * or a sibling that `BigInt()` could not parse -- and the exception carried the
+ * forged text in its message.
+ *
+ * **And it reads one encoding per value.** A number at or above the field
+ * modulus is refused rather than reduced, and `value` comes back canonical, so
+ * the number the caller goes on to treat as the operator's ceiling is the number
+ * the commitment covers and not another spelling of it.
  */
 export async function verifyDisclosure(disclosure, expectedRoot) {
   const { index, value, salt, siblings } = disclosure;
@@ -160,13 +225,33 @@ export async function verifyDisclosure(disclosure, expectedRoot) {
     }
   }
 
+  // Every remaining number, before any of it reaches Poseidon. Each one used to
+  // go straight into BigInt(), so a forged disclosure produced an exception
+  // rather than the `{ ok: false }` this function's own structure promises --
+  // and the exception carried the forged text in its message.
+  const saltField = parseFieldElement(salt);
+  if (saltField === null) return { ok: false, reason: 'salt is not a field element' };
+
+  const valueField = parseFieldElement(value);
+  if (valueField === null) return { ok: false, reason: 'value is not a field element' };
+
+  const leaves = new Array(FIELD_COUNT);
+  for (let i = 0; i < FIELD_COUNT; i++) {
+    if (i === index) continue;
+    const sibling = parseFieldElement(siblings[i]);
+    if (sibling === null) return { ok: false, reason: `sibling ${i} is not a field element` };
+    leaves[i] = sibling;
+  }
+
   const poseidon = await getPoseidon();
-  const recomputed = await leafHash(index, salt, value);
-  const leaves = siblings.map((s, i) => (i === index ? recomputed : BigInt(s)));
+  leaves[index] = await leafHash(index, saltField, valueField);
   const root = BigInt(poseidon.F.toString(poseidon(leaves))).toString();
 
   if (root !== String(expectedRoot)) {
     return { ok: false, reason: 'the disclosure does not open the expected commitment' };
   }
-  return { ok: true, field: POLICY_FIELDS[index], value: String(value) };
+  // The parsed value, not the string that arrived. They differ exactly when the
+  // caller was about to be handed a non-canonical encoding of the operator's
+  // own number.
+  return { ok: true, field: POLICY_FIELDS[index], value: valueField.toString() };
 }

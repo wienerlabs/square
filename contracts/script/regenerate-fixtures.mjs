@@ -37,9 +37,14 @@ const BASE = {
   policy_id: '3f2504e0-4f89-11d3-9a0c-0305e82c3301',
   // square#45: the secret the eight leaf salts derive from. Fixed, so a
   // regenerated fixture differs only where the proof does.
-  policy_salt: '7777777777777777777777777777777777777777777777777777777777777',
-  // square#45: the secret the eight leaf salts derive from. Fixed, so a
-  // regenerated fixture differs only where the proof does.
+  //
+  // NEVER COPY THIS INTO A POLICY. square#178 measured what it costs: the same
+  // value opens a 25 USDC per-transaction ceiling in 24 050 tries, because it
+  // used to be the schema's published example and is therefore in every guess
+  // list. Here it protects nothing -- a fixture's policy is public by
+  // construction -- and it stays fixed so the proofs stay reproducible. The
+  // service refuses anything below 2^128; this is above it, and openapi.js is
+  // where a real caller is told to draw 32 random bytes instead.
   policy_salt: '7777777777777777777777777777777777777777777777777777777777777',
   operator_id: '0x3333333333333333333333333333333333333333',
   max_daily_spend: '100000000',

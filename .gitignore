@@ -22,6 +22,9 @@ coverage/
 # `forge test` works from a fresh clone after `git submodule update --init`.
 contracts/out/
 contracts/cache/
+# Written for one `forge inspect` by script/prove-and-verify-on-arc.mjs and
+# removed in the same run; ignored so a crashed run leaves no surprise.
+contracts/src/generated/
 contracts/broadcast/
 broadcast/
 contracts/deployments/31337.json

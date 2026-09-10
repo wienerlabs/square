@@ -193,3 +193,108 @@ jobs:
       - name: How many tests ran
         if: always()
         run: node .github/scripts/vitest-summary.mjs /tmp/proving.json "prover (real proving key)"
+
+  # square#19: a policy, a proof built from it, and Arc accepting that proof.
+  #
+  # Separate from the two jobs above because it is the only one here that talks
+  # to a network, and a testnet hiccup should read as "the end-to-end check
+  # could not reach Arc", not as a circuit regression.
+  #
+  # It does not use test/fixtures/proofs.json. Those are proofs generated at
+  # some earlier time, which answers "does a proof verify on Arc" but not "does
+  # a proof built from this policy, now, carry this policy's commitment into a
+  # verification the chain accepts". The script starts from the policy.
+  #
+  # It also builds its own verifier, from the key this run produced. That is
+  # forced rather than chosen: build.mjs draws its phase-2 entropy from
+  # crypto.getRandomValues, so every build yields a different `delta` and a
+  # verifier that matches only that build. Pinning this to the committed
+  # verifier would test a frozen artifact instead of the pipeline. The bytecode
+  # is the repository's own contract; only the key is this run's.
+  end-to-end:
+    name: end-to-end (policy → proof → Arc)
+    runs-on: ubuntu-latest
+    # A job that reaches a network needs a ceiling, and this one has now used it
+    # twice for two different reasons.
+    #
+    # First it sat for hours on a compiler download inside a scratch Foundry
+    # project; that is fixed by compiling in this project instead. Then it hit
+    # the ceiling every run for a reason the ceiling itself made visible: the
+    # script finished in under a minute, printed its result, and never exited,
+    # because snarkjs leaves a worker pool up after fullProve. At six hours that
+    # read as a hang; at fifteen minutes it read as a process that had finished
+    # and not left, which is what it was.
+    #
+    # Measured, not estimated: the job takes 55 seconds. Fifteen minutes is a
+    # ceiling, not a budget — an earlier version of this comment called it
+    # generous and put the work at three minutes, and both were guesses.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09  # v1.9.1
+        with:
+          version: stable
+
+      - uses: ./.github/actions/circom
+
+      # ppot_0080_14, like the two jobs above. This job was written before #45
+      # moved the adoption from power 13 to 14, and #136 updated the other two
+      # paths and not this one, so the step was caching a file that does not
+      # exist: green, and downloading 19 MB on every run. The key is the hash of
+      # fetch-ptau.mjs, which is where the adoption record lives, so a future
+      # move misses the cache rather than restoring the wrong file.
+      - name: Cache the phase-1 powers of tau
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: circuits/build/ppot_0080_14.ptau
+          key: ptau-${{ hashFiles('circuits/scripts/fetch-ptau.mjs') }}
+
+      - name: Build the circuit and a development proving key
+        working-directory: circuits
+        run: |
+          npm ci
+          npm run build
+
+      # Warms solc 0.8.28 into ~/.svm, which is shared across projects, so the
+      # scratch project the script compiles in does not download a compiler
+      # mid-run. `--contracts` takes a source directory, not a file, so this is
+      # a plain build rather than a narrowed one.
+      - name: Warm the Solidity compiler
+        working-directory: contracts
+        run: forge build
+
+      - name: Put the artifacts where the prover looks for them
+        run: |
+          set -euo pipefail
+          mkdir -p services/prover/artifacts
+          cp circuits/build/payment.zkey services/prover/artifacts/
+          cp circuits/build/payment_vk.json services/prover/artifacts/
+          cp circuits/build/payment_js/payment.wasm services/prover/artifacts/
+
+      - name: Install the prover
+        working-directory: services/prover
+        run: npm install --install-links
+
+      - name: A policy, a proof built from it, and Arc accepting it
+        working-directory: contracts
+        run: |
+          set -o pipefail
+          node script/prove-and-verify-on-arc.mjs | tee ../end-to-end.txt
+
+      - name: On the run summary
+        if: always()
+        run: |
+          {
+            echo '### End to end: policy → proof → Arc'
+            echo
+            echo '```'
+            cat end-to-end.txt 2>/dev/null || echo 'the run produced no output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

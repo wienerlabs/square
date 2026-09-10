@@ -15,6 +15,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildCircuitInput } from '../src/prover.js';
 import { padCategoryList } from '../src/hash.js';
+import { randomPolicySalt } from '../src/commitment.js';
 
 const USDC = '0x3600000000000000000000000000000000000000';
 
@@ -355,5 +356,90 @@ describe('one window, and it has to be a window somebody could satisfy', () => {
   it('and one day is enough', async () => {
     const input = await build({ time_restrictions: [{ ...WINDOW, allowed_days: ['wednesday'] }] });
     expect(input.time_days_bitmask).toBe('4');
+  });
+});
+
+// square#178. Everything the commitment hides rests on policy_salt: the eight
+// leaf salts derive from it, so a caller who can guess it derives them all.
+// It was on the required list and nothing else, so "0" and "1" were accepted.
+describe('policy_salt has to be a secret, and the service says so', () => {
+  it.each(['0', '1', '2', '255', String(2n ** 127n)])(
+    'refuses %s, which anybody could guess',
+    async (salt) => {
+      await expect(build({ policy_salt: salt })).rejects.toThrow('policy_salt: must be at least 2^128');
+    },
+  );
+
+  it('says what to do instead, rather than only what is wrong', async () => {
+    await expect(build({ policy_salt: '0' })).rejects.toThrow(/draw 32 random bytes/);
+  });
+
+  it('takes the smallest value it accepts', async () => {
+    const input = await build({ policy_salt: String(2n ** 128n) });
+    expect(input.policy_salts).toHaveLength(8);
+  });
+
+  it('takes anything randomPolicySalt produces', async () => {
+    for (let i = 0; i < 20; i++) {
+      const input = await build({ policy_salt: randomPolicySalt() });
+      expect(input.policy_salts).toHaveLength(8);
+    }
+  });
+
+  // The floor is a magnitude check. Stating the limit here rather than leaving
+  // the next reader to discover it: a large number somebody typed by hand gets
+  // through, and openapi.js is where the caller is told that the randomness is
+  // theirs to get right.
+  it('cannot tell a hand-typed large number from a random one', async () => {
+    const input = await build({ policy_salt: '7'.repeat(61) });
+    expect(input.policy_salts).toHaveLength(8);
+  });
+
+  // The schema's example is what a generated client and a "Try it" console put
+  // in the box. It used to be sixty-one sevens.
+  it('has an example that fails rather than one that would be copied', async () => {
+    const { openapiSpec } = await import('../src/openapi.js');
+    const example = openapiSpec.components.schemas.ProveRequest.properties.policy_salt.example;
+    expect(example).not.toMatch(/^[0-9]+$/);
+    await expect(build({ policy_salt: example })).rejects.toThrow(/policy_salt/);
+  });
+
+  // An HTTP client has to be able to produce one without importing server code.
+  it('publishes the derivation, modulus included', async () => {
+    const { openapiSpec } = await import('../src/openapi.js');
+    const description = openapiSpec.components.schemas.ProveRequest.properties.policy_salt.description;
+    expect(description).toContain('32 cryptographically random bytes');
+    expect(description).toContain(
+      '21888242871839275222246405745257275088548364400416034343698204186575808495617',
+    );
+  });
+});
+
+// The reason the floor exists, as a test rather than a claim.
+describe('a guessable policy_salt opens the ceilings it is supposed to hide', () => {
+  const MAX_PER_TX = 1;
+  const CEILING = 25_000_000n;
+
+  async function recover(victimSalt) {
+    const { deriveSalts, leafHash } = await import('../src/commitment.js');
+    const victim = await deriveSalts(victimSalt);
+    const leaf = await leafHash(MAX_PER_TX, victim[MAX_PER_TX], CEILING);
+
+    // What an attacker tries: the degenerate salts, then round ceilings.
+    for (const guess of ['0', '1', '2']) {
+      const salts = await deriveSalts(guess);
+      for (let usdc = 5n; usdc <= 100n; usdc += 5n) {
+        if ((await leafHash(MAX_PER_TX, salts[MAX_PER_TX], usdc * 1_000_000n)) === leaf) return usdc;
+      }
+    }
+    return null;
+  }
+
+  it('recovers the ceiling when the salt is one of the values that used to be accepted', async () => {
+    expect(await recover('0')).toBe(25n);
+  });
+
+  it('and does not when the salt is drawn properly', async () => {
+    expect(await recover(randomPolicySalt())).toBeNull();
   });
 });
