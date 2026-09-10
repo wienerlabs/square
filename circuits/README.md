@@ -156,7 +156,19 @@ says the window is not modelled, and both hours have to be in 0..23 — the rang
 the OpenAPI document had declared and nothing enforced. An overnight window is
 expressed as two policies, one per side of midnight.
 
+**And it is one window, over at least one day.** The commitment's eighth field
+is `time_field = Poseidon(1, days_bitmask, start, end)`, which holds a single
+window and has room for exactly one. A request carrying a second
+`time_restrictions` entry used to be validated field by field and then dropped
+by the builder, which reads only the first — so the policy the caller sent and
+the policy the proof covered were different documents. Since [#181][i181] the
+service refuses the second entry instead. An empty `allowed_days` is refused
+for the same reason as the overnight window: it forbids every weekday, so no
+payment could satisfy the rule. Leaving `time_restrictions` out is how a policy
+says it has no window at all.
+
 [i148]: https://github.com/wienerlabs/square/issues/148
+[i181]: https://github.com/wienerlabs/square/issues/181
 
 ### Rule 5 binds nobody, and the reason is structural
 

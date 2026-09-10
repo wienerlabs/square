@@ -141,6 +141,31 @@ export function validateRequest(req) {
     if (!Array.isArray(req.time_restrictions)) {
       throw new Error('time_restrictions: must be an array');
     }
+
+    // One window, or none. Anything past the first used to be validated and
+    // then dropped: buildCircuitInput reads `[0]` and nothing else, so a second
+    // record was checked field by field, accepted, and never reached the
+    // circuit. square#181 measured it -- two records in, the first one's window
+    // out, no trace of the second.
+    //
+    // Validating every entry is a statement that plural is supported. It is
+    // not, and it cannot be without a circuit change: the commitment's eighth
+    // field is `time_field = Poseidon(1, days_bitmask, start, end)`
+    // (payment.circom), which is one window and has room for exactly one. A
+    // policy whose second window is invisible to the proof is a policy the
+    // chain's commitment and the caller disagree about.
+    //
+    // So it is refused at the door, the same answer square#148 gave the window
+    // that crosses midnight, and for the same reason: better to say the limit
+    // than to accept a policy and silently honour half of it.
+    if (req.time_restrictions.length > 1) {
+      throw new Error(
+        `time_restrictions: ${req.time_restrictions.length} entries were given and only one `
+        + 'window can be proved. The commitment covers a single window, so anything after '
+        + 'the first would be accepted here and never reach the circuit. Send one entry.',
+      );
+    }
+
     for (const restriction of req.time_restrictions) {
       if (typeof restriction !== 'object' || restriction === null || Array.isArray(restriction)) {
         throw new Error('time_restrictions: each entry must be an object');
@@ -156,6 +181,38 @@ export function validateRequest(req) {
       }
       if (!Array.isArray(restriction.allowed_days)) {
         throw new Error('time_restrictions.allowed_days: must be an array');
+      }
+
+      // An empty day list is the same class of value as the defaults refused
+      // above: it forbids every weekday, so the rule can never be satisfied and
+      // every payment under the policy is refused with 'time_window'. A
+      // `.filter()` that matched nothing, or an empty form field, produces it.
+      //
+      // hash.js already throws on a weekday name it does not recognise, "so a
+      // restriction is never silently downgraded". Zero recognised days is the
+      // larger downgrade of the two, and it was the one getting through.
+      //
+      // "No window at all" is a different policy and has its own spelling:
+      // leave time_restrictions out, and the rule is off.
+      if (restriction.allowed_days.length === 0) {
+        throw new Error(
+          'time_restrictions.allowed_days: must name at least one day. An empty list '
+          + 'forbids every weekday, so no payment could ever satisfy the rule; omit '
+          + 'time_restrictions entirely to leave the window unrestricted.',
+        );
+      }
+
+      // The timezone, here rather than in buildCircuitInput.
+      //
+      // It used to be checked on `[0]` only, after validation, which meant a
+      // second record could carry America/New_York and never be looked at --
+      // the same value that is refused when it is sent on its own. With one
+      // record enforced above this is the only record there is, and checking it
+      // with the rest keeps every reason a request is refused in one function
+      // and on one status code.
+      if (restriction.timezone !== undefined && restriction.timezone !== null
+        && restriction.timezone !== 'UTC') {
+        throw new Error("time_restrictions.timezone: only 'UTC' is supported");
       }
 
       // The hours, in range, before anything is hashed. openapi.js has declared
@@ -220,10 +277,12 @@ export async function buildCircuitInput(request) {
   // Time restriction. Default = inactive. The circuit muxes the time hash to 0
   // when time_active == 0, so the off-chain commitment and the in-circuit one
   // agree on a policy with no window.
+  //
+  // `[0]` is the whole list now, not the head of it: validateRequest refuses a
+  // second entry rather than letting this line drop it (square#181). The
+  // timezone moved there too, so every reason a request is refused is in one
+  // function and answers 400.
   const tr = Array.isArray(request.time_restrictions) ? request.time_restrictions[0] : null;
-  if (tr && tr.timezone && tr.timezone !== 'UTC') {
-    throw new Error("time_restrictions.timezone: only 'UTC' is supported");
-  }
   // No `??` fallbacks any more: validateRequest requires all three when a
   // restriction is present, so a missing field is an error rather than a window
   // of 00:00 to 00:59 with every weekday forbidden.
