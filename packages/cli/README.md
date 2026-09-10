@@ -36,6 +36,20 @@ $ npm --prefix ../did-resolver install && npm --prefix ../did-resolver run build
 Every command takes `--json`. Machine output goes to stdout and everything else
 to stderr, so `square resolve <did> --json | jq` works.
 
+`register --json` writes one JSON record per line rather than one document:
+`{"status":"sent", "transactionHash": …}` the moment the RPC accepts the
+transaction, then `{"status":"registered", "did": …}` when the receipt arrives,
+or `{"status":"reverted", …}` if it reverted. The split exists because
+`register` is permissionless and the transaction is out the moment it is sent:
+a receipt timeout means "not confirmed yet", not "not registered", and a caller
+that never saw the hash could not tell those apart or resolve the question
+later. Read the last line for the result, and the first if the command exits
+non-zero:
+
+```console
+$ square register --agent-uri … --yes --json | tail -n 1 | jq -r .did
+```
+
 ## The DID is derived, never supplied
 
 `register` does not accept a DID. It sends `register(agentURI)` to the
@@ -60,6 +74,11 @@ create.
 `--dry-run` simulates against the live registry and prints the id it would mint.
 It is a read, so it never asks for the passphrase, and `--from <address>` lets it
 run with no wallet at all.
+
+A real registration asks for the passphrase last. The card is read, the chain id
+checked, the call simulated and the plan printed against the address that will
+sign, and the key is unlocked only after the confirmation, so what is reviewed
+is reviewed before anything is unlocked.
 
 Registering with no `--agent-uri` uses ERC-8004's no-argument `register()`. That
 is a valid registration: the agent exists and is owned, and its DID resolves with

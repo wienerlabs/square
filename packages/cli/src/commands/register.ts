@@ -22,7 +22,7 @@ import {
 import { log } from "../core/logger.js";
 import { c } from "../core/theme.js";
 import { keystoreAddress, unlockWallet } from "../core/unlock.js";
-import { importPrivateKey, type Wallet } from "../core/wallet.js";
+import { importPrivateKey, loadKeystore } from "../core/wallet.js";
 
 interface RegisterOpts {
   agentUri?: string;
@@ -67,6 +67,10 @@ come from the network the transaction was sent to.
 
 Registering with no --agent-uri is valid ERC-8004 (the no-argument register()).
 The agent exists and is owned, and its DID resolves with an empty service list.
+
+With --json, stdout is one JSON record per line: {"status":"sent"} the moment
+the transaction is accepted, then {"status":"registered"} (or "reverted") when
+the receipt arrives. The last line is the result; the first survives a timeout.
 `,
     )
     .action(async (opts: RegisterOpts) => {
@@ -81,6 +85,14 @@ async function runRegister(opts: RegisterOpts): Promise<void> {
       "Pass --agent-uri <uri> as well: the URI is what gets written on-chain.",
     );
   }
+  if (opts.cardFile && opts.cardCheck === false) {
+    // Silently honouring --no-card-check here would leave the user believing
+    // a card was checked that never was.
+    throw new ValidationError(
+      "--card-file and --no-card-check contradict each other",
+      "--card-file validates a card; --no-card-check skips validation. Drop one of them.",
+    );
+  }
 
   const config = await loadConfig();
   const network = resolveNetwork(config, {
@@ -90,11 +102,13 @@ async function runRegister(opts: RegisterOpts): Promise<void> {
   });
   const agentUri = opts.agentUri ?? "";
 
-  // A simulation needs an address, not a signature, so a dry run never asks for
-  // the passphrase — and resolving the address here, before any network call,
-  // means "you have no wallet" is reported without a round trip.
-  let wallet: Wallet | null = null;
-  let owner: Address | null = null;
+  // Everything up to the confirmation is a read, and a read needs an address,
+  // not a signature. So the passphrase is not asked for yet: the plan is
+  // printed and confirmed against the address that will sign, and the key is
+  // unlocked only once the user has said yes to what they saw. Resolving the
+  // address here, before any network call, also means "you have no wallet" is
+  // reported without a round trip.
+  let owner: Address;
   if (opts.dryRun) {
     owner = await dryRunAddress(opts.from);
   } else if (opts.from) {
@@ -102,6 +116,8 @@ async function runRegister(opts: RegisterOpts): Promise<void> {
       "--from only applies to --dry-run",
       "A real registration is signed by the wallet, so its address is not a choice.",
     );
+  } else {
+    owner = await signerAddress();
   }
 
   // Read the card before touching a key. A card that cannot be read is the most
@@ -118,11 +134,6 @@ async function runRegister(opts: RegisterOpts): Promise<void> {
 
   const publicClient = createPublicClient({ transport: http(network.rpcUrl) }) as PublicClient;
   await assertChainId(publicClient, network);
-
-  if (owner === null) {
-    wallet = await unlockWallet({ prompt: "Register an agent" });
-    owner = wallet.address;
-  }
 
   await warnIfUnfunded(publicClient, network, owner);
 
@@ -155,8 +166,16 @@ async function runRegister(opts: RegisterOpts): Promise<void> {
 
   if (!(await confirm(opts, network))) return;
 
-  // Unreachable with wallet === null: the dry-run branch returned above.
-  if (!wallet) throw new SquareError("No signer");
+  const wallet = await unlockWallet({ prompt: "Register an agent" });
+  if (getAddress(wallet.address) !== owner) {
+    // The plan above was simulated and shown for `owner`. A different signer
+    // here would register under an address the user never saw.
+    throw new SquareError(
+      `The unlocked wallet is ${wallet.address}, but the plan was for ${owner}`,
+      undefined,
+      "The keystore changed while this command was running. Run it again.",
+    );
+  }
 
   const walletClient = createWalletClient({
     account: wallet.account,
@@ -191,12 +210,42 @@ async function runRegister(opts: RegisterOpts): Promise<void> {
 
   log.blank();
   log.step(`Sent ${c.dim(hash)} — waiting for the receipt…`);
+  const explorer = explorerTxUrl(network, hash);
 
-  const receipt = await publicClient.waitForTransactionReceipt({
-    hash,
-    timeout: Math.max(config.timeoutMs, 60_000),
+  // The hash goes to the machine consumer now, before anything can go wrong
+  // with the wait. register() is permissionless and the transaction is out:
+  // a timeout below means "no receipt yet", not "no mint", and a --json caller
+  // that never saw the hash could not tell those apart, nor resolve the
+  // question later.
+  const emit = (record: Record<string, unknown>): void => {
+    if (opts.json) log.out(JSON.stringify(record));
+  };
+  emit({
+    status: "sent",
+    transactionHash: hash,
+    chainId: network.chainId,
+    registry: network.identityRegistry,
+    owner,
+    agentUri,
   });
+
+  const timeout = Math.max(config.timeoutMs, 60_000);
+  let receipt: Awaited<ReturnType<PublicClient["waitForTransactionReceipt"]>>;
+  try {
+    receipt = await publicClient.waitForTransactionReceipt({ hash, timeout });
+  } catch (err) {
+    const timedOut = (err as { name?: string }).name === "WaitForTransactionReceiptTimeoutError";
+    throw new NetworkError(
+      timedOut
+        ? `No receipt for ${hash} after ${Math.round(timeout / 1000)}s`
+        : `Could not fetch the receipt for ${hash}: ${err instanceof Error ? err.message : String(err)}`,
+      "The transaction may still be mined, and the mint with it. " +
+        `${explorer ? `Check ${explorer}` : "Look the hash up on the explorer"}: ` +
+        "a Transfer event there is the registration, and its token id is the agent id.",
+    );
+  }
   if (receipt.status !== "success") {
+    emit({ status: "reverted", transactionHash: hash, blockNumber: receipt.blockNumber.toString() });
     throw new NetworkError(
       `Transaction ${hash} reverted`,
       "Nothing was registered. The gas was still spent.",
@@ -218,24 +267,17 @@ async function runRegister(opts: RegisterOpts): Promise<void> {
     );
   }
 
-  if (opts.json) {
-    log.out(
-      JSON.stringify(
-        {
-          did,
-          agentId: agentId.toString(),
-          chainId: network.chainId,
-          registry: network.identityRegistry,
-          owner,
-          agentUri,
-          transactionHash: hash,
-          blockNumber: receipt.blockNumber.toString(),
-        },
-        null,
-        2,
-      ),
-    );
-  }
+  emit({
+    status: "registered",
+    did,
+    agentId: agentId.toString(),
+    chainId: network.chainId,
+    registry: network.identityRegistry,
+    owner,
+    agentUri,
+    transactionHash: hash,
+    blockNumber: receipt.blockNumber.toString(),
+  });
 
   log.blank();
   log.success("Agent registered.");
@@ -243,8 +285,7 @@ async function runRegister(opts: RegisterOpts): Promise<void> {
   log.field("agent id", agentId.toString());
   log.field("owner", owner);
   log.field("tx", hash);
-  const url = explorerTxUrl(network, hash);
-  if (url) log.field("explorer", url);
+  if (explorer) log.field("explorer", explorer);
   log.blank();
   log.raw(`  Next: ${c.cyan(`square resolve ${did}`)}`);
   log.blank();
@@ -270,6 +311,18 @@ async function assertChainId(client: PublicClient, network: Network): Promise<vo
       "Fix the endpoint before registering; a registration cannot be moved between chains.",
     );
   }
+}
+
+/**
+ * The address that will sign, without unlocking anything: SQUARE_PRIVATE_KEY,
+ * else the keystore on disk. The same precedence as `unlockWallet`, which is
+ * what lets the plan be simulated and confirmed before the passphrase is
+ * asked for, and what the check after unlocking relies on.
+ */
+async function signerAddress(): Promise<Address> {
+  const fromEnv = process.env.SQUARE_PRIVATE_KEY?.trim();
+  if (fromEnv) return importPrivateKey(fromEnv).address;
+  return getAddress((await loadKeystore()).address);
 }
 
 /**

@@ -95,19 +95,26 @@ describe.skipIf(!funded)("Arc testnet — acceptance: register, then resolve", (
         ["register", "--yes", "--json", "--agent-uri", "https://example.com/agent.json", "--no-card-check"],
         home,
       );
-      const out = JSON.parse(registered.stdout) as {
-        did: string;
-        agentId: string;
-        owner: string;
+      // One record per line: "sent" before the receipt is waited for, so the
+      // hash reaches a machine consumer even if the wait times out, then
+      // "registered" with the result.
+      const records = registered.stdout.trim().split("\n").map((line) => JSON.parse(line) as {
+        status: string;
+        did?: string;
+        agentId?: string;
+        owner?: string;
         transactionHash: string;
-      };
+      });
+      expect(records.map((r) => r.status)).toEqual(["sent", "registered"]);
+      const [sent, out] = records as [typeof records[number], typeof records[number]];
 
       expect(out.did).toBe(
         `did:aip:eip155:${ARC_TESTNET_ID}:${arc.identityRegistry}:${out.agentId}`,
       );
       expect(out.transactionHash).toMatch(/^0x[0-9a-f]{64}$/);
+      expect(sent.transactionHash).toBe(out.transactionHash);
 
-      const resolved = await runCli(["resolve", out.did, "--json"], home);
+      const resolved = await runCli(["resolve", out.did!, "--json"], home);
       const doc = JSON.parse(resolved.stdout) as {
         didDocument: { id: string; controller: string } | null;
         didResolutionMetadata: { error?: string };
