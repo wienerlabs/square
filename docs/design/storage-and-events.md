@@ -237,9 +237,37 @@ to run at midnight. It is a calendar day, not a rolling window — see
 
 ## Events
 
-Every event carries `jobId` as its first indexed topic so one filter per contract
-returns a job's whole history. `PolicyRegistry` is the exception, below: it is
-keyed by the institution and has no `jobId` to carry.
+Most events carry `jobId` as their first indexed topic, so one filter per contract
+returns most of a job's history. The exceptions are listed here rather than left
+for a reader to find, because two of them move money.
+
+**Two account-keyed money events a `jobId` filter cannot see:**
+
+| Event | Contract | Keyed by |
+|---|---|---|
+| `Withdrawn(address indexed account, address indexed to, uint256 amount)` | `SquareJob` | `account` |
+| `BondWithdrawn(address indexed account, address indexed to, uint256 amount)` | `Arbitration` | `account` |
+
+The pull-payment ledger and the dispute-bond ledger are keyed by the account
+being paid, not by the job the money came from, and neither event carries a
+`jobId` at all. So the moment a job's money leaves the contract is absent from
+that job's filter: an indexer built on `jobId` alone sees every credit and no
+debit. The reference reducer takes both through the account rather than the job
+(`services/indexer/src/reducer.ts`), and anything else reading these logs has to
+do the same.
+
+**Configuration and administration, which have no job to name:** `FeesUpdated`
+and `HookWhitelistUpdated` on `SquareJob`; `ArbitrationSet`,
+`WindowsConfigured` and `FinalizeGraceConfigured` on `KeeperEvaluator`;
+`ArbitersUpdated` and `BondParametersUpdated` on `Arbitration`;
+`ComplianceModuleUpdated` and `ReputationPolicyUpdated` on `SquareHook`; and the
+`Ownable2Step` pair below, which five of the six contracts inherit.
+`PolicyRegistry` is a case of its own, in its section further down: it is keyed
+by the institution throughout and has no `jobId` anywhere.
+
+Every event any of the six contracts declares appears in the tables below, and
+`packages/core/scripts/check-events-documented.mjs` fails the `contracts`
+workflow when one does not.
 
 ### SquareJob, normative (ERC-8183)
 
@@ -272,14 +300,18 @@ What the normative set does not carry and the indexer needs.
 | `SubmissionTimed(uint256 indexed jobId, uint48 submittedAt, uint48 expiredAt)` | `submit` | the timestamp the challenge window counts from, so the indexer does not fetch the block header |
 | `PayoutRouted(uint256 indexed jobId, address indexed payee, uint16 providerBps, uint256 providerShare, uint256 clientShare)` | `complete` | the routing decision |
 | `PlatformFeeAccrued(uint256 indexed jobId, address indexed treasury, uint256 amount)` | `complete` | |
-| `Withdrawn(address indexed account, address indexed to, uint256 amount)` | `withdraw`, `withdrawTo` | ledger debit |
+| `Withdrawn(address indexed account, address indexed to, uint256 amount)` | `withdraw`, `withdrawTo` | ledger debit; keyed by account, not by job |
 | `FeesUpdated(uint16 platformFeeBP, uint16 evaluatorFeeBP, address treasury)` | admin | |
+| `HookFailed(uint256 indexed jobId, address indexed hook, bytes4 selector, bytes reason)` | `complete`, `reject` | a hook call the kernel makes tolerantly reverted and settlement went ahead regardless. `selector` is the kernel function that was running, `reason` the revert data. A hook that fails on the settlement path is a signal, never a stuck job |
+| `PayoutUnresolvable(uint256 indexed jobId, address indexed hook)` | `claimRefund` | the job was Submitted and its hook resolves the payout, but the hook can no longer answer with a usable payee. Expiry proceeds and the client is refunded; without this branch the escrow would have no way out |
 
 ### KeeperEvaluator
 
 | Event | Carries |
 |---|---|
 | `WindowsConfigured(uint48 effectiveFrom, uint48 challengeWindow, uint48 disputeWindow)` | a new window entry |
+| `FinalizeGraceConfigured(uint48 finalizeGrace)` | the grace period belonging to the window entry `WindowsConfigured` just announced. Both are emitted together on every window push, from the constructor, `configureWindows` and `setFinalizeGrace`; two events because the grace was added after the standard triple and widening the first one would have moved its topic |
+| `ArbitrationSet(address indexed arbitration)` | which `Arbitration` contract this evaluator trusts. `setArbitration` refuses the zero address and refuses to run twice, so this fires exactly once in the contract's life and is the only record of the binding |
 | `Finalized(uint256 indexed jobId, address indexed keeper, uint256 keeperFee)` | optimistic completion, and who was paid for calling it |
 | `DisputeRaised(uint256 indexed jobId, address indexed disputer, uint48 disputedAt, uint48 challengeEnd)` | the window closes for finalize |
 | `DecisionApplied(uint256 indexed jobId, uint8 outcome, uint16 providerBps, address indexed keeper, uint256 keeperFee)` | an arbitration decision settled on the kernel |
@@ -295,7 +327,7 @@ What the normative set does not carry and the indexer needs.
 | `DecisionReached(uint256 indexed jobId, uint8 outcome, uint16 providerBps, bytes32 resolutionHash)` | threshold met |
 | `DisputeExpired(uint256 indexed jobId)` | no decision by `resolveBy`; degrades to the optimistic outcome |
 | `BondSettled(uint256 indexed jobId, address indexed to, uint64 amount)` | bond credited to whoever won it |
-| `BondWithdrawn(address indexed account, address indexed to, uint256 amount)` | |
+| `BondWithdrawn(address indexed account, address indexed to, uint256 amount)` | bond ledger debit; keyed by account, not by job |
 
 ### ClaimMarket
 
@@ -315,7 +347,10 @@ What the normative set does not carry and the indexer needs.
 | `ReputationWriteFailed(uint256 indexed jobId, uint256 indexed agentId, bytes reason)` | the registry reverted; settlement was not rolled back |
 | `ValidationRecorded(uint256 indexed jobId, bytes32 indexed requestHash, uint8 response)` | |
 | `ValidationWriteFailed(uint256 indexed jobId, bytes32 indexed requestHash, bytes reason)` | |
+| `ComplianceCheckFailed(uint256 indexed jobId, bytes reason)` | the installed compliance module reverted while `beforeAction` was checking the release. The revert data is carried, the `ComplianceChecked` that follows reports `verified = false`, and settlement continues |
+| `ReputationSkipped(uint256 indexed jobId, uint256 indexed agentId, bytes32 reason)` | positive feedback that was deliberately not written, with `reason` either `untrusted evaluator` or `budget below minimum`. No registry call was attempted, so this is neither `ReputationRecorded` nor `ReputationWriteFailed` |
 | `ComplianceModuleUpdated(address indexed module)` | |
+| `ReputationPolicyUpdated(address indexed trustedEvaluator, uint64 minReputationBudget)` | the constructor and every later policy change: whose jobs earn positive reputation, and the budget below which it is not written |
 
 ### PolicyRegistry
 
@@ -327,6 +362,17 @@ institution's compliance state filters on the poster address.
 | `PolicyCommitted(address indexed poster, bytes32 indexed commitment, uint128 dailyLimit, uint64 epoch)` | on every `setPolicy`, including a replacement; `epoch` is what distinguishes them |
 | `SpendRecorded(address indexed poster, uint64 indexed day, uint256 amount, uint256 spentAfter)` | on every accepted release; `day` is the UTC day index |
 | `SpenderUpdated(address indexed spender, bool allowed)` | owner only |
+
+### Ownership, on every owned contract
+
+`SquareJob`, `KeeperEvaluator`, `Arbitration`, `SquareHook` and `PolicyRegistry`
+inherit OpenZeppelin's `Ownable2Step`, so each of them declares the same pair.
+`ClaimMarket` has no owner and declares neither.
+
+| Event | Carries |
+|---|---|
+| `OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner)` | `transferOwnership` nominated a new owner; nothing has changed yet |
+| `OwnershipTransferred(address indexed previousOwner, address indexed newOwner)` | the nominee called `acceptOwnership`, or the constructor set the first owner. This is the transfer |
 
 A refused release emits nothing: `recordSpend` reverts, and the revert
 propagates out of `SquareJob.complete`, so there is no partial state to observe.
