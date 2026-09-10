@@ -223,3 +223,73 @@ describe('which error wins when two things are wrong', () => {
       .rejects.toThrow(/Missing required field\(s\): .*max_daily_spend.*policy_salt|.*policy_salt.*max_daily_spend/);
   });
 });
+
+// square#148. The window's hours had three upper bounds and none of them was
+// enforced: openapi.js declared 0..23, the circuit's Num2Bits(5) allowed 0..31,
+// and toFieldString allowed everything under the BN254 modulus. And nothing
+// anywhere refused start > end, which is a window no hour satisfies.
+describe('the window hours are bounded, and the window has a direction', () => {
+  it.each([
+    ['midnight to midnight', 0, 0],
+    ['a single hour', 12, 12],
+    ['the whole day', 0, 23],
+    ['a working day', 9, 17],
+  ])('accepts %s', async (_name, start, end) => {
+    const input = await build({
+      time_restrictions: [{ ...WINDOW, allowed_hours_start: start, allowed_hours_end: end }],
+    });
+    expect(input.time_start_hour_utc).toBe(String(start));
+    expect(input.time_end_hour_utc).toBe(String(end));
+  });
+
+  // 24..31 is the gap between the schema and the circuit. Both sides accepted
+  // it and neither is an hour: an end of 31 behaves like 23, and a start of 25
+  // empties the window so every payment under the policy is refused.
+  it.each([24, 25, 31])('rejects %i, which the circuit would have accepted', async (hour) => {
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_hours_start: hour }] }))
+      .rejects.toThrow('time_restrictions.allowed_hours_start: must be an hour of the day, 0 to 23');
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_hours_end: hour }] }))
+      .rejects.toThrow('time_restrictions.allowed_hours_end: must be an hour of the day, 0 to 23');
+  });
+
+  // 32 and above used to fail inside witness generation, where the caller got a
+  // constraint error rather than the name of the field they got wrong.
+  it.each([32, 99999, '1788356730'])('rejects %s by field name, not in the witness', async (hour) => {
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_hours_end: hour }] }))
+      .rejects.toThrow('time_restrictions.allowed_hours_end: must be an hour of the day, 0 to 23');
+  });
+
+  it('still rejects a non-integer hour by field name', async () => {
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_hours_start: 9.5 }] }))
+      .rejects.toThrow('time_restrictions.allowed_hours_start: must be a whole number');
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_hours_start: -1 }] }))
+      .rejects.toThrow(/allowed_hours_start/);
+  });
+
+  // The finding. 22:00 to 06:00 is an ordinary thing to want for an agent that
+  // works overnight; the circuit computes `hour >= start AND hour <= end`, so
+  // under it no hour of any day is inside the window and every payment the
+  // policy covers is refused with the same 'time_window' a genuine miss gets.
+  it.each([
+    ['an overnight window', 22, 6],
+    ['one hour backwards', 10, 9],
+    ['the widest wrap', 23, 0],
+  ])('rejects %s rather than accepting one nothing satisfies', async (_name, start, end) => {
+    await expect(build({
+      time_restrictions: [{ ...WINDOW, allowed_hours_start: start, allowed_hours_end: end }],
+    })).rejects.toThrow(/allowed_hours_start must not be later than allowed_hours_end/);
+  });
+
+  it('says why, so the caller learns the night window is not modelled', async () => {
+    await expect(build({
+      time_restrictions: [{ ...WINDOW, allowed_hours_start: 22, allowed_hours_end: 6 }],
+    })).rejects.toThrow(/window that crosses midnight is not modelled/);
+  });
+
+  // normalize.js exists so a policy value never reaches a log line or a response.
+  it('never echoes the hour it refused', async () => {
+    const secret = 99999;
+    await expect(build({ time_restrictions: [{ ...WINDOW, allowed_hours_end: secret }] }))
+      .rejects.toThrow(expect.not.stringContaining(String(secret)));
+  });
+});
