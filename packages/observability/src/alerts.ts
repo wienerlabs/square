@@ -7,7 +7,7 @@ export type AlertKind = "firing" | "resolved";
 export interface AlertSnapshot {
   oldestPendingAgeSeconds?: number;
   finalizePending?: number;
-  indexerLagBlocks?: number;
+  indexerLagBlocks?: number | undefined;
   proofAttempts?: number;
   proofFailures?: number;
   disputesOpen?: number;

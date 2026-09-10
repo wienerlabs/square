@@ -98,9 +98,17 @@ the cap is crossed. `timeoutMs` (default 10 s) covers connect, headers and body.
 ## Idempotency
 
 ```ts
-import { hashRequest, idempotencyMiddleware, idempotencyScope, postgresIdempotencyStore, withIdempotency } from "@squaresdk/hardening";
+import { pgDatabase } from "@squaresdk/data";
+import {
+  hashRequest,
+  idempotencyMiddleware,
+  idempotencyScope,
+  pathWithCanonicalQuery,
+  postgresIdempotencyStore,
+  withIdempotency,
+} from "@squaresdk/hardening";
 
-const store = postgresIdempotencyStore(pool);
+const store = postgresIdempotencyStore(pgDatabase(databaseUrl));
 
 app.use("/orders", idempotencyMiddleware(store, { scope: "orders", required: true, actorOf: (c) => c.get("actor") }));
 
@@ -108,13 +116,20 @@ const execute = withIdempotency(store, async ({ payout }) => runPayout(payout), 
 const outcome = await execute({
   scope: idempotencyScope("payouts", actor),
   key,
-  requestHash: hashRequest({ method, path, body, actor }),
+  requestHash: hashRequest({ method, path: pathWithCanonicalQuery(url), body, actor }),
   payout,
 });
 ```
 
 `hashRequest` hashes a canonical serialisation of method, path, body and actor (sorted keys, no whitespace), so
 `{a:1,b:2}` and `{b:2,a:1}` are the same request and the same key sent by a different actor is not.
+
+**The query string is canonicalised too, on the same rule as the body.** The middleware hashes
+`pathWithCanonicalQuery(c.req.url)`, which keeps the path exactly as sent and sorts the query parameters by name and
+then by value, so `?a=1&b=2` and `?b=2&a=1` are one request and a client that reorders its parameters on a retry
+replays instead of collecting a 409. `canonicalQuery` and `pathWithCanonicalQuery` are exported so a caller who builds
+its own fingerprint for `withIdempotency` can apply the same rule. The path itself is still hashed as sent, so
+`/orders/1` and `/orders/01` remain different requests.
 
 **The key space belongs to one caller, never to all of them.** The store is keyed by `(scope, key)`, and the scope the
 middleware writes is `idempotencyScope(options.scope, actor)`, so two tenants sending the same `Idempotency-Key` never
@@ -136,19 +151,32 @@ and then replay. Across processes the store decides: `putIfAbsent` is atomic, th
 caller receives the first writer's response. A handler that is not safe to run twice concurrently across processes
 should additionally take a per-key lock; the store interface deliberately does not hide that.
 
-The Postgres store expects `idempotency_keys(scope, key, request_hash bytea, status, response jsonb, created_at,
-expires_at)`. That table is created by `@squaresdk/data` migration `0002_hardening`, and the migration runner is the
-only thing that creates it: run `square-data migrate up` with `DATABASE_URL` set before the service starts. This
-package ships no `create table` of its own on purpose, because a second definition of the same table is how a schema
-drifts. The claim is a single `insert ... on conflict do update ... where expires_at <= now()`, so an expired row is
-reclaimed in place and a live row is never overwritten. `db` is duck-typed: anything with
-`query(text, params) => Promise<{ rows }>` works, which covers `pg` pools and clients directly.
+`postgresIdempotencyStore` takes a `Database` from `@squaresdk/data` (`pgDatabase(url)` in a service,
+`pgliteDatabase()` in a test) and holds no SQL of its own. Every statement it runs comes from the `idempotencyKeys`
+repository in `@squaresdk/data`, which is the one implementation of the `idempotency_keys` table: the table is created
+by migration `0002_hardening`, the claim and the reads live in the repository, and this package is the HTTP shape on
+top of them. This package ships no `create table` and no query text on purpose, because a second definition of the
+same table, or of the same claim, is how a schema and its semantics drift apart. Run `square-data migrate up` with
+`DATABASE_URL` set before the service starts.
+
+The claim is a single `insert ... on conflict do update ... where expires_at <= now()`, so an expired row is reclaimed
+in place and a live row is never overwritten. If the row is claimed by someone else and then expires before this
+process can read it back, the repository retries a bounded number of times and then throws rather than looping.
+
+**The lifetime is measured on one clock, the database's.** `ttlMs` is sent as a number and `expires_at` is computed in
+SQL as `now() + ($n::double precision * interval '1 millisecond')`, so the side that writes the expiry and the two
+sides that decide it has passed (`where expires_at <= now()` on the claim, `where expires_at > now()` on the read) all
+read the same clock. A service whose own clock has drifted still gets exactly the TTL it asked for, and a drift larger
+than the TTL can no longer write a row that is expired the moment it is stored. `StoreClockOptions.now` remains on
+`memoryIdempotencyStore`, where both sides are that same injected clock.
 
 Expired rows are removed by `square-data sweep`, not by this package.
 
-The Hono middleware reads `Idempotency-Key` (configurable), applies to `POST`, `PUT`, `PATCH` and `DELETE`, hashes the
-parsed JSON body (or the raw text), marks replays with `Idempotent-Replayed: true`, and returns 400 when `required` is
-set and the header is missing.
+The Hono middleware reads `Idempotency-Key` (configurable `header`), applies to `POST`, `PUT`, `PATCH` and `DELETE`
+(configurable `methods`), hashes the parsed JSON body (or the raw text), marks replays with `Idempotent-Replayed: true`,
+and returns 400 when `required` is set and the header is missing. It takes `ttlMs` and `shouldStore` and passes both to
+`withIdempotency`, so a route that should not remember a 4xx can say
+`shouldStore: (response) => response.status < 400` instead of reaching for the lower layer.
 
 ## Rate limiting
 

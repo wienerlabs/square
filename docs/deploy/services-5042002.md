@@ -22,6 +22,11 @@ GET /health
 `GET /jobs/finalizable` listed jobs 8, 9 and 11 (0.5 USDC budgets from the
 ERC-4337 measurement, windows closed) and later job 12.
 
+That `/health` body is the run as it happened. The lag check has changed shape
+since: it is critical, its detail carries the limit, and before both heads are
+sampled it says it has not measured yet rather than subtracting a head nobody
+read.
+
 ## Keeper
 
 Cranker key `0xcc55417B17a31163325cB83Cf6900C98BE595e7A`, poll every 15 s,
@@ -62,7 +67,24 @@ take and did not; a deployment that wants those small jobs finalized lowers
 export CHAIN_ID=5042002 RPC_URL=https://rpc.testnet.arc.io DATABASE_URL=postgres://localhost:5432/square_testnet
 export SQUARE_DEPLOYMENT_FILE=contracts/deployments/5042002.json
 (cd packages/data && node dist/cli.js migrate up)
-(cd services/indexer && START_BLOCK=60823791 PORT=3010 node dist/main.js &)
+(cd services/indexer && START_BLOCK=60823791 PORT=3010 CORS_ORIGINS=https://square-wienerlabs.vercel.app node dist/main.js &)
 (cd services/keeper && KEEPER_PRIVATE_KEY=0x... PORT=3011 node dist/main.js &)
 curl -s localhost:3010/status; curl -s localhost:3011/actions
+curl -H "Origin: https://square-wienerlabs.vercel.app" -i -s localhost:3010/status
 ```
+
+The second curl is the check the first one cannot make: `curl -s` sends no
+origin and enforces nothing, so it passes whether or not the browser would be
+allowed to read the answer. What to look for in its headers, which is the shape
+this build produces and not output recorded from the run above:
+
+```
+HTTP/1.1 200 OK
+access-control-allow-origin: https://square-wienerlabs.vercel.app
+vary: Origin
+content-type: application/json
+```
+
+An origin outside `CORS_ORIGINS` still gets `200` and the full body, with no
+`access-control-allow-origin` header. That is the case a browser turns into
+`TypeError: Failed to fetch` while the indexer's log shows a served request.
