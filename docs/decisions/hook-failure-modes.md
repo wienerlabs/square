@@ -99,7 +99,10 @@ settles the bond before the rejection is applied, and it was removed.
   `test_claimRefund_opensWhenTheResolverIsDead`,
   `test_claimRefund_staysClosedWhileTheResolverAnswers`,
   `test_hook_revertBubblesTheHooksOwnErrorBeforeSettlement`.
-- `SquareHook.t.sol`: `test_complete_moduleRejectionRecordsAFailedValidationAndStillReleases`,
+- `SquareHook.t.sol`: `test_complete_moduleRejectionSettlesTheJobAndPaysTheProviderNothing`
+  (renamed by [#27][i27] when the refusal stopped being advisory — it still
+  asserts the no-lock half this decision is about, and now also asserts the
+  split this decision pointed #27 at),
   `test_gasLimit_aRunawayComplianceCheckCannotBlockSettlement`.
 - `Arbitration.t.sol`: `test_vote_splitNeedsAPayoutResolver`,
   `test_settleBond_returnsTheBondWhenTheJobExpiresUnderADeadResolver`.

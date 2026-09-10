@@ -87,14 +87,54 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         _setReputationPolicy(trustedEvaluator_, minReputationBudget_);
     }
 
+    /// @notice The payee and the split the kernel will pay.
+    /// @dev This is where a compliance verdict becomes money, and the only
+    ///      channel the kernel honours. `SquareJob.complete` calls this
+    ///      strictly and before anything else, then calls `beforeAction`
+    ///      tolerantly, so a module that wants to stop a release has to do it
+    ///      here: `providerBps = 0` returns the whole net to the client.
+    ///
+    ///      Reverting instead would bubble through `_resolvePayout` and leave
+    ///      the escrow with no exit at all, which is the lock #100 removed.
+    ///      `previewRelease` is specified never to revert, and the call is
+    ///      wrapped anyway: an unusable module reads as "not verified" rather
+    ///      than as a stuck job. See docs/decisions/hook-failure-modes.md.
+    ///
+    ///      With no module installed nothing changes and the split arrives from
+    ///      `optParams` as before.
     function resolvePayout(uint256 jobId, bytes calldata data)
         external
         view
         returns (address payee, uint16 providerBps)
     {
         (, bytes memory optParams) = abi.decode(data, (bytes32, bytes));
-        (providerBps,) = _decodeComplete(optParams);
+        bytes memory proof;
+        (providerBps, proof) = _decodeComplete(optParams);
         payee = _claimMarket.payeeOf(jobId);
+
+        if (address(_complianceModule) == address(0)) return (payee, providerBps);
+        if (!_previewsCompliant(jobId, payee, providerBps, proof)) providerBps = 0;
+    }
+
+    /// @dev Its own frame: the resolver above already holds the payee, the split
+    ///      and the proof, and the module's six arguments do not fit beside them.
+    function _previewsCompliant(uint256 jobId, address payee, uint16 providerBps, bytes memory proof)
+        private
+        view
+        returns (bool)
+    {
+        try _complianceModule.previewRelease(
+            jobId,
+            payee,
+            (_squareJob.netPayout(jobId) * providerBps) / FULL_BPS,
+            _squareJob.paymentToken(),
+            _squareJob.getJobRecord(jobId).client,
+            proof
+        ) returns (bool verified) {
+            return verified;
+        } catch {
+            return false;
+        }
     }
 
     function beforeAction(uint256 jobId, bytes4 selector, bytes calldata data) external onlyKernel {

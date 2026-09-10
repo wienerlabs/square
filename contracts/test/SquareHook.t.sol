@@ -128,7 +128,18 @@ contract SquareHookTest is BaseTest {
         assertEq(tag, "square.compliance");
     }
 
-    function test_complete_moduleRejectionRecordsAFailedValidationAndStillReleases() public {
+    /// A refused check settles the job and pays the provider nothing.
+    ///
+    /// Both halves matter and they came from different issues. #100 established
+    /// that the job must still settle: a module that vetoes by reverting left
+    /// the escrow with no exit once #90 closed the refund, so the kernel stopped
+    /// letting a hook veto. #27 then had to make the refusal mean something, and
+    /// the only channel the kernel honours is the split — so the whole net goes
+    /// back to the client and the provider is not paid.
+    ///
+    /// Before #27 this asserted `withdrawable(provider) == netOf(BUDGET)`: the
+    /// module's verdict was advisory and money moved regardless.
+    function test_complete_moduleRejectionSettlesTheJobAndPaysTheProviderNothing() public {
         vm.prank(owner);
         hook.setComplianceModule(address(compliance));
         compliance.setRejectAll(true);
@@ -143,7 +154,8 @@ contract SquareHookTest is BaseTest {
         emit SquareHook.ComplianceChecked(jobId, provider, netOf(BUDGET), false);
         keeper.finalize(jobId, "");
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed), "a rejected check is a signal, not a lock");
-        assertEq(kernel.withdrawable(provider), netOf(BUDGET));
+        assertEq(kernel.withdrawable(provider), 0, "a refused release pays the provider nothing");
+        assertEq(kernel.withdrawable(client), netOf(BUDGET), "and returns the whole net to the client");
         (address responder, uint8 response,) = validation.responses(REQUEST_HASH);
         assertEq(responder, address(hook));
         assertEq(response, 0, "the failed check is on the record");
