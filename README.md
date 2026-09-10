@@ -88,6 +88,7 @@ Design notes, each the record of a decision:
 - [A hook informs, it never vetoes, on the way out of escrow](docs/decisions/hook-failure-modes.md)
 - [A lapsed dispute returns the bond](docs/decisions/lapsed-bond.md)
 - [Gas, measured](docs/deploy/gas.md)
+- [End to end: a policy, a proof built from it, and Arc accepting it](docs/deploy/end-to-end-5042002.md)
 
 ## Provenance
 
