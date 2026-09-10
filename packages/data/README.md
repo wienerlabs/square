@@ -113,6 +113,16 @@ the migration, the object, and the two ways out (drop the object, or record the 
 as applied with `insert into schema_migrations (name) values ('NNNN_name')`), rather than
 letting a raw `relation already exists` stall the deploy.
 
+That error is for an object something outside the runner created. Two runners started at
+once are not that case, and they do not raise it. Each migration runs in its own
+transaction that first takes `lock table schema_migrations in access exclusive mode`, so
+the second runner waits; when it gets the lock it re-reads `schema_migrations` for the
+migration it is about to apply and, if the first runner recorded it in the meantime,
+skips it and moves on. Both runners return, the migration is applied once, and only the
+runner that actually applied it lists the name in `applied`. Deploy pipelines that can
+fire the same step twice, or roll out two regions in parallel, need no coordination
+beyond the database.
+
 | Migration | Tables |
 |---|---|
 | `0001_indexer` | `indexer_checkpoints`, `job_events`, `jobs`, `disputes`, `claim_listings`, `ledger_balances`, `arbiter_sets` |

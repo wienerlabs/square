@@ -91,9 +91,23 @@ const app = createGatewayApp({
 serve({ fetch: app.fetch, port: 8402 });
 ```
 
-`GET /health` is free. Everything in `routes` is paid. Route patterns follow the
-x402 core syntax: `"GET /quote"`, `"/quote"` (any verb), `"GET /jobs/:id"`,
-`"GET /files/*"`.
+`GET /health` is free. Everything in `routes` is paid.
+
+### What a route key looks like
+
+A key is an optional verb, whitespace, and a path: `"GET /quote"`, `"/quote"` (any
+verb), `"GET /jobs/:id"`, `"GET /files/*"`. Parameters may be written either as Hono's
+`:id` or as Next's `[id]`; `"GET /jobs/[id]"` and `"GET /jobs/:id"` configure the same
+route.
+
+`createGatewayApp` serves each key to two consumers that must agree on it, or a paid
+endpoint answers `200` with no payment: the `@x402/hono` `paymentMiddleware`, which
+decides whether a request needs paying, and Hono's router, which decides which handler
+runs. Both receive the output of **one** `parseRoutePattern` call, so they cannot drift:
+`parseRoutePattern` uppercases the verb and rewrites `[id]` to `:id`, `routePatternKey`
+puts that back together, and the canonical form both sides see is the colon one,
+`"GET /jobs/:id"`. Whatever dialect you write, that is the key the payment side is
+configured with and the path Hono registers.
 
 The facilitator key pays gas (native USDC on Arc) and does nothing else; the
 payer's USDC moves straight from the payer to `payTo` inside
@@ -196,22 +210,51 @@ failed would be a lie. `reconcileSettlements` closes it later:
 
 ```ts
 import { createPublicClient, http } from "viem";
-import { arcTestnet, postgresReplayStore, receiptStatusFromClient, reconcileSettlements } from "@squaresdk/x402";
+import {
+  arcTestnet,
+  blockTimestampFromClient,
+  postgresReplayStore,
+  receiptStatusFromClient,
+  reconcileSettlements,
+} from "@squaresdk/x402";
 
 const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
 
 const report = await reconcileSettlements({
   store: postgresReplayStore(db),
   receiptStatusOf: receiptStatusFromClient(publicClient),
+  now: blockTimestampFromClient(publicClient),
   logger: console,
 });
 ```
 
-It reads the rows that are still `accepted` and, for each one: a successful receipt
-moves it to `settled` with that hash, a reverted receipt moves it to `failed` with
-`settlement_reverted`, and a receipt that cannot be found leaves it alone while the
-authorization is still valid. Once `validBefore` has passed the authorization can never
-be settled on chain again, so the row moves to `failed` with `authorization_expired`.
+It reads the rows that are still `accepted`, and the first question it asks each one is
+whether a transaction was ever broadcast, because that decides what an unreadable
+receipt means.
+
+| Row | Receipt | Outcome | Reason |
+|---|---|---|---|
+| has a `txHash` | `success` | `settled` with that hash | |
+| has a `txHash` | `reverted` | `failed` | `settlement_reverted` |
+| has a `txHash` | cannot be read | left `accepted`, counted `unresolved` | `settlement_receipt_unreadable` |
+| no `txHash`, `validBefore` passed | not asked | `failed` | `authorization_expired` |
+| no `txHash`, still valid | not asked | left `accepted`, counted `unresolved` | `awaiting_settlement` |
+
+`authorization_expired` is written only for a row with no transaction hash. A transfer
+that was never sent can never be sent once `validBefore` passes, so that row is a
+genuine failure. A row that does carry a hash and whose receipt cannot be read is not:
+the transaction may have been mined before `validBefore` with only this node unable to
+see it, and `failed` is terminal, since `markSettled` and `markFailed` both require the
+row to be `accepted` and `listUnsettled` returns only `accepted` rows. Writing it would
+close a settled payment as failed and no later pass would look at it again. The row
+keeps its hash and its `accepted` status instead, the unresolved reason says why, and
+the next pass settles it as soon as the node catches up.
+
+`now` defaults to the local wall clock. `blockTimestampFromClient` reads the latest
+block timestamp instead, which is the clock the token contract actually compares
+`validBefore` against, and is what a scheduled reconciler with a public client should
+pass. The clock is read once per pass, not once per row.
+
 It is idempotent and safe to run on a schedule beside `square-data sweep`; run it before
 that sweep, which drops rows 30 days after `validBefore`.
 
