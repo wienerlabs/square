@@ -62,6 +62,38 @@ export function toFieldString(value, label) {
   return text;
 }
 
+// The operator's policy secret, as the decimal string the circuit input expects.
+//
+// Everything the commitment hides rests on this one value: the eight leaf salts
+// derive from it, so a caller who can guess it can derive them all and open any
+// leaf by trying values against it. Two of the eight are round USDC ceilings, so
+// the dictionary is small. Measured on the values the service used to accept
+// (square#178), recovering a 25 USDC per-transaction ceiling:
+//
+//   policy_salt "0"          50 tries, 10 ms
+//   the schema's own example 24 050 tries, 3.5 s
+//   a random salt            not found in 32 000 tries
+//
+// The floor is 2^128. It is a magnitude check and not an entropy check, and the
+// difference matters: it rejects 0, 1 and every small constant, and it passes
+// every value randomPolicySalt() can produce -- a 32-byte draw lands below 2^128
+// with probability about 2^-126 -- but it cannot tell a random 200-bit number
+// from one somebody typed. That part is the caller's, and openapi.js says so
+// where the caller will read it.
+export const MIN_POLICY_SALT = 1n << 128n;
+
+export function toPolicySaltString(value, label) {
+  const text = toFieldString(value, label);
+  if (BigInt(text) < MIN_POLICY_SALT) {
+    throw new Error(
+      `${label}: must be at least 2^128. It is the secret every leaf salt derives `
+      + 'from, so a guessable one opens the committed policy; draw 32 random bytes '
+      + 'and reduce them into the field.',
+    );
+  }
+  return text;
+}
+
 // An hour of the day, as the decimal string the circuit input expects.
 //
 // The bound is here rather than at the three places that had one. Before

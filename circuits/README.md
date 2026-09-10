@@ -145,7 +145,26 @@ those apply here: one level, position inside the leaf, and a leaf is a
 | 6 | the timestamp falls inside the policy's window | `time_active`, the weekday bitmask, the start and end hours |
 
 Everything in the right-hand column stays private. An auditor learns that the
-checks ran, not what the operator's limits or lists were.
+checks ran, not what the operator's limits or lists were — **on the condition
+that `policy_salt` is a secret nobody can guess.** All eight leaf salts derive
+from that one value, so a caller who can guess it derives them all and opens any
+leaf by trying values against it. Two of the eight are the per-transaction and
+daily ceilings, which are round USDC amounts and make a very short dictionary.
+Measured for [#178][i178], recovering a 25 USDC ceiling:
+
+| `policy_salt` | outcome |
+|---|---|
+| `"0"` | recovered in 50 tries, 10 ms |
+| the schema's own former example, sixty-one sevens | recovered in 24 050 tries, 3.5 s |
+| a value from `randomPolicySalt()` | not recovered in 32 000 tries |
+
+The service now refuses anything below 2^128, which is a magnitude check rather
+than an entropy one: it catches 0, 1 and every small constant, and it cannot
+catch a large number somebody chose by hand. The randomness is the operator's to
+get right, and `services/prover/src/openapi.js` gives the derivation — 32 random
+bytes reduced into the field — so a client needs no server code to do it.
+
+[i178]: https://github.com/wienerlabs/square/issues/178
 
 **Rule 6's window cannot cross midnight.** The circuit computes
 `hour >= start AND hour <= end`, which is empty whenever `start > end`, so a

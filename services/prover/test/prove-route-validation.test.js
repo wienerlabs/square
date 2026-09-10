@@ -111,6 +111,24 @@ describe('POST /prove refuses a bad request before proving', () => {
     expect(response.body.error).toContain('timezone');
   });
 
+  // square#178: "0" reached the commitment and made all eight leaf salts
+  // constants anybody can compute.
+  it.each(['0', '1'])('answers 400 for a policy_salt of %s', async (salt) => {
+    const response = await post({ ...VALID, policy_salt: salt });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('policy_salt');
+    expect(response.body.error).toContain('2^128');
+  });
+
+  // normalize.js exists so a policy value never reaches a log line or a
+  // response, and the secret of them all is no exception.
+  it('never echoes the salt it refused', async () => {
+    const weak = '1234567890123456789';
+    const response = await post({ ...VALID, policy_salt: weak });
+    expect(response.status).toBe(400);
+    expect(response.body.error).not.toContain(weak);
+  });
+
   it('answers 400 for a missing required field', async () => {
     const { policy_salt: _dropped, ...withoutSalt } = VALID;
     const response = await post(withoutSalt);
