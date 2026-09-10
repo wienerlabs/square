@@ -12,6 +12,7 @@ import {
   webhookNotifier,
 } from "@squaresdk/observability";
 import { createApi } from "./api.js";
+import { indexerChecks } from "./checks.js";
 import { configFromEnv } from "./config.js";
 import { Indexer } from "./sync.js";
 
@@ -41,21 +42,15 @@ async function main(): Promise<void> {
   const health = createHealth({
     service: "square-indexer",
     version: config.version,
-    checks: {
-      database: { check: async () => ({ ok: (await db.query("select 1")).rowCount === 1 }), critical: true },
-      rpc: { check: async () => ({ ok: (await publicClient.getChainId()) === config.chainId }), critical: true },
-      lag: {
-        check: () => {
-          const lag = indexer.chainHead - (indexer.lastIndexedBlock ?? 0n);
-          return { ok: lag <= config.maxLagBlocks, detail: `${lag} blocks behind, limit ${config.maxLagBlocks}` };
-        },
-        critical: true,
-      },
-      quarantine: () => {
-        const count = indexer.quarantinedEvents.length;
-        return { ok: count === 0, detail: count === 0 ? "no event set aside" : `${count} events set aside, see /quarantine` };
-      },
-    },
+    checks: indexerChecks({
+      db,
+      publicClient,
+      chainId: config.chainId,
+      indexer,
+      maxLagBlocks: config.maxLagBlocks,
+      maxSyncAgeMs: config.maxSyncAgeMs,
+      startupGraceMs: config.startupGraceMs,
+    }),
   });
 
   const alerting = createAlerting({
@@ -76,7 +71,7 @@ async function main(): Promise<void> {
     });
   }, config.alertIntervalMs);
 
-  const app = createApi({ db, chainId: config.chainId, indexer, health, metrics });
+  const app = createApi({ db, chainId: config.chainId, indexer, health, metrics, corsOrigins: config.corsOrigins });
   const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
     logger.info("indexer.listening", { endpoint: `http://localhost:${info.port}` });
   });
