@@ -1,4 +1,4 @@
-import { TaskState, isTerminalTaskState } from "./states.js";
+import { TaskState, isDisposableTaskState, isTerminalTaskState } from "./states.js";
 
 /**
  * The task lifecycle, as a pure state machine.
@@ -38,24 +38,40 @@ export interface TaskRecord {
 }
 
 export class TaskTransitionError extends Error {
+  /**
+   * @param from The state the task was in, or `null` when there was no such
+   *   task. A missing task has no state, and reporting one for it would send a
+   *   caller looking for a transition rule that was never the problem.
+   */
   constructor(
     readonly taskId: string,
-    readonly from: TaskState,
+    readonly from: TaskState | null,
     readonly attempted: string,
   ) {
-    super(`cannot ${attempted} task ${taskId} in state ${from}`);
+    super(
+      from === null
+        ? `cannot ${attempted}: no such task ${taskId}`
+        : `cannot ${attempted} task ${taskId} in state ${from}`,
+    );
     this.name = "TaskTransitionError";
   }
 }
 
-export type TaskListener = (task: TaskRecord, previous: TaskState) => void;
+/**
+ * `previous` is `null` when the task was just created. A creation has no
+ * state before it, and a listener that persists records needs to tell one
+ * from a transition without comparing `previous` to `task.state`.
+ */
+export type TaskListener = (task: TaskRecord, previous: TaskState | null) => void;
 
 /**
  * Holds tasks for the lifetime of whoever constructs it.
  *
  * Explicitly not a singleton and explicitly not persistent. A provider process
  * keeps one of these; a caller that needs tasks to survive a restart writes
- * them somewhere itself, from the listener.
+ * them somewhere itself, from the listener. The listener sees the record
+ * complete: `deliverable` is set when it hears DELIVERED and `reason` when it
+ * hears FAILED, so serialising at that moment loses nothing.
  */
 export class TaskMachine {
   private readonly tasks = new Map<string, TaskRecord>();
@@ -67,7 +83,7 @@ export class TaskMachine {
     return () => this.listeners.delete(listener);
   }
 
-  private emit(task: TaskRecord, previous: TaskState): void {
+  private emit(task: TaskRecord, previous: TaskState | null): void {
     for (const listener of this.listeners) {
       try {
         listener(task, previous);
@@ -77,13 +93,25 @@ export class TaskMachine {
     }
   }
 
-  private transition(taskId: string, from: readonly TaskState[], to: TaskState, attempted: string): TaskRecord {
+  /**
+   * `apply` writes whatever the new state carries, before listeners hear
+   * about it. Writing after `transition` returned would mean the listener
+   * sees DELIVERED with no deliverable, which is the field it is there for.
+   */
+  private transition(
+    taskId: string,
+    from: readonly TaskState[],
+    to: TaskState,
+    attempted: string,
+    apply?: (task: TaskRecord) => void,
+  ): TaskRecord {
     const task = this.tasks.get(taskId);
-    if (!task) throw new TaskTransitionError(taskId, TaskState.Submitted, `${attempted} (no such task)`);
+    if (!task) throw new TaskTransitionError(taskId, null, attempted);
     if (!from.includes(task.state)) throw new TaskTransitionError(taskId, task.state, attempted);
     const previous = task.state;
     task.state = to;
     task.updatedAt = new Date().toISOString();
+    apply?.(task);
     this.emit(task, previous);
     return task;
   }
@@ -95,13 +123,14 @@ export class TaskMachine {
     callerDid: string;
     jobId: string;
   }): TaskRecord {
-    if (this.tasks.has(params.id)) {
-      throw new TaskTransitionError(params.id, TaskState.Submitted, "create (id already used)");
+    const existing = this.tasks.get(params.id);
+    if (existing) {
+      throw new TaskTransitionError(params.id, existing.state, "create (id already used)");
     }
     const now = new Date().toISOString();
     const task: TaskRecord = { ...params, state: TaskState.Submitted, createdAt: now, updatedAt: now };
     this.tasks.set(task.id, task);
-    this.emit(task, TaskState.Submitted);
+    this.emit(task, null);
     return task;
   }
 
@@ -118,20 +147,21 @@ export class TaskMachine {
    */
   deliver(taskId: string, deliverable: string): TaskRecord {
     if (!deliverable) throw new TaskTransitionError(taskId, TaskState.Working, "deliver (empty deliverable)");
-    const task = this.transition(taskId, [TaskState.Working], TaskState.Delivered, "deliver");
-    task.deliverable = deliverable;
-    return task;
+    return this.transition(taskId, [TaskState.Working], TaskState.Delivered, "deliver", (task) => {
+      task.deliverable = deliverable;
+    });
   }
 
   fail(taskId: string, reason: string): TaskRecord {
-    const task = this.transition(
+    return this.transition(
       taskId,
       [TaskState.Submitted, TaskState.Working],
       TaskState.Failed,
       "fail",
+      (task) => {
+        task.reason = reason;
+      },
     );
-    task.reason = reason;
-    return task;
   }
 
   cancel(taskId: string): TaskRecord {
@@ -147,7 +177,29 @@ export class TaskMachine {
   }
 
   /**
-   * Drop tasks that reached a terminal state before `before`.
+   * Drop the record of a task the host is finished with.
+   *
+   * The only way a DELIVERED task leaves the machine. `sweep` will not take
+   * it, because the provider still owes the chain a `submit` for it and the
+   * deliverable lives nowhere else; the host, which made that call, is the
+   * one party that knows when the record has served its purpose. A task that
+   * is still live is refused: a handler that is running would then deliver
+   * into nothing.
+   */
+  forget(taskId: string): TaskRecord {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new TaskTransitionError(taskId, null, "forget");
+    if (!isTerminalTaskState(task.state)) throw new TaskTransitionError(taskId, task.state, "forget");
+    this.tasks.delete(taskId);
+    return task;
+  }
+
+  /**
+   * Drop tasks with nothing left to do that went quiet before `before`:
+   * FAILED and CANCELLED. Not DELIVERED, which is terminal in the sense that
+   * it will not change again and not in the sense that the work is over; see
+   * `isDisposableTaskState`. A host drops a DELIVERED task with `forget`,
+   * once it has submitted.
    *
    * The predecessor scheduled a setTimeout per task, which keeps a timer alive
    * per task for an hour and never fires if the process restarts. Sweeping is
@@ -156,7 +208,7 @@ export class TaskMachine {
   sweep(before: Date): number {
     let removed = 0;
     for (const [id, task] of this.tasks) {
-      if (isTerminalTaskState(task.state) && new Date(task.updatedAt) < before) {
+      if (isDisposableTaskState(task.state) && new Date(task.updatedAt) < before) {
         this.tasks.delete(id);
         removed += 1;
       }

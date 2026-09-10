@@ -7,6 +7,7 @@ import {
   STATE_MAPPING,
   TaskState,
   expectedJobStatus,
+  isDisposableTaskState,
   isTerminalJobStatus,
   isTerminalTaskState,
   providerMayCall,
@@ -106,6 +107,15 @@ describe("job status", () => {
     expect(isTerminalTaskState(TaskState.Cancelled)).toBe(true);
     expect(isTerminalTaskState(TaskState.Submitted)).toBe(false);
     expect(isTerminalTaskState(TaskState.Working)).toBe(false);
+  });
+
+  it("separates 'will not change' from 'can be dropped' at exactly DELIVERED", () => {
+    // Terminal and disposable agree everywhere except the one state that still
+    // carries a provider action in STATE_MAPPING.
+    for (const state of Object.values(TaskState)) {
+      const expected = isTerminalTaskState(state) && state !== TaskState.Delivered;
+      expect(isDisposableTaskState(state), state).toBe(expected);
+    }
   });
 
   it("keeps submit out of the evaluator's list and complete out of the provider's", () => {

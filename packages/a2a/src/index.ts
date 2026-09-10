@@ -10,6 +10,7 @@ export {
   providerMayCall,
   expectedJobStatus,
   isTerminalTaskState,
+  isDisposableTaskState,
   isTerminalJobStatus,
 } from "./states.js";
 export type { JobAction, StateMapping } from "./states.js";
