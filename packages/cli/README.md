@@ -133,6 +133,25 @@ A version-1 keystore from the `aip` CLI is refused by name rather than misread.
 The wrapper is byte-identical, so it parses cleanly, but it holds an Ed25519
 Solana keypair that cannot sign anything on Arc.
 
+The schema is as tight as the format: a 12-byte IV, a 16-byte tag, a 32-byte
+salt and ciphertext, `keyLen` 32, and an scrypt `N` that is a power of two
+between 2^14 and 2^18. A file outside that is malformed and says so through the
+same door as a file that is not JSON, rather than reaching Node's crypto and
+coming back in its words with exit code 1.
+
+Importing an existing key is `square login --import-file <path>`; the shell's
+`<(…)` makes a path out of a command without touching the disk. There is no
+`--import-key <hex>`: a key on the command line is a key in the process table
+and in the shell history, the same exposure `SQUARE_PRIVATE_KEY` warns about,
+and the flag was the one the v1-keystore error used to point people at. stdin
+is not an option either, because the passphrase prompt reads from it.
+
+`login` will not replace a keystore it cannot read, `--force` or not: the
+replacement is a rename, which needs the directory and not the file, so an
+unreadable keystore would otherwise be replaced unseen. `logout` says so when it
+finds a keystore it cannot delete. Only a missing file counts as "no keystore";
+a file that is there but cannot be looked at is an error, not an absence.
+
 For unattended use, `SQUARE_PRIVATE_KEY` bypasses the keystore. It is announced
 on stderr every time, because a key in an environment variable is a key in the
 process table.

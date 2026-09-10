@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import {
   KeystoreSchema,
+  assertKeystoreReplaceable,
   decryptKeystore,
   deleteKeystore,
   encryptKeystore,
@@ -106,6 +107,45 @@ describe("encryptKeystore / decryptKeystore", () => {
     expect(keystore.curve).toBe("secp256k1");
     expect(keystore.algorithm).toBe("aes-256-gcm");
     expect(keystore.kdf.N).toBe(2 ** 17);
+  }, SLOW);
+
+  it("holds the schema to what the format actually is", async () => {
+    // Every one of these used to parse ("positive integer", "string") and then
+    // reach Node's crypto, which reported it in its own words with exit code 1.
+    const keystore = await encryptKeystore(generateWallet(), "a-decent-passphrase");
+    const b64 = (n: number) => Buffer.alloc(n, 1).toString("base64");
+    const bad: Array<[string, Record<string, unknown>]> = [
+      ["one-byte authTag", { authTag: "AA==" }],
+      ["15-byte authTag", { authTag: b64(15) }],
+      ["16-byte iv", { iv: b64(16) }],
+      ["31-byte ciphertext", { ciphertext: b64(31) }],
+      ["16-byte salt", { kdf: { ...keystore.kdf, salt: b64(16) } }],
+      ["not base64", { iv: "not*base64!!" }],
+      ["N not a power of two", { kdf: { ...keystore.kdf, N: 100_000 } }],
+      ["N too small", { kdf: { ...keystore.kdf, N: 2 ** 10 } }],
+      ["N too large", { kdf: { ...keystore.kdf, N: 2 ** 22 } }],
+      ["keyLen 16", { kdf: { ...keystore.kdf, keyLen: 16 } }],
+      ["r 0", { kdf: { ...keystore.kdf, r: 0 } }],
+    ];
+    for (const [label, patch] of bad) {
+      expect(KeystoreSchema.safeParse({ ...keystore, ...patch }).success, label).toBe(false);
+    }
+  }, SLOW);
+
+  it("answers a bad parameter with the keystore's own error, not Node's", async () => {
+    // The schema stops a file; a caller that builds the object itself still
+    // gets WalletError and its exit code, because everything the file feeds
+    // into crypto is inside the same try as the decryption.
+    const keystore = await encryptKeystore(generateWallet(), "a-decent-passphrase");
+    const oneByteTag = { ...keystore, authTag: "AA==" };
+    await expect(decryptKeystore(oneByteTag, "a-decent-passphrase")).rejects.toMatchObject({
+      name: "WalletError",
+      message: "Could not decrypt keystore",
+    });
+    const tooMuchMemory = { ...keystore, kdf: { ...keystore.kdf, N: 2 ** 18, r: 32 } };
+    await expect(decryptKeystore(tooMuchMemory, "a-decent-passphrase")).rejects.toMatchObject({
+      name: "WalletError",
+    });
   }, SLOW);
 
   it("uses unique salts and IVs across keystores", async () => {
@@ -235,4 +275,41 @@ describe("keystore disk I/O", () => {
   it("delete is idempotent when no keystore exists", async () => {
     await expect(deleteKeystore()).resolves.toBeUndefined();
   });
+
+  it("does not read 'there but cannot be read' as 'not there'", async () => {
+    // Existence used to be derived from a successful read, so a keystore the
+    // user could not read looked absent: login renamed a new one over it,
+    // logout said there was nothing to delete.
+    await mkdir(join(sandbox, "keystore.json"));
+    expect(await keystoreExists()).toBe(true);
+    await expect(assertKeystoreReplaceable()).rejects.toMatchObject({
+      name: "ConfigError",
+      message: expect.stringMatching(/could not be read/),
+    });
+  });
+
+  it.skipIf(process.getuid?.() === 0)("refuses to replace a keystore the user cannot read", async () => {
+    await saveKeystore(await encryptKeystore(generateWallet(), "soon-unreadable"));
+    await chmod(join(sandbox, "keystore.json"), 0o000);
+    try {
+      expect(await keystoreExists()).toBe(true);
+      await expect(assertKeystoreReplaceable()).rejects.toMatchObject({ name: "ConfigError" });
+    } finally {
+      await chmod(join(sandbox, "keystore.json"), 0o600);
+    }
+  }, SLOW);
+
+  it.skipIf(process.getuid?.() === 0)("says so when a keystore is found but cannot be deleted", async () => {
+    await saveKeystore(await encryptKeystore(generateWallet(), "cannot-delete-me"));
+    await chmod(sandbox, 0o500);
+    try {
+      await expect(deleteKeystore()).rejects.toMatchObject({
+        name: "ConfigError",
+        message: expect.stringMatching(/Could not delete/),
+      });
+      expect(await keystoreExists()).toBe(true);
+    } finally {
+      await chmod(sandbox, 0o700);
+    }
+  }, SLOW);
 });
