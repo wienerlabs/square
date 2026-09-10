@@ -4,7 +4,7 @@ import { agentFromDid, hashDeliverable, JobStatus, Outcome, specHashFromDescript
 import { InvalidDidError } from "@squaresdk/did-resolver";
 import { useSearchParams } from "next/navigation";
 import { useMemo, useState, type ReactNode } from "react";
-import { getAddress, isAddress, isAddressEqual, type Address } from "viem";
+import { isAddressEqual, type Address } from "viem";
 import { useAccount } from "wagmi";
 import { AddressLink } from "@/components/AddressLink";
 import { AmountUsdc } from "@/components/AmountUsdc";
@@ -14,12 +14,14 @@ import { Chip } from "@/components/Chip";
 import { EmptyState } from "@/components/EmptyState";
 import { Field, inputClass } from "@/components/Field";
 import { GhostButton } from "@/components/GhostButton";
+import { JsonEditor } from "@/components/JsonEditor";
 import { PanelCard } from "@/components/PanelCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { StatusPill, listingTone, outcomeTone, phaseTone } from "@/components/StatusPill";
-import { keeperEvaluates as evaluatedByKeeper, refundAvailable } from "@/lib/actions";
+import { addressInputError, readAddressInput } from "@/lib/address";
+import { challengeWindowClosed, disputeAvailable, keeperEvaluates as evaluatedByKeeper, refundAvailable } from "@/lib/actions";
 import { chartColors, formatCompactUsdc, payoutSplit, settlementClock } from "@/lib/charts";
-import { formatBps, formatCountdown, formatDuration, formatTimestamp, formatUsdc, isZeroAddress, parseUsdc, shortHash, statusLabel } from "@/lib/format";
+import { formatBps, formatCountdown, formatDuration, formatTimestamp, formatUsdc, isZeroAddress, parseUsdc, shortAddress, shortHash, statusLabel } from "@/lib/format";
 import {
   countVotes,
   jobPhase,
@@ -33,6 +35,7 @@ import {
   useSquare,
   type JobDetail,
 } from "@/lib/square";
+import { checkSpec } from "@/lib/spec";
 import { describeError, useTx } from "@/lib/tx";
 import { activeChain, deployment } from "@/lib/wagmi";
 
@@ -107,15 +110,16 @@ function SimpleAction({
 
 function SetProviderAction({ ctx }: { ctx: ActionContext }) {
   const [value, setValue] = useState("");
-  const valid = isAddress(value) && !isZeroAddress(value);
+  const parsed = readAddressInput(value);
+  const provider = parsed.kind === "valid" && !isZeroAddress(parsed.address) ? parsed.address : null;
   return (
     <ActionCard
       title="Set provider"
       description="The job was opened without a provider, so funding reverts with ProviderNotSet. Only the client may name one, only while the job is open, and only once."
       buttonLabel="Set provider"
-      disabled={!valid}
+      disabled={provider === null}
       onClick={() => {
-        if (valid) void ctx.run("Set provider", () => ctx.square.setProvider(ctx.id, getAddress(value)));
+        if (provider !== null) void ctx.run("Set provider", () => ctx.square.setProvider(ctx.id, provider));
       }}
       ctx={ctx}
     >
@@ -123,7 +127,7 @@ function SetProviderAction({ ctx }: { ctx: ActionContext }) {
         label="Provider address"
         htmlFor="provider"
         hint="An agent's wallet on this chain. It is fixed once set."
-        error={value.length > 0 && !valid ? "Enter a 0x address of 40 hex characters." : null}
+        error={addressInputError(parsed)}
       >
         <input
           id="provider"
@@ -135,6 +139,13 @@ function SetProviderAction({ ctx }: { ctx: ActionContext }) {
           spellCheck={false}
         />
       </Field>
+      {parsed.kind === "checksum" ? (
+        <div>
+          <GhostButton size="sm" onClick={() => setValue(parsed.suggestion)}>
+            Use {shortAddress(parsed.suggestion)}
+          </GhostButton>
+        </div>
+      ) : null}
     </ActionCard>
   );
 }
@@ -287,6 +298,45 @@ function ListClaimAction({ ctx, detail }: { ctx: ActionContext; detail: JobDetai
   );
 }
 
+function SpecCheck({ description }: { description: string }) {
+  const [text, setText] = useState("");
+  const result = useMemo(() => checkSpec(text, description), [text, description]);
+  return (
+    <PanelCard
+      title="Check the spec"
+      description="The chain carries the hash, not the words. Paste the spec text you were sent and this page canonicalizes and hashes it the same way the form did, so you can see whether it is the text this job was opened with."
+    >
+      <Field
+        label="Spec (JSON)"
+        htmlFor="spec-check"
+        error={result.kind === "invalid" ? result.message : null}
+        hint={<span className="break-all font-mono text-[12px]">On chain: {description}</span>}
+      >
+        <JsonEditor
+          id="spec-check"
+          value={text}
+          onChange={setText}
+          error={result.kind === "invalid" ? result.message : null}
+          placeholder={'{\n  "task": "...",\n  "deliverable": "...",\n  "acceptance": "..."\n}'}
+          minHeight={180}
+        />
+      </Field>
+      {result.kind === "match" ? (
+        <p className="mt-4 flex items-center gap-2 text-caption text-carbon" role="status">
+          <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-mint" />
+          This text hashes to the description on chain, so it is the spec this job was opened with.
+        </p>
+      ) : null}
+      {result.kind === "mismatch" ? (
+        <p className="mt-4 flex flex-wrap items-center gap-2 text-caption text-magenta" role="status">
+          <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-magenta" />
+          <span className="break-all">This text hashes to spec:{result.hash}, which is not the description on chain. Ask for the exact text that was hashed.</span>
+        </p>
+      ) : null}
+    </PanelCard>
+  );
+}
+
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
@@ -388,7 +438,7 @@ export function JobView() {
   const isProvider = sameAddress(address, record.provider);
   const keeperEvaluates = evaluatedByKeeper(record, deployment.keeperEvaluator);
   const hookIsSquare = isAddressEqual(record.hook, deployment.squareHook);
-  const windowClosed = detail.challengeEnd > 0 && now >= detail.challengeEnd;
+  const windowClosed = challengeWindowClosed(detail.challengeEnd, now);
   const neverDisputed = detail.keeperDispute.disputedAt === 0;
   const disputeOpen = detail.dispute.disputedAt !== 0 && detail.dispute.outcome === 0;
   const isArbiter = address !== undefined && detail.arbiters.some((arbiter) => isAddressEqual(arbiter, address));
@@ -402,7 +452,10 @@ export function JobView() {
   const showFund = record.status === JobStatus.Open && isClient && record.budget > 0n && !isZeroAddress(record.provider) && now < record.expiredAt;
   const showSubmit = record.status === JobStatus.Funded && isProvider && now < record.expiredAt;
   const showFinalize = record.status === JobStatus.Submitted && keeperEvaluates && neverDisputed && windowClosed;
-  const showDispute = record.status === JobStatus.Submitted && keeperEvaluates && isClient && neverDisputed && !windowClosed;
+  const showDispute =
+    isClient &&
+    neverDisputed &&
+    disputeAvailable({ evaluator: record.evaluator, status: record.status, challengeEnd: detail.challengeEnd }, deployment.keeperEvaluator, now);
   const showVote = disputeOpen && isArbiter;
   const showLapse = disputeOpen && now >= detail.dispute.resolveBy;
   const showFinalizeDecided =
@@ -531,6 +584,11 @@ export function JobView() {
                   {specHash ? `spec:${shortHash(specHash)}` : record.description}
                 </span>
               )}
+              {specHash ? (
+                <span className="mt-1 block text-caption text-graphite">
+                  Only this hash is on chain. The client hands the spec text to the provider off chain, over whatever channel they already use; paste it under Check the spec below to prove it is the text this hash was made from.
+                </span>
+              ) : null}
             </Row>
             <Row label="Agent">{detail.agentId !== 0n ? <span className="tabular-nums">ERC-8004 agent #{detail.agentId.toString()}</span> : <span className="text-ash">Not bound</span>}</Row>
             <Row label="Created">{formatTimestamp(record.createdAt)}</Row>
@@ -569,6 +627,8 @@ export function JobView() {
           ) : null}
         </PanelCard>
       </div>
+
+      {specHash ? <SpecCheck description={record.description} /> : null}
 
       {listing.status !== 0 || detail.dispute.disputedAt !== 0 ? (
         <div className={`grid gap-4 ${listing.status !== 0 && detail.dispute.disputedAt !== 0 ? "lg:grid-cols-2" : ""}`}>

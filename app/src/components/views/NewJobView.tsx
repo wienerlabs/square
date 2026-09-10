@@ -3,7 +3,7 @@
 import { specDescription } from "@squaresdk/core";
 import canonicalize from "canonicalize";
 import { useEffect, useMemo, useState } from "react";
-import { getAddress, isAddress, type Hex } from "viem";
+import type { Hex } from "viem";
 import { useAccount } from "wagmi";
 import { AddressLink, TxLink } from "@/components/AddressLink";
 import { AmountUsdc } from "@/components/AmountUsdc";
@@ -14,11 +14,13 @@ import { PanelCard } from "@/components/PanelCard";
 import { PillToggle } from "@/components/PillToggle";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { SectionHeading } from "@/components/SectionHeading";
+import { SpecActions } from "@/components/SpecActions";
 import { Step, type StepState } from "@/components/Step";
 import { ArcNetworkMark, UsdcMark } from "@/components/marks";
 import { WalletButton } from "@/components/WalletButton";
 import { minimumExpiry } from "@/lib/actions";
-import { formatBps, formatDuration, formatTimestamp, formatUsdc, fromDatetimeLocal, parseUsdc, shortHash, toDatetimeLocal } from "@/lib/format";
+import { addressInputError, readAddressInput } from "@/lib/address";
+import { formatBps, formatDuration, formatTimestamp, formatUsdc, fromDatetimeLocal, parseUsdc, shortAddress, shortHash, toDatetimeLocal } from "@/lib/format";
 import { useNetwork, useNow, useSquare } from "@/lib/square";
 import { describeError, useTx } from "@/lib/tx";
 import { activeChain, deployment, isArcNetwork } from "@/lib/wagmi";
@@ -93,6 +95,8 @@ interface Created {
   budgetHash?: Hex;
   budgetFailed: boolean;
   budget: bigint | null;
+  spec: string;
+  specHash: string;
 }
 
 function Row({ label, children, muted = false }: { label: string; children: React.ReactNode; muted?: boolean }) {
@@ -141,8 +145,9 @@ export function NewJobView() {
 
   const specState = useMemo(() => parseSpec(spec), [spec]);
   const canonical = useMemo(() => (specState.kind === "ok" ? (canonicalize(specState.value) ?? "") : ""), [specState]);
-  const providerValid = isAddress(provider);
-  const providerError = provider.length === 0 || providerValid ? null : "Enter a 0x address of 40 hex characters.";
+  const providerInput = useMemo(() => readAddressInput(provider), [provider]);
+  const providerValid = providerInput.kind === "valid";
+  const providerError = addressInputError(providerInput);
   const expirySeconds = fromDatetimeLocal(expiry);
   const expiryError =
     expiry.length === 0
@@ -201,10 +206,10 @@ export function NewJobView() {
   }
 
   async function submit() {
-    if (!ready || expirySeconds === null || specState.kind !== "ok") return;
+    if (!ready || expirySeconds === null || specState.kind !== "ok" || providerInput.kind !== "valid") return;
     setStage("create");
     const result = await run("Create job", () =>
-      square.createJob({ provider: getAddress(provider), expiredAt: BigInt(expirySeconds), spec: specState.value }),
+      square.createJob({ provider: providerInput.address, expiredAt: BigInt(expirySeconds), spec: specState.value }),
     );
     if (!result) {
       setStage(null);
@@ -219,7 +224,7 @@ export function NewJobView() {
       else budgetFailed = true;
     }
     setStage(null);
-    setCreated({ jobId: result.jobId, createHash: result.hash, budgetHash, budgetFailed, budget: budgetAmount });
+    setCreated({ jobId: result.jobId, createHash: result.hash, budgetHash, budgetFailed, budget: budgetAmount, spec, specHash: specState.hash });
   }
 
   const ctaLabel =
@@ -252,18 +257,26 @@ export function NewJobView() {
                 )}
               </Row>
               <Row label="Provider">
-                <AddressLink address={provider} />
+                <AddressLink address={providerInput.kind === "valid" ? providerInput.address : provider} />
               </Row>
-              <Row label="Budget" muted={created.budget === null}>
-                {created.budget !== null ? <AmountUsdc value={created.budget} /> : "Not set"}
+              <Row label="Budget" muted={created.budgetHash === undefined && !created.budgetFailed}>
+                {created.budgetHash !== undefined && created.budget !== null ? (
+                  <AmountUsdc value={created.budget} />
+                ) : created.budgetFailed && created.budget !== null ? (
+                  <span className="text-magenta">{formatUsdc(created.budget)} USDC requested, not set</span>
+                ) : (
+                  "Not set"
+                )}
               </Row>
             </dl>
             <div className="flex flex-col gap-4">
               <p className="text-caption font-medium text-carbon">What happens next</p>
               <ol className="flex flex-col gap-3">
                 {[
-                  { title: "Fund the escrow", body: created.budget ? "Approve USDC and fund from the job page. The fee basis points are snapshotted at that moment." : "Set a budget on the job page, then approve USDC and fund it." },
-                  { title: "Hand the job to the provider", body: "Share the job link. The provider submits the deliverable hash before the expiry, optionally bound to an ERC-8004 agent." },
+                  created.budgetHash !== undefined
+                    ? { title: "Fund the escrow", body: "Approve USDC and fund from the job page. The fee basis points are snapshotted at that moment." }
+                    : { title: "Set the budget, then fund the escrow", body: "Set a budget on the job page first, then approve USDC and fund it. Funding a job with no budget reverts with ZeroBudget." },
+                  { title: "Hand the job to the provider", body: "Share the job link and the spec text below. The provider submits the deliverable hash before the expiry, optionally bound to an ERC-8004 agent." },
                   { title: "Watch the challenge window", body: `After submission you have ${network.data ? formatDuration(network.data.window.challengeWindow) : "the challenge window"} to dispute; otherwise anyone finalizes and the payee is credited.` },
                 ].map((step, index) => (
                   <li key={step.title} className="flex gap-3">
@@ -282,6 +295,23 @@ export function NewJobView() {
                 <GhostButton onClick={reset}>Create another</GhostButton>
               </div>
             </div>
+          </div>
+          <div className="mt-8 flex flex-col gap-3 border-t border-fog pt-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-caption font-medium text-carbon">The spec this job was hashed from</p>
+                <p className="mt-1 max-w-xl text-caption text-graphite">
+                  Only spec:{shortHash(created.specHash)} is on chain. Keep this text and send it to the provider over
+                  your own channel; the job page checks a pasted spec against the hash. Create another clears it.
+                </p>
+              </div>
+              <span className="flex items-center gap-2">
+                <SpecActions spec={created.spec} hash={created.specHash} />
+              </span>
+            </div>
+            <pre className="max-h-72 overflow-auto rounded-lg border border-fog bg-linen px-3.5 py-2.5 font-mono text-[12px] leading-5 text-graphite">
+              {created.spec}
+            </pre>
           </div>
         </PanelCard>
       </div>
@@ -308,7 +338,7 @@ export function NewJobView() {
             title="Who does the work"
             description="The provider's wallet. It is fixed at creation and receives the net payout unless the receivable is sold."
             state={providerState}
-            aside={providerValid ? <AddressLink address={provider} /> : null}
+            aside={providerInput.kind === "valid" ? <AddressLink address={providerInput.address} /> : null}
           >
             <Field label="Provider address" htmlFor="provider" error={providerError} hint={providerValid ? "Checksummed and ready." : "An agent's wallet on this chain."}>
               <input
@@ -321,6 +351,13 @@ export function NewJobView() {
                 spellCheck={false}
               />
             </Field>
+            {providerInput.kind === "checksum" ? (
+              <div>
+                <GhostButton size="sm" onClick={() => setProvider(providerInput.suggestion)}>
+                  Use {shortAddress(providerInput.suggestion)}
+                </GhostButton>
+              </div>
+            ) : null}
           </Step>
 
           <Step
@@ -390,6 +427,7 @@ export function NewJobView() {
                 </PillToggle>
               ))}
               <span className="ml-auto flex items-center gap-2">
+                <SpecActions spec={spec} hash={specState.kind === "ok" ? specState.hash : ""} />
                 <GhostButton size="sm" onClick={formatSpec} disabled={specState.kind !== "ok"}>
                   Format
                 </GhostButton>
@@ -487,7 +525,7 @@ export function NewJobView() {
                 {address ? <AddressLink address={address} /> : "No wallet connected"}
               </Row>
               <Row label="Provider" muted={!providerValid}>
-                {providerValid ? <AddressLink address={provider} /> : "Not set"}
+                {providerInput.kind === "valid" ? <AddressLink address={providerInput.address} /> : "Not set"}
               </Row>
               <Row label="Expires" muted={!expiryValid}>
                 {expiryValid && expirySeconds !== null ? formatTimestamp(expirySeconds) : "Not set"}

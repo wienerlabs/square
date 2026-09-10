@@ -88,6 +88,11 @@ function timeWindowSatisfied(input) {
   // The circuit assumes start <= end; windows spanning midnight are not
   // modelled there either, so this mirrors the same limitation rather than
   // quietly being more permissive.
+  //
+  // Both sides agreeing was never the problem -- they agreed on accepting a
+  // policy nothing could satisfy. square#148 put the check where it belongs:
+  // validateRequest refuses start > end with 400, so this comparison is only
+  // ever reached for a window that does not wrap.
   const hourInWindow = hour >= startHour && hour <= endHour;
 
   return dayActive && hourInWindow;

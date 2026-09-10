@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {PolicyRegistry} from "../src/PolicyRegistry.sol";
+import {IPolicyRegistry} from "../src/interfaces/IPolicyRegistry.sol";
 
 /// @notice Drives the registry the way the system will: posters write their own
 ///         policies, one spender moves counters, and time passes.
@@ -20,11 +21,16 @@ contract PolicyRegistryHandler is Test {
     /// within a day can be checked rather than assumed.
     mapping(address => mapping(uint64 => uint256)) public highWater;
 
-    /// Set if any `recordSpend` ever succeeded in taking a poster's day past
-    /// the ceiling that was in force at the moment of that call. This, and not
-    /// `spentToday <= dailyLimit`, is the property the contract actually
+    /// Set if any `recordSpend` ever answered `Compliant` for a release that
+    /// took a poster's day past the ceiling in force at the moment of that
+    /// call, or answered otherwise for one that stayed within it. This, and
+    /// not `spentToday <= dailyLimit`, is the property the contract actually
     /// promises — see the note on the test below.
     bool public breached;
+
+    /// Set if a release was answered without the day moving by exactly its
+    /// amount, or with a `spentBefore` other than the day's total before it.
+    bool public miscounted;
 
     constructor(PolicyRegistry registry_) {
         registry = registry_;
@@ -44,9 +50,14 @@ contract PolicyRegistryHandler is Test {
     function recordSpend(uint256 seed, uint256 amount) external {
         address poster = _poster(seed);
         uint128 ceilingInForce = registry.policyOf(poster).dailyLimit;
+        bool hasPolicy = registry.commitmentOf(poster) != bytes32(0);
+        uint256 dayBefore = registry.spentToday(poster);
 
-        try registry.recordSpend(poster, amount) {
-            if (registry.spentToday(poster) > ceilingInForce) breached = true;
+        try registry.recordSpend(poster, amount) returns (uint256 spentBefore, IPolicyRegistry.Verdict verdict) {
+            uint256 dayAfter = registry.spentToday(poster);
+            if (spentBefore != dayBefore || dayAfter != dayBefore + amount) miscounted = true;
+            bool within = hasPolicy && dayAfter <= ceilingInForce;
+            if ((verdict == IPolicyRegistry.Verdict.Compliant) != within) breached = true;
         } catch {}
 
         uint64 day = registry.currentDay();
@@ -65,11 +76,13 @@ contract PolicyRegistryHandler is Test {
 
 /// @notice The two properties the counter has to hold whatever the sequence is.
 ///
-/// The first is the contract's whole reason for existing: a day's spend never
-/// passes the ceiling the institution set, however the calls interleave and
-/// however time moves. The second is that a refused payment cannot consume
-/// allowance — expressed as monotonicity, because the only way a total can fall
-/// inside one day is if a revert moved it.
+/// The first is the contract's whole reason for existing: a release is called
+/// compliant exactly when it keeps the day within the ceiling the institution
+/// had set, however the calls interleave and however time moves. The second
+/// is that every release is counted, whatever the verdict, because the money
+/// leaves escrow either way. The third is monotonicity within a day, because
+/// the only way a total can fall inside one day is if something rolled it
+/// back.
 contract PolicyRegistryInvariantTest is Test {
     PolicyRegistry internal registry;
     PolicyRegistryHandler internal handler;
@@ -107,8 +120,12 @@ contract PolicyRegistryInvariantTest is Test {
     /// docs/decisions/public-daily-ceiling.md has a section on square#90. The
     /// registry is not the right place to forbid it, so the invariant states
     /// what the contract actually promises instead of overstating it.
-    function invariant_noReleasePassedTheCeilingInForce() public view {
-        assertFalse(handler.breached(), "a release took a day past the ceiling in force at the time");
+    function invariant_theVerdictFollowsTheCeilingInForce() public view {
+        assertFalse(handler.breached(), "a verdict disagreed with the ceiling in force at the time");
+    }
+
+    function invariant_everyReleaseIsCounted() public view {
+        assertFalse(handler.miscounted(), "a release was answered without moving the day by its amount");
     }
 
     function invariant_aDaysTotalOnlyEverRises() public view {
@@ -118,7 +135,7 @@ contract PolicyRegistryInvariantTest is Test {
             assertEq(
                 registry.spentToday(poster),
                 handler.highWater(poster, day),
-                "a total fell within one day, so a refused payment moved the counter"
+                "a total fell within one day, so something rolled the counter back"
             );
         }
     }

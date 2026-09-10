@@ -15,8 +15,8 @@ The reference web application for Square, the compliance-gated settlement protoc
 |---|---|
 | `/` | Landing page with live numbers (jobs opened, USDC escrowed, settled, last activity), the three settlement layers, the lifecycle and a live network strip. |
 | `/dashboard` | Metric tiles, the escrow flow and pipeline charts, a jobs table with phase filters, a search by id or address and a button that reads 50 older jobs at a time, and, with a wallet connected, the pull-payment balances with Withdraw buttons plus an inbox of the jobs waiting on that wallet: deliverable to submit, escrow to fund, budget to agree, challenge window open, ready to finalize, refund available. |
-| `/job?id=N` | The full job record, a timeline built from the record's timestamps, listing and dispute details, and every lifecycle action the connected wallet may take: set provider, set budget, fund (with automatic USDC approval), submit, finalize, dispute, vote, apply a decision, lapse, list, buy or cancel a claim, reject, claim refund, withdraw, record expiry. |
-| `/new` | Create a job: provider, expiry (at least twice the settlement horizon away, so the job is still submittable after it is funded), a JSON spec hashed to `spec:0x...`, and an optional budget set right after creation. |
+| `/job?id=N` | The full job record, a timeline built from the record's timestamps, listing and dispute details, a box that checks a pasted spec against the hash on chain, and every lifecycle action the connected wallet may take: set provider, set budget, fund (with automatic USDC approval), submit, finalize, dispute, vote, apply a decision, lapse, list, buy or cancel a claim, reject, claim refund, withdraw, record expiry. |
+| `/new` | Create a job: provider, expiry (at least twice the settlement horizon away, so the job is still submittable after it is funded), a JSON spec hashed to `spec:0x...` that can be copied or downloaded and stays on screen after the job is created, and an optional budget set right after creation. |
 | `/network` | Keeper windows, fees and treasury, the arbiter set and threshold, bond parameters, registry addresses, the read path and links to the design notes. |
 
 Static export means there are no dynamic route segments, so the job page reads its id from the query string. All data is fetched on the client with React Query and refreshed every ten seconds.
@@ -96,6 +96,9 @@ src/components/     Design system components (PrimaryButton, GhostButton, Chip, 
 src/lib/wagmi.ts    Chain definitions, wagmi config, the read-only public client
 src/lib/square.ts   useSquare() and every chain read hook
 src/lib/actions.ts  The gates the kernel enforces, shared by the job page, the inbox and the form
+src/lib/clock.ts    The offset between the chain and the browser clock, and the skew notice threshold
+src/lib/spec.ts     Checking a pasted spec against the spec: hash on chain
+src/lib/address.ts  Reading an address input: valid, checksum only, or malformed
 src/lib/indexer.ts  Optional indexer read API client
 src/lib/format.ts   USDC, address, timestamp and duration formatting
 src/lib/tx.tsx      Transaction runner and toast state
@@ -128,7 +131,25 @@ The wallet button discovers every wallet extension in the browser through EIP-69
 
 ## Spec editor
 
-The JSON spec on the new job page is edited in a highlighted editor: keys, strings, numbers and literals are coloured, lines are numbered, the line a parse error points at is marked, Tab inserts two spaces, and the canonical form that is hashed can be shown beside the typed form with both sizes in bytes.
+The JSON spec on the new job page is edited in a highlighted editor: keys, strings, numbers and literals are coloured, lines are numbered, the line a parse error points at is marked, Tab inserts two spaces, and the canonical form that is hashed can be shown beside the typed form with both sizes in bytes. The text can be copied to the clipboard or downloaded as a file at any point, including from the panel that follows a successful creation.
+
+## Spec handoff
+
+The chain stores a hash, never the words. `createJob` writes `spec:` followed by the keccak256 of the canonical JSON of the spec (`specDescription` in `@squaresdk/core`), so the text itself never reaches the contracts, the indexer or this app, which has no server of its own. Carrying it is the client's job, and the app makes both ends of that carry explicit:
+
+1. On `/new` the spec is copied to the clipboard or downloaded as `square-spec-<first eight hex of the hash>.json` while it is being written. After the job is created the success panel keeps the exact text that was hashed, with the same two buttons; only "Create another" clears it, once there has been a chance to save it.
+2. The client sends that text to the provider over the channel the job was already agreed in. Nothing in the protocol moves it, and nothing in the protocol needs to.
+3. On `/job?id=N` anyone holding a copy pastes it under "Check the spec". The page canonicalizes and hashes it exactly as the form did and says whether it is the text this job was opened with, through `specMatchesDescription` from `@squaresdk/core`. A mismatch prints the hash the pasted text actually makes, so a stale copy is told apart from a wrong one.
+
+Without that check a provider cannot know which acceptance criterion the work will be judged by, and an arbiter reading a dispute has nothing to read. The check is where an off-chain document becomes evidence about an on-chain job.
+
+## Clock
+
+Every time gate on screen comes from the chain, not from the browser. `useNetwork` reads the latest block next to the job counter and keeps the offset between its timestamp and `Date.now()` at the moment of the read; `useNow` still ticks once a second off the local clock and adds that offset, so countdowns move smoothly while the second they name is the chain's. The dispute and finalize buttons, the refund gate, the dashboard inbox, the timeline and the settlement clock all derive from it.
+
+The size of the windows is the reason. The deployed `KeeperEvaluator` runs a challenge window of 120 seconds, so a browser two minutes fast would judge the window closed the instant the provider submitted and would never draw the dispute button at all, on a chain that was still accepting the dispute. The opposite direction is harmless: the SDK simulates every write before sending it, so an action offered too early fails in simulation without spending gas.
+
+When the two clocks differ by 30 seconds or more, a line above every page names the difference and its direction. The threshold sits well above the few seconds of block time and round trip that separate an accurate machine from the last block, and well below the 120 second window it exists to protect.
 
 ## Brand assets
 

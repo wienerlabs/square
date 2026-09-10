@@ -216,6 +216,7 @@ are the 2026-09-09 redeploy's**; the superseded sets, what changed each time and
 the sweep of the balances they held are in
 [docs/deploy/redeploy-2026-09-08.md](docs/deploy/redeploy-2026-09-08.md) and
 [docs/deploy/redeploy-2026-09-09.md](docs/deploy/redeploy-2026-09-09.md).
+The checklist a redeploy walks is [docs/deploy/README.md](docs/deploy/README.md).
 Testnet parameters: challenge window 120 s, dispute window 300 s, finalize grace
 600 s (so `settlementHorizon()` reads 1020 s), evaluator fee 0.5 %, platform fee
 1 %, bond 10 % with a 1 USDC floor, three arbiters with threshold 2. The owner is
