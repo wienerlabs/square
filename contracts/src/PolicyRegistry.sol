@@ -5,7 +5,7 @@ import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step
 import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
 
 /// @title PolicyRegistry
-/// @notice What the compliance module reads before it lets money out, and the
+/// @notice What the compliance module reads when it judges a release, and the
 ///         one number it writes on the way through.
 ///
 /// The EVM counterpart of aperture's `PolicyAccount` + `OperatorState` pair.
@@ -18,8 +18,21 @@ import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
 /// proof, and a prover free to claim zero every time makes rule 2 vacuous: each
 /// payment individually fits under a ceiling it never approaches, and the daily
 /// cap enforces nothing. This registry is the chain's own answer to "what has
-/// this institution already spent today", so #27 can refuse a proof whose
-/// signal 5 disagrees with it.
+/// this institution already spent today", so #27 can mark a release as
+/// non-compliant when its signal 5 disagrees with it.
+///
+/// ## The verdict is a return value, and every release is counted
+///
+/// docs/decisions/hook-failure-modes.md binds the module that calls this
+/// contract: compliance is a signal on the release, not a lock on the escrow,
+/// and a verdict travels as a return value or a payout split, never as a
+/// revert. `SquareHook._checkRelease` wraps the module in `try/catch`, so a
+/// module that reverted would still see the job complete and would lose its
+/// own state changes, this counter's advance included. `recordSpend` therefore
+/// never reverts on policy grounds: it records the release, returns a
+/// `Verdict`, and emits `ReleaseOutsidePolicy` when the verdict is not
+/// `Compliant`. The counter may stand above the ceiling afterwards; that is
+/// the truthful reading, because the money left.
 ///
 /// ## Poseidon is not computed here
 ///
@@ -41,12 +54,15 @@ import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
 /// **This contract is not safe from the same failure by construction, and the
 /// difference is not the absence of a hook.** `recordSpend` is `onlySpender`;
 /// its only reachable caller is a compliance module, called only from
-/// `SquareHook._checkRelease`, and the module is optional. The deployed hook at
-/// `0x92EC31aAdcD98Ba3528cfef67ec0690433c43E57` returns the zero address from
-/// `complianceModule()` today, so the ceiling is inert exactly as aperture's
-/// was until square#27 installs one. What is fixed here is that the advance
-/// cannot be skipped *once the module is installed*, because it happens in the
-/// same call that authorises the release.
+/// `SquareHook._checkRelease`, and the module is optional. The hook of the
+/// 2026-09-09 Arc Testnet stack, `0xb44aCCBb8d1eae0e2D2e8B33CEC32f1fD613e7e6`
+/// (docs/deploy/redeploy-2026-09-09.md), returns the zero address from
+/// `complianceModule()`, as the 2026-09-07 hook at `0x92EC31aA…` did, so the
+/// ceiling is inert exactly as aperture's was until square#27 installs a
+/// module. What is fixed here is that the advance cannot be skipped *once the
+/// module is installed*, because it happens in the same call that judges the
+/// release, and cannot be rolled back by the module's own failure, because it
+/// is never expressed as a revert.
 ///
 /// ## Whose spend it is
 ///
@@ -115,31 +131,36 @@ contract PolicyRegistry is IPolicyRegistry, Ownable2Step {
     // -------------------------------------------------------- the counter
 
     /// @inheritdoc IPolicyRegistry
-    function recordSpend(address poster, uint256 amount) external returns (uint256 spentBefore) {
+    function recordSpend(address poster, uint256 amount)
+        external
+        returns (uint256 spentBefore, Verdict verdict)
+    {
         if (!_spenders[msg.sender]) revert NotASpender(msg.sender);
 
         Policy memory policy = _policies[poster];
-        if (policy.commitment == bytes32(0)) revert NoPolicy(poster);
-
         uint64 day = _today();
         DailySpend storage record = _spend[poster];
         spentBefore = record.day == day ? record.spent : 0;
 
         uint256 spentAfter = spentBefore + amount;
+        if (spentAfter > type(uint128).max) revert SpendOverflow(poster, spentAfter);
+
         // Fail closed. A zero limit authorises no spending rather than
         // unlimited spending — the other reading turns a field somebody forgot
         // to set into a hole in the ceiling.
-        if (spentAfter > policy.dailyLimit) {
-            revert DailyLimitExceeded(poster, spentBefore, amount, policy.dailyLimit);
-        }
+        if (policy.commitment == bytes32(0)) verdict = Verdict.NoPolicy;
+        else if (spentAfter > policy.dailyLimit) verdict = Verdict.LimitExceeded;
+        else verdict = Verdict.Compliant;
 
         record.day = day;
-        // The check above bounds spentAfter by policy.dailyLimit, which is a
-        // uint128, so the cast cannot truncate.
+        // Bounded by the overflow check above, so the cast cannot truncate.
         // forge-lint: disable-next-line(unsafe-typecast)
         record.spent = uint128(spentAfter);
 
         emit SpendRecorded(poster, day, amount, spentAfter);
+        if (verdict != Verdict.Compliant) {
+            emit ReleaseOutsidePolicy(poster, day, spentAfter, policy.dailyLimit, verdict);
+        }
     }
 
     // -------------------------------------------------------- administration

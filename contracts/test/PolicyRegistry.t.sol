@@ -50,6 +50,15 @@ contract PolicyRegistryTest is Test {
         registry.setPolicy(COMMITMENT, limit);
     }
 
+    function _record(address poster, uint256 amount) internal returns (uint256 spentBefore) {
+        (spentBefore,) = registry.recordSpend(poster, amount);
+    }
+
+    function _verdict(address poster, uint256 amount) internal returns (IPolicyRegistry.Verdict verdict) {
+        vm.prank(hook);
+        (, verdict) = registry.recordSpend(poster, amount);
+    }
+
     // ------------------------------------------------ the policy commitment
 
     function test_setPolicy_writesTheCommitmentAndTheLimit() public {
@@ -126,12 +135,12 @@ contract PolicyRegistryTest is Test {
         _commit(alice, LIMIT);
 
         vm.prank(hook);
-        uint256 before1 = registry.recordSpend(alice, 5_000 * USDC);
+        (uint256 before1,) = registry.recordSpend(alice, 5_000 * USDC);
         assertEq(before1, 0, "first payment of the day");
 
         vm.warp(block.timestamp + 2 hours);
         vm.prank(hook);
-        uint256 before2 = registry.recordSpend(alice, 3_000 * USDC);
+        (uint256 before2,) = registry.recordSpend(alice, 3_000 * USDC);
 
         assertEq(before2, 5_000 * USDC, "second payment sees the first");
         assertEq(registry.spentToday(alice), 8_000 * USDC, "running total");
@@ -143,9 +152,9 @@ contract PolicyRegistryTest is Test {
         _commit(alice, LIMIT);
 
         vm.startPrank(hook);
-        assertEq(registry.recordSpend(alice, 1_000 * USDC), 0);
-        assertEq(registry.recordSpend(alice, 2_000 * USDC), 1_000 * USDC);
-        assertEq(registry.recordSpend(alice, 4_000 * USDC), 3_000 * USDC);
+        assertEq(_record(alice, 1_000 * USDC), 0);
+        assertEq(_record(alice, 2_000 * USDC), 1_000 * USDC);
+        assertEq(_record(alice, 4_000 * USDC), 3_000 * USDC);
         vm.stopPrank();
     }
 
@@ -177,7 +186,7 @@ contract PolicyRegistryTest is Test {
         assertEq(registry.spentToday(alice), 0, "yesterday does not carry over");
 
         vm.prank(hook);
-        assertEq(registry.recordSpend(alice, 40_000 * USDC), 0, "and the ceiling is free again");
+        assertEq(_record(alice, 40_000 * USDC), 0, "and the ceiling is free again");
     }
 
     /// One second before midnight is still yesterday.
@@ -201,64 +210,63 @@ contract PolicyRegistryTest is Test {
 
     // ---------------------------------------------------------- the ceiling
 
-    function test_recordSpend_revertsWhenTheDailyLimitWouldBeExceeded() public {
+    function test_recordSpend_answersLimitExceededAndStillCountsTheRelease() public {
         _commit(alice, LIMIT);
+        assertEq(uint8(_verdict(alice, 49_000 * USDC)), uint8(IPolicyRegistry.Verdict.Compliant));
 
-        vm.prank(hook);
-        registry.recordSpend(alice, 49_000 * USDC);
-
-        vm.prank(hook);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IPolicyRegistry.DailyLimitExceeded.selector, alice, 49_000 * USDC, 1_001 * USDC, LIMIT
-            )
+        vm.expectEmit(true, true, false, true);
+        emit IPolicyRegistry.ReleaseOutsidePolicy(
+            alice, registry.currentDay(), 50_001 * USDC, LIMIT, IPolicyRegistry.Verdict.LimitExceeded
         );
-        registry.recordSpend(alice, 1_001 * USDC);
+        assertEq(uint8(_verdict(alice, 1_001 * USDC)), uint8(IPolicyRegistry.Verdict.LimitExceeded));
+        assertEq(registry.spentToday(alice), 50_001 * USDC, "the money left, so the day carries it");
     }
 
     function test_recordSpend_allowsExactlyTheLimit() public {
         _commit(alice, LIMIT);
-
-        vm.prank(hook);
-        registry.recordSpend(alice, LIMIT);
+        assertEq(uint8(_verdict(alice, LIMIT)), uint8(IPolicyRegistry.Verdict.Compliant));
         assertEq(registry.spentToday(alice), LIMIT, "the limit itself is allowed");
-
-        vm.prank(hook);
-        vm.expectRevert(
-            abi.encodeWithSelector(IPolicyRegistry.DailyLimitExceeded.selector, alice, LIMIT, 1, LIMIT)
-        );
-        registry.recordSpend(alice, 1);
+        assertEq(uint8(_verdict(alice, 1)), uint8(IPolicyRegistry.Verdict.LimitExceeded));
+        assertEq(registry.spentToday(alice), LIMIT + 1);
     }
 
-    /// A refused payment must not move the counter, or a caller could burn an
-    /// institution's daily allowance by attempting payments that never happen.
-    function test_recordSpend_aRefusedPaymentLeavesTheCounterAlone() public {
+    /// The release the module judges leaves escrow whatever the verdict, so a
+    /// counter that skipped the refused ones would understate what the
+    /// institution spent. Every release moves the counter; the verdict says
+    /// whether it should have happened.
+    function test_recordSpend_aReleaseOutsideThePolicyIsCountedLikeAnyOther() public {
         _commit(alice, LIMIT);
-
-        vm.prank(hook);
-        registry.recordSpend(alice, 10_000 * USDC);
-
-        vm.prank(hook);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IPolicyRegistry.DailyLimitExceeded.selector, alice, 10_000 * USDC, LIMIT, LIMIT
-            )
-        );
-        registry.recordSpend(alice, LIMIT);
-
-        assertEq(registry.spentToday(alice), 10_000 * USDC, "unchanged");
+        _verdict(alice, 10_000 * USDC);
+        assertEq(uint8(_verdict(alice, LIMIT)), uint8(IPolicyRegistry.Verdict.LimitExceeded));
+        assertEq(registry.spentToday(alice), 10_000 * USDC + LIMIT, "counted");
+        assertEq(uint8(_verdict(alice, 1)), uint8(IPolicyRegistry.Verdict.LimitExceeded), "and stays outside");
     }
 
     /// Fail closed. A zero limit is "this policy authorises no spending", not
     /// "unlimited" — the other reading turns a forgotten field into a hole.
     function test_recordSpend_aZeroLimitAuthorisesNothing() public {
         _commit(alice, 0);
+        assertEq(uint8(_verdict(alice, 1)), uint8(IPolicyRegistry.Verdict.LimitExceeded));
+        assertEq(registry.spentToday(alice), 1);
+    }
 
+    function test_recordSpend_neverRevertsOnPolicyGroundsSoAModuleCannotLoseTheAdvance() public {
+        _commit(alice, 0);
+        vm.prank(hook);
+        (bool ok,) = address(registry).call(
+            abi.encodeCall(IPolicyRegistry.recordSpend, (alice, type(uint64).max))
+        );
+        assertTrue(ok, "a refused release is an answer, not a revert");
+        assertEq(registry.spentToday(alice), type(uint64).max);
+    }
+
+    function test_recordSpend_refusesATotalTheCounterCannotHold() public {
+        _commit(alice, LIMIT);
         vm.prank(hook);
         vm.expectRevert(
-            abi.encodeWithSelector(IPolicyRegistry.DailyLimitExceeded.selector, alice, 0, 1, uint128(0))
+            abi.encodeWithSelector(IPolicyRegistry.SpendOverflow.selector, alice, uint256(type(uint128).max) + 1)
         );
-        registry.recordSpend(alice, 1);
+        registry.recordSpend(alice, uint256(type(uint128).max) + 1);
     }
 
     // ------------------------------------------------------ who may spend
@@ -281,10 +289,13 @@ contract PolicyRegistryTest is Test {
         registry.recordSpend(alice, 1 * USDC);
     }
 
-    function test_recordSpend_revertsWhenThePosterHasNoPolicy() public {
-        vm.prank(hook);
-        vm.expectRevert(abi.encodeWithSelector(IPolicyRegistry.NoPolicy.selector, alice));
-        registry.recordSpend(alice, 1 * USDC);
+    function test_recordSpend_answersNoPolicyAndStillCountsTheRelease() public {
+        vm.expectEmit(true, true, false, true);
+        emit IPolicyRegistry.ReleaseOutsidePolicy(
+            alice, registry.currentDay(), 1 * USDC, 0, IPolicyRegistry.Verdict.NoPolicy
+        );
+        assertEq(uint8(_verdict(alice, 1 * USDC)), uint8(IPolicyRegistry.Verdict.NoPolicy));
+        assertEq(registry.spentToday(alice), 1 * USDC, "spent before any policy existed, and remembered");
     }
 
     /// Spending authority is the institution's, not the agent's: the counter is
@@ -420,32 +431,23 @@ contract PolicyRegistryTest is Test {
 
     // ------------------------------------------------------ the hazard, named
 
-    /// A client can zero its own ceiling at any time, and `recordSpend` then
-    /// reverts, and that revert propagates out of `SquareJob.complete`.
-    ///
-    /// On its own that is fail-closed and correct. Combined with square#90 —
-    /// where an expired job refunds the client in full — it is a way for a
-    /// client to refuse to pay for delivered work at the cost of one
-    /// transaction. The registry cannot fix that alone and does not try; the
-    /// test exists so the hazard is in the suite rather than only in prose.
-    /// See docs/decisions/public-daily-ceiling.md.
-    function test_theClientCanZeroItsOwnCeilingAndBlockEveryRelease() public {
+    /// A client can zero its own ceiling at any time. Before #180 that made
+    /// `recordSpend` revert, the revert propagated out of `SquareJob.complete`,
+    /// and combined with square#90 it was a way for a client to refuse to pay
+    /// for delivered work at the cost of one transaction. The registry now
+    /// answers instead of reverting, so the lever moves the verdict and not the
+    /// money: every further release is recorded as outside the policy and
+    /// still completes. See docs/decisions/public-daily-ceiling.md and
+    /// docs/decisions/hook-failure-modes.md.
+    function test_theClientCanZeroItsOwnCeilingButCannotBlockARelease() public {
         _commit(alice, LIMIT);
-        vm.prank(hook);
-        registry.recordSpend(alice, 1_000 * USDC);
+        _verdict(alice, 1_000 * USDC);
 
         vm.prank(alice);
         registry.setPolicy(COMMITMENT, 0);
 
-        vm.prank(hook);
-        // The day's spend is already above the new ceiling of zero, so every
-        // further release is refused — and so is `SquareJob.complete`.
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IPolicyRegistry.DailyLimitExceeded.selector, alice, 1_000 * USDC, 1, uint128(0)
-            )
-        );
-        registry.recordSpend(alice, 1);
+        assertEq(uint8(_verdict(alice, 1)), uint8(IPolicyRegistry.Verdict.LimitExceeded));
+        assertEq(registry.spentToday(alice), 1_000 * USDC + 1, "the release happened and is on the record");
     }
 
     // ---------------------------------------------------------- renouncing
@@ -463,36 +465,29 @@ contract PolicyRegistryTest is Test {
 
     // ------------------------------------------------------------- property
 
-    /// However the day and the payments fall, the counter never passes the
-    /// ceiling and never counts a reverted payment.
-    function testFuzz_theCounterNeverPassesTheCeiling(uint128 limit, uint96 a, uint96 b, uint32 gap) public {
+    /// However the day and the payments fall, every release is counted and the
+    /// verdict says whether the day stayed within the ceiling.
+    function testFuzz_everyReleaseCountsAndTheVerdictFollowsTheCeiling(uint128 limit, uint96 a, uint96 b, uint32 gap)
+        public
+    {
         limit = uint128(bound(limit, 1, type(uint64).max));
         _commit(alice, limit);
 
         vm.startPrank(hook);
-        if (a <= limit) {
-            registry.recordSpend(alice, a);
-        } else {
-            vm.expectRevert(
-                abi.encodeWithSelector(IPolicyRegistry.DailyLimitExceeded.selector, alice, 0, a, limit)
-            );
-            registry.recordSpend(alice, a);
-        }
+        (uint256 beforeA, IPolicyRegistry.Verdict verdictA) = registry.recordSpend(alice, a);
+        assertEq(beforeA, 0);
+        assertEq(uint8(verdictA), uint8(a <= limit ? IPolicyRegistry.Verdict.Compliant : IPolicyRegistry.Verdict.LimitExceeded));
+        assertEq(registry.spentToday(alice), a, "counted whatever the verdict");
 
         uint64 dayBefore = registry.currentDay();
         vm.warp(block.timestamp + gap);
         uint256 carried = registry.currentDay() == dayBefore ? registry.spentToday(alice) : 0;
 
-        if (uint256(carried) + b <= limit) {
-            registry.recordSpend(alice, b);
-        } else {
-            vm.expectRevert(
-                abi.encodeWithSelector(IPolicyRegistry.DailyLimitExceeded.selector, alice, carried, b, limit)
-            );
-            registry.recordSpend(alice, b);
-        }
+        (uint256 beforeB, IPolicyRegistry.Verdict verdictB) = registry.recordSpend(alice, b);
+        assertEq(beforeB, carried);
+        bool within = carried + b <= limit;
+        assertEq(uint8(verdictB), uint8(within ? IPolicyRegistry.Verdict.Compliant : IPolicyRegistry.Verdict.LimitExceeded));
+        assertEq(registry.spentToday(alice), carried + b, "counted whatever the verdict");
         vm.stopPrank();
-
-        assertLe(registry.spentToday(alice), limit, "never over the ceiling");
     }
 }

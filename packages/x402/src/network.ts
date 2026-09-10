@@ -1,10 +1,17 @@
+import {
+  ARC_TESTNET_CHAIN_ID as CORE_ARC_TESTNET_CHAIN_ID,
+  deploymentFor,
+  networkFor,
+} from "@squaresdk/core";
 import { defineChain, getAddress, parseUnits, type Address, type Chain } from "viem";
 import type { AssetAmount, Network } from "@x402/core/types";
 
-export const ARC_TESTNET_CHAIN_ID = 5042002;
-export const ARC_TESTNET_NETWORK: Network = "eip155:5042002";
-export const ARC_TESTNET_RPC_URL = "https://rpc.testnet.arc.io";
-export const ARC_TESTNET_USDC: Address = "0x3600000000000000000000000000000000000000";
+// The chain id, the endpoint and the USDC address are all declared once, in
+// @squaresdk/core. Re-exported here so x402 callers keep the names they had.
+export const ARC_TESTNET_CHAIN_ID = CORE_ARC_TESTNET_CHAIN_ID;
+export const ARC_TESTNET_NETWORK: Network = `eip155:${ARC_TESTNET_CHAIN_ID}`;
+export const ARC_TESTNET_RPC_URL = networkFor(ARC_TESTNET_CHAIN_ID).rpcUrl;
+export const ARC_TESTNET_USDC: Address = deploymentFor(ARC_TESTNET_CHAIN_ID).usdc;
 export const USDC_DECIMALS = 6;
 export const USDC_EIP712_DOMAIN = { name: "USDC", version: "2" } as const;
 export const USDC_ASSET_TRANSFER_METHOD = "eip3009" as const;

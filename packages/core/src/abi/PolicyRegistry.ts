@@ -174,6 +174,11 @@ export const policyRegistryAbi = [
         "name": "spentBefore",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "verdict",
+        "type": "uint8",
+        "internalType": "enum IPolicyRegistry.Verdict"
       }
     ],
     "stateMutability": "nonpayable"
@@ -324,6 +329,43 @@ export const policyRegistryAbi = [
   },
   {
     "type": "event",
+    "name": "ReleaseOutsidePolicy",
+    "inputs": [
+      {
+        "name": "poster",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "day",
+        "type": "uint64",
+        "indexed": true,
+        "internalType": "uint64"
+      },
+      {
+        "name": "spentAfter",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "dailyLimit",
+        "type": "uint128",
+        "indexed": false,
+        "internalType": "uint128"
+      },
+      {
+        "name": "verdict",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum IPolicyRegistry.Verdict"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "SpendRecorded",
     "inputs": [
       {
@@ -374,49 +416,12 @@ export const policyRegistryAbi = [
   },
   {
     "type": "error",
-    "name": "DailyLimitExceeded",
-    "inputs": [
-      {
-        "name": "poster",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "spentBefore",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "amount",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "dailyLimit",
-        "type": "uint128",
-        "internalType": "uint128"
-      }
-    ]
-  },
-  {
-    "type": "error",
     "name": "LimitExceedsProofRange",
     "inputs": [
       {
         "name": "dailyLimit",
         "type": "uint128",
         "internalType": "uint128"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "NoPolicy",
-    "inputs": [
-      {
-        "name": "poster",
-        "type": "address",
-        "internalType": "address"
       }
     ]
   },
@@ -457,6 +462,22 @@ export const policyRegistryAbi = [
     "type": "error",
     "name": "RenounceDisabled",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "SpendOverflow",
+    "inputs": [
+      {
+        "name": "poster",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "spentAfter",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",

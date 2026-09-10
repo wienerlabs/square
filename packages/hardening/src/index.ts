@@ -23,10 +23,12 @@ export type {
 } from "./ssrf.js";
 
 export {
+  canonicalQuery,
   hashRequest,
   idempotencyMiddleware,
   idempotencyScope,
   memoryIdempotencyStore,
+  pathWithCanonicalQuery,
   postgresIdempotencyStore,
   withIdempotency,
 } from "./idempotency.js";
