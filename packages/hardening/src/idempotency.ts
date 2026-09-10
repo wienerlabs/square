@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Context, MiddlewareHandler } from "hono";
+import { idempotencyKeys, type Database, type Json } from "@squaresdk/data";
 import { canonicalJson } from "./canonicalJson.js";
-import { msFromTimestamp } from "./sql.js";
-import type { SqlClient } from "./sql.js";
 
 export interface RequestFingerprint {
   method: string;
@@ -89,69 +88,35 @@ export function memoryIdempotencyStore(options: StoreClockOptions = {}): Idempot
   };
 }
 
-const IDEMPOTENCY_CLAIM_SQL = `insert into idempotency_keys (scope, key, request_hash, status, response, created_at, expires_at)
-values ($1, $2, decode($3, 'hex'), $4, $5::jsonb, now(), $6::timestamptz)
-on conflict (scope, key) do update
-set request_hash = excluded.request_hash,
-    status = excluded.status,
-    response = excluded.response,
-    created_at = excluded.created_at,
-    expires_at = excluded.expires_at
-where idempotency_keys.expires_at <= now()
-returning key`;
-
-const IDEMPOTENCY_READ_SQL = `select request_hash, status, response, expires_at
-from idempotency_keys
-where scope = $1 and key = $2 and expires_at > now()`;
-
-function hexFromBytea(value: unknown): string {
-  if (value instanceof Uint8Array) return Buffer.from(value).toString("hex");
-  if (typeof value === "string") return value.startsWith("\\x") ? value.slice(2) : value;
-  throw new TypeError("request_hash column is neither bytes nor text");
+function jsonBody(body: unknown): Json {
+  return (body ?? null) as Json;
 }
 
-function jsonFromColumn(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return value;
-  }
-}
-
-function storedFromRow(row: Record<string, unknown>): StoredResponse {
+function storedFromRecord(record: idempotencyKeys.IdempotencyRecord): StoredResponse {
   return {
-    requestHash: hexFromBytea(row["request_hash"]),
-    status: Number(row["status"]),
-    body: jsonFromColumn(row["response"]),
-    expiresAt: msFromTimestamp(row["expires_at"]),
+    requestHash: record.requestHash.slice(2),
+    status: record.status,
+    body: record.response,
+    expiresAt: record.expiresAt.getTime(),
   };
 }
 
-export function postgresIdempotencyStore(db: SqlClient, options: StoreClockOptions = {}): IdempotencyStore {
-  const now = options.now ?? Date.now;
+export function postgresIdempotencyStore(db: Database): IdempotencyStore {
   return {
     async get(scope, key) {
-      const result = await db.query(IDEMPOTENCY_READ_SQL, [scope, key]);
-      const row = result.rows[0];
-      return row === undefined ? undefined : storedFromRow(row);
+      const record = await idempotencyKeys.get(db, scope, key);
+      return record === null ? undefined : storedFromRecord(record);
     },
     async putIfAbsent(scope, key, requestHash, response, ttlMs) {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const claimed = await db.query(IDEMPOTENCY_CLAIM_SQL, [
-          scope,
-          key,
-          requestHash,
-          response.status,
-          JSON.stringify(response.body ?? null),
-          new Date(now() + ttlMs).toISOString(),
-        ]);
-        if (claimed.rows.length > 0) return { status: "stored" };
-        const existing = await db.query(IDEMPOTENCY_READ_SQL, [scope, key]);
-        const row = existing.rows[0];
-        if (row !== undefined) return { status: "exists", stored: storedFromRow(row) };
-      }
-      throw new Error(`idempotency key ${scope}/${key} expired between claim and read twice in a row`);
+      const claim = await idempotencyKeys.putIfAbsent(db, {
+        scope,
+        key,
+        requestHash: `0x${requestHash}`,
+        status: response.status,
+        response: jsonBody(response.body),
+        ttlMs,
+      });
+      return claim.outcome === "stored" ? { status: "stored" } : { status: "exists", stored: storedFromRecord(claim.record) };
     },
   };
 }
@@ -222,6 +187,7 @@ export interface IdempotencyMiddlewareOptions {
   actorOf: (c: Context) => string | undefined;
   header?: string | undefined;
   ttlMs?: number | undefined;
+  shouldStore?: ((response: HandlerResponse) => boolean) | undefined;
   required?: boolean | undefined;
   methods?: readonly string[] | undefined;
 }
@@ -237,9 +203,22 @@ interface MiddlewareInput extends IdempotencyRequest {
 
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
-function pathWithQuery(url: string): string {
+function compareStrings(left: string, right: string): number {
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
+}
+
+export function canonicalQuery(search: string): string {
+  const entries = [...new URLSearchParams(search)].sort(([leftName, leftValue], [rightName, rightValue]) =>
+    leftName === rightName ? compareStrings(leftValue, rightValue) : compareStrings(leftName, rightName)
+  );
+  return new URLSearchParams(entries).toString();
+}
+
+export function pathWithCanonicalQuery(url: string): string {
   const parsed = new URL(url);
-  return `${parsed.pathname}${parsed.search}`;
+  const query = canonicalQuery(parsed.search);
+  return query === "" ? parsed.pathname : `${parsed.pathname}?${query}`;
 }
 
 async function parsedRequestBody(c: Context): Promise<unknown> {
@@ -288,7 +267,10 @@ export function idempotencyMiddleware(
   const methods = new Set(
     (options.methods ?? ["POST", "PUT", "PATCH", "DELETE"]).map((method) => method.toUpperCase())
   );
-  const execute = withIdempotency<MiddlewareInput>(store, (input) => input.respond(), { ttlMs: options.ttlMs });
+  const execute = withIdempotency<MiddlewareInput>(store, (input) => input.respond(), {
+    ttlMs: options.ttlMs,
+    shouldStore: options.shouldStore,
+  });
   return async (c, next) => {
     if (!methods.has(c.req.method.toUpperCase())) {
       await next();
@@ -306,7 +288,7 @@ export function idempotencyMiddleware(
     }
     const requestHash = hashRequest({
       method: c.req.method,
-      path: pathWithQuery(c.req.url),
+      path: pathWithCanonicalQuery(c.req.url),
       body: await parsedRequestBody(c),
       actor,
     });

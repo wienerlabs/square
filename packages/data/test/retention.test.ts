@@ -41,7 +41,7 @@ describe("sweepAll", () => {
         requestHash: hash32(0x01),
         status: 201,
         response: { id: 1 },
-        expiresAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+        ttlMs: -25 * 60 * 60 * 1000,
       });
       await idempotencyKeys.putIfAbsent(db, {
         scope: "orders",
@@ -49,7 +49,7 @@ describe("sweepAll", () => {
         requestHash: hash32(0x02),
         status: 201,
         response: { id: 2 },
-        expiresAt: new Date(Date.now() + 60_000),
+        ttlMs: 60_000,
       });
 
       await rateLimits.increment(db, "ip:1.1.1.1", new Date(Date.now() - 10 * DEFAULT_RATE_LIMIT_WINDOW_MS));
