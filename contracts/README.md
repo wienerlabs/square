@@ -240,28 +240,59 @@ the build in front of you. See
 
 ## Measured cost
 
-From transaction receipts on Arc, not estimates and not local simulation.
+From transaction receipts on Arc, not estimates and not local simulation. Both
+receipts were read back from the chain for
+[#159](https://github.com/wienerlabs/square/issues/159); both paid an effective
+gas price of 22.1728 gwei.
+
+| | Gas | Cost at 22.17 gwei | Receipt |
+|---|---|---|---|
+| **Deployment**, the Apache-2.0 verifier | **714,837** | 0.01585 USDC | [`0xc16ff2be…`](https://testnet.arcscan.app/tx/0xc16ff2be8a7a460d4bafac577bcf863b29d673306e7c89083695ec5cd5995c20) |
+| **One verification**, whole transaction | **262,403** | 0.00582 USDC | [`0x2a2e6377…`](https://testnet.arcscan.app/tx/0x2a2e637745599c19152a032d8fa5d65dbc910e993e09d766c9019a4f592d6d14) |
+
+`verifyProof` is a `view` function, so the verification tx is a transaction sent
+to it purely to get a receipt with a real `gasUsed`.
+
+**Which contract each receipt is from.** The deployment receipt is this
+contract: it created
+[`0x35d7B65B…`](https://testnet.arcscan.app/address/0x35d7B65BDDf5C19DE107B1f90110B1FB381F7Ae1),
+whose runtime is the same 3,063 bytes `forge inspect` gives for
+`src/Groth16Verifier.sol`. The verification receipt is not: it was sent to
+[`0x7b8E8089…`](https://testnet.arcscan.app/address/0x7b8E8089129094FD20a7C9243904343e4C6aBff7),
+the snarkjs-generated verifier this one replaced, and no `verifyProof`
+transaction has been sent to `0x35d7…` — its only transaction is its own
+creation. The verification cost of *this* contract is so far measured only as an
+estimate, in the next table.
+
+### Estimates and simulation, not receipts
 
 | | Gas | Cost at 22.17 gwei |
 |---|---|---|
-| **Deployment**, on chain | **714,837** | 0.01585 USDC |
-| **One verification**, on chain (`eth_estimateGas`, whole call) | **281,596** | 0.00624 USDC |
-| **One verification**, execution only (Foundry) | **258,232** | 0.00573 USDC |
+| One verification, `eth_estimateGas`, whole call, this contract | 281,596 | 0.00624 USDC |
+| One verification, execution only, Foundry, this contract | 258,232 | 0.00573 USDC |
 
-[Verification tx](https://testnet.arcscan.app/tx/0x2a2e637745599c19152a032d8fa5d65dbc910e993e09d766c9019a4f592d6d14)
-— `verifyProof` is a `view` function, so this is a transaction sent to it purely
-to get a receipt with a real `gasUsed`.
+That estimate is 7.31% above the verification receipt in the table above, but
+the two are different contracts, so the gap says little about the estimator:
+about 16k of it is the Apache-2.0 rewrite costing more than the snarkjs
+verifier it replaced (281,596 against 265,653, both estimates). On the one
+contract that has both figures, the snarkjs verifier below, the estimate ran
+3,250 gas over the receipt, 1.24%.
 
-How that compares to what was measured off chain:
+**The figures below are the snarkjs verifier this one replaced**, not this
+contract — the GPL-3.0 verifier that `snarkjs zkey export solidityverifier`
+generated, and the one the verification receipt above came from. It was
+verified at block 60,817,050, 27,582 blocks before the Apache-2.0 verifier
+existed. Read from the chain for [#159](https://github.com/wienerlabs/square/issues/159):
 
-| Measurement | Gas |
+| That verifier | Gas |
 |---|---|
-| Arc receipt, whole transaction | 262,403 |
+| Arc receipt, deployment ([`0x4a26f96a…`](https://testnet.arcscan.app/tx/0x4a26f96a45a9fbaab85692afc9af9805f775e507962edb3e1fa2e985e5e259a5)) | 486,154 |
+| Arc receipt, whole verification transaction | 262,403 |
 | Arc `eth_estimateGas` | 265,653 |
 | Local: 21,000 base + calldata + execution | 269,384 |
 | Local: `verifyProof` execution alone | 242,432 |
 
-The local deployment figure was 486,154 and the chain charged exactly that. The
+Its local deployment figure was 486,154 and the chain charged exactly that. The
 estimate ran 3,250 gas over what the transaction actually used, which is what an
 estimate is for.
 

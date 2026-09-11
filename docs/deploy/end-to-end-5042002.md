@@ -138,10 +138,12 @@ public signals whatever the circuit behind it costs.
 
 **Gas: 281,608** for one verification, from `eth_estimateGas` against Arc. The
 figure moves by a few dozen between blocks — three consecutive runs gave
-281,584, 281,596 and 281,608 — because an estimate is an estimate. The receipt
-figure for a verification on the deployed contract is in
-[contracts/README.md](../../contracts/README.md#measured-cost); this document
-does not restate it, so there is one place to update.
+281,584, 281,596 and 281,608 — because an estimate is an estimate. No
+verification receipt exists yet for this verifier: the only `verifyProof`
+transaction on chain was sent to the snarkjs verifier it replaced, and
+[contracts/README.md](../../contracts/README.md#measured-cost) records which
+receipt is which. This document does not restate them, so there is one place to
+update.
 
 For comparison, the GPL-licensed snarkjs verifier this one replaced cost 265,653
 on the same proof. The Apache-2.0 rewrite is about 16k more.
