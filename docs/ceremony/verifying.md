@@ -106,7 +106,11 @@ You are checking four separate claims. They fail independently, so check them
 separately.
 
 If you would rather not do it by hand, `ceremony.mjs verify-chain` runs all four
-and exits non-zero on any failure:
+and exits non-zero on any failure — including step 4, which it used to skip:
+until square#228 it compared the published verifying key against a digest of
+that same file recorded in the transcript, which is the publisher checking their
+own arithmetic. It now exports a verifying key from `payment_final.zkey` and
+compares that:
 
 ```bash
 node scripts/ceremony.mjs verify-chain

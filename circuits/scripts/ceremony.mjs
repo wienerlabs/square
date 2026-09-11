@@ -28,6 +28,7 @@
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMain } from './entrypoint.mjs';
@@ -165,6 +166,65 @@ function sh(cmd, args, options = {}) {
 
 const sha256 = (file) =>
   crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+
+// Key order is not part of a verifying key's meaning, so keys are compared over
+// a stable ordering rather than over the bytes snarkjs happened to write.
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Is `vkFile` the verifying key `zkeyFile` produces?
+ *
+ * square#228. `verify-chain` used to answer this by comparing `payment_vk.json`
+ * against `transcript.final.vk_sha256` — and `finalize` writes that field by
+ * hashing that same file. Both sides came from the party being audited, so a
+ * verifying key nobody derived from the final key passed as long as the
+ * transcript recorded its digest. Measured, with a `vk_delta_2` that never came
+ * out of the zkey and a transcript adjusted to match: `ok the verifying key is
+ * the one the transcript records`.
+ *
+ * It is the one file whose provenance cannot rest on the transcript. The zkey
+ * is not what reaches the chain; the verifying key is — `Groth16Verifier.sol`'s
+ * constants are generated from it, and `contracts/script/check-verifier-ic.mjs`
+ * ties that file to the deployed verifier. Deriving it here closes
+ * `final.zkey → vk → Groth16Verifier` end to end.
+ *
+ * This is the same shape as the substitution square#121 removed from the beacon
+ * check, named in `test/drand-beacon.test.js`: "the field the old code compared
+ * is supplied by the party it is meant to check".
+ *
+ * The export is deterministic — two exports of one key are byte-identical, and
+ * the export of `build/payment.zkey` is byte-identical to `build/payment_vk.json`
+ * — so this could compare bytes. It compares canonical JSON instead, because a
+ * reformatted but equal key should read as a pass rather than as a puzzle.
+ */
+export async function verifyingKeyMatches(zkeyFile, vkFile) {
+  if (!fs.existsSync(zkeyFile)) return { ok: false, reason: `there is no key at ${zkeyFile}` };
+  if (!fs.existsSync(vkFile)) return { ok: false, reason: `there is no verifying key at ${vkFile}` };
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-vk-'));
+  const derived = path.join(dir, 'verification_key.json');
+  try {
+    execFileSync('snarkjs', ['zkey', 'export', 'verificationkey', zkeyFile, derived], {
+      cwd: ROOT,
+      stdio: 'pipe',
+    });
+    const fromKey = canonical(JSON.parse(fs.readFileSync(derived, 'utf8')));
+    const published = canonical(JSON.parse(fs.readFileSync(vkFile, 'utf8')));
+    return fromKey === published
+      ? { ok: true, reason: null }
+      : { ok: false, reason: `${path.basename(vkFile)} is not what ${path.basename(zkeyFile)} exports` };
+  } catch (error) {
+    return { ok: false, reason: `could not export a verifying key from ${path.basename(zkeyFile)}: ${error.message}` };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 // What compiled the circuit, and what it compiled.
 //
@@ -585,9 +645,23 @@ async function verifyChain() {
     }
 
     process.stdout.write('\nkeys\n');
+
+    // Derived from the final key, not read out of the transcript. This is the
+    // check that ties the file the chain will carry to the ceremony that
+    // produced it, and it is step 4 of docs/ceremony/verifying.md (#228).
+    const vk = await verifyingKeyMatches(finalPath(), vkPath());
+    if (vk.ok) {
+      ok('the verifying key is the one the final key exports');
+    } else {
+      bad(`the verifying key is not the one the final key exports: ${vk.reason}`);
+    }
+
+    // Second, and it says something smaller: the published file has not changed
+    // since the transcript recorded it. On its own it says nothing about where
+    // that file came from, which is what #228 found.
     if (fs.existsSync(vkPath()) && transcript.final
         && sha256(vkPath()) === transcript.final.vk_sha256) {
-      ok('the verifying key is the one the transcript records');
+      ok('and it is unchanged since the transcript recorded it');
     } else {
       bad('the verifying key does not match the transcript');
     }
