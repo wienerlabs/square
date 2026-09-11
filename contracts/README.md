@@ -271,7 +271,12 @@ estimate, in the next table.
 | One verification, `eth_estimateGas`, whole call, this contract | 281,596 | 0.00624 USDC |
 | One verification, execution only, Foundry, this contract | 258,232 | 0.00573 USDC |
 
-The estimate is 7.31% above the verification receipt in the table above.
+That estimate is 7.31% above the verification receipt in the table above, but
+the two are different contracts, so the gap says little about the estimator:
+about 16k of it is the Apache-2.0 rewrite costing more than the snarkjs
+verifier it replaced (281,596 against 265,653, both estimates). On the one
+contract that has both figures, the snarkjs verifier below, the estimate ran
+3,250 gas over the receipt, 1.24%.
 
 **The figures below are the snarkjs verifier this one replaced**, not this
 contract — the GPL-3.0 verifier that `snarkjs zkey export solidityverifier`
