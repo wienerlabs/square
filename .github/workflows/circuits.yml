@@ -31,7 +31,11 @@ on:
       - "circuits/**"
       - "services/prover/**"
       - "contracts/src/Groth16Verifier.sol"
+      - "contracts/src/ComplianceModule.sol"
+      - "contracts/src/SquareHook.sol"
+      - "contracts/script/DeployLocal.s.sol"
       - "contracts/script/check-verifier-ic.mjs"
+      - "contracts/script/refuse-and-replay-on-anvil.mjs"
       - ".github/actions/circom/**"
       - ".github/scripts/vitest-summary.mjs"
       - ".github/workflows/circuits.yml"
@@ -296,5 +300,92 @@ jobs:
             echo
             echo '```'
             cat end-to-end.txt 2>/dev/null || echo 'the run produced no output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  refuse-and-replay:
+    name: refuse and replay (policy → proof → anvil)
+    runs-on: ubuntu-latest
+    # square#76: a non-compliant payment is refused and a spent proof cannot pay
+    # twice, with the proof coming from the real prover and the release going
+    # through the real kernel, keeper and hook. On anvil rather than Arc, because
+    # everything it needs is something a shared testnet cannot give a CI run: a
+    # hook owner key on the runner, a clock it can move past a one-day challenge
+    # window, and accounts that sign without secrets. #19's job above already
+    # shows the verifier against Arc's own precompiles; this one is about what
+    # the chain *does* with a verdict, which is local-chain work.
+    #
+    # Hermetic apart from the ptau fetch the circuit build already makes, which
+    # is also why this job can be promoted to a required check once it has run
+    # for a while: its red is a statement about the change, not about a network.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09  # v1.9.1
+        with:
+          version: stable
+
+      - uses: ./.github/actions/circom
+
+      - name: Cache the phase-1 powers of tau
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: circuits/build/ppot_0080_14.ptau
+          key: ptau-${{ hashFiles('circuits/scripts/fetch-ptau.mjs') }}
+
+      # npm ci installs circuits' devDependencies too, which matters here:
+      # scripts/rerandomise.mjs needs @noble/curves for scenario E.
+      - name: Build the circuit and a development proving key
+        working-directory: circuits
+        run: |
+          npm ci
+          npm run build
+
+      - name: Put the artifacts where the prover looks for them
+        run: |
+          set -euo pipefail
+          mkdir -p services/prover/artifacts
+          cp circuits/build/payment.zkey services/prover/artifacts/
+          cp circuits/build/payment_vk.json services/prover/artifacts/
+          cp circuits/build/payment_js/payment.wasm services/prover/artifacts/
+
+      - name: Install the prover
+        working-directory: services/prover
+        run: npm install --install-links
+
+      # DeployLocal without INSTALL_COMPLIANCE_MODULE: the module it deploys is
+      # bound to the committed verifier, which rejects every proof this run's
+      # key produces. The script installs one bound to this build instead.
+      - name: A local chain, and the stack on it
+        working-directory: contracts
+        run: |
+          set -euo pipefail
+          anvil --silent &
+          for _ in $(seq 1 30); do cast chain-id --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1 && break; sleep 1; done
+          forge script script/DeployLocal.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
+
+      - name: Refused when not compliant, and a spent proof paid once
+        working-directory: contracts
+        env:
+          ANVIL_RPC_URL: http://127.0.0.1:8545
+        run: |
+          set -o pipefail
+          node script/refuse-and-replay-on-anvil.mjs | tee ../refuse-and-replay.txt
+
+      - name: On the run summary
+        if: always()
+        run: |
+          {
+            echo '### Refuse and replay: policy → proof → anvil'
+            echo
+            echo '```'
+            cat refuse-and-replay.txt 2>/dev/null || echo 'the run produced no output'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
