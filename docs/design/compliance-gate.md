@@ -73,6 +73,12 @@ not the total: a preview that ran out of gas inside the cap would be caught and
 read as "not verified", so a valid proof would be refused and the client paid —
 a silent and expensive failure. `test_gas_eachCappedCallHasHeadroom` asserts it.
 
+The same gate measured end to end — a proof from the real prover, released
+through the keeper on a local chain — is in
+[refuse-and-replay-31337.md](../deploy/refuse-and-replay-31337.md): a gated
+`finalize` costs about 580 000 gas more than an ungated one, and a refused
+replay nearly as much, because the mark is checked after the pairing.
+
 ## The eight bindings
 
 The verifier is stateless. It says a proof is valid for eight public signals,

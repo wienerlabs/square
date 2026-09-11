@@ -19,6 +19,7 @@ pull request.
 | `circuits` | `payment.circom` compiles, a proving key builds, and the whole constraint suite runs against them. How many tests passed is on the run summary, not in this table: a count written by hand here drifts the moment a test is added. |
 | `prover (real proving key)` | The prover agrees with the circuit, and its Solidity calldata matches `snarkjs`. |
 | `end-to-end (policy → proof → Arc)` | A policy, a proof built from it, and Arc accepting that proof — not from a fixture. **Not required**, see below. |
+| `refuse and replay (policy → proof → anvil)` | A payment over the policy's ceiling is proved, verified, and still pays the provider nothing; a compliant payment is released once and then refused on replay — as the same bytes and as a re-randomised copy. Every refusal is asserted by the module's own reason. **Not required**, see below. |
 | `services/prover (hermetic)` | The rule evaluator and the encoding with no artifacts — a contributor's `npm test`. |
 | `packages/data`, `packages/hardening`, `packages/observability` | Hermetic package suites. |
 | `packages/x402 (anvil)`, `services/indexer (anvil)`, `services/keeper (anvil)` | Against a local chain the job starts itself: anvil plus `DeployLocal.s.sol`, asserted before the suites run. |
@@ -30,14 +31,17 @@ pull request.
 | `local stack (make up)` | The four Dockerfiles build, the whole stack comes up on a runner, and every service answers `/health` with a passing status. Also asserts the contracts have bytecode on the chain and that the prover returns a real proof. **Listed in `branch-protection.json` but not required yet:** that file is applied by hand after a merge, so this one starts gating when the command below is next run. |
 | `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. A red `secret scan` names the rule, the file and the line in the job log: gitleaks runs with `--verbose`, and with `--redact` beside it the value itself is never printed. It walks the git history, so the finding can sit in a commit the diff no longer shows. |
 
-Four are **not** required to merge. Each one's red is a statement about Arc
-Testnet being reachable, or about a funded account, rather than about the change,
-and a young testnet having a bad afternoon should not block unrelated work.
+Five are **not** required to merge. Four of them are not required because their
+red is a statement about Arc Testnet being reachable, or about a funded account,
+rather than about the change, and a young testnet having a bad afternoon should
+not block unrelated work. The fifth, `refuse and replay`, reaches no network and
+is not required only because it is new.
 
 | Check | Why it is not required |
 |---|---|
 | `end-to-end (Arc Testnet)` | Resolves the permanent smoke agents against the live registry. |
 | `end-to-end (policy → proof → Arc)` | New, and it reaches Arc. Promote it once it has run without flaking, the way `verifies on Arc Testnet` was. Adding it to the required set means re-applying `branch-protection.json`, in the same order: merge first, then the command. |
+| `refuse and replay (policy → proof → anvil)` | New. Unlike the row above it reaches no network beyond the ptau fetch every circuit job makes, so its red is a statement about the change — which makes it the better candidate for promotion. Same rule: once it has run without flaking, merge first, then re-apply `branch-protection.json`. |
 | `packages/aa (anvil)` | Named for a local chain, but `test/globalSetup.ts` calls `startAnvilFork()`, which defaults to `https://rpc.testnet.arc.io` (`scripts/fork.ts:144`) with no override and no fallback, and rethrows on failure. Arc being down would block a documentation pull request. |
 | `acceptance (Arc Testnet, funded key)` | Spends real testnet gas, needs a secret, does not run on fork pull requests, and lives in its own path-filtered workflow. |
 
