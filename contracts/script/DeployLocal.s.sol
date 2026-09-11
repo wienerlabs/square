@@ -62,7 +62,10 @@ contract DeployLocal is Script {
         s.kernel = new SquareJob(address(m.usdc), deployer, 100, 50, 1_000_000, deployer);
         s.keeper = new KeeperEvaluator(address(s.kernel), deployer, 1 days, 3 days, 1 hours);
         s.arbitration = new Arbitration(address(s.keeper), deployer, 1_000, 1_000_000);
-        s.market = new ClaimMarket(address(s.kernel), address(s.keeper));
+        // square#30: the market reads each poster's buyer list from the registry,
+        // so the registry exists before the market does.
+        s.policy = new PolicyRegistry(deployer);
+        s.market = new ClaimMarket(address(s.kernel), address(s.keeper), address(s.policy));
         s.hook = new SquareHook(
             address(s.kernel),
             address(s.market),
@@ -73,8 +76,9 @@ contract DeployLocal is Script {
             address(s.keeper),
             1_000_000
         );
-        // square#27 filled the slot. The registry, the verifying key and the
-        // module are wired here, in the order their access control needs:
+        // square#27 filled the slot. The verifying key and the module are
+        // deployed here and wired to the registry above, in the order their
+        // access control needs:
         // the module has to know its hook before the hook can use it, and the
         // registry has to know the module before the module can move a counter.
         //
@@ -82,7 +86,6 @@ contract DeployLocal is Script {
         // generous. On a real chain it is the time between building a proof and
         // it being mined, and every second of it is a second in which a policy's
         // time window can be straddled.
-        s.policy = new PolicyRegistry(deployer);
         s.verifier = new Groth16Verifier();
         s.compliance = new ComplianceModule(
             address(s.verifier), address(s.policy), address(s.kernel), deployer, 1 hours

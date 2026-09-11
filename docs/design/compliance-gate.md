@@ -7,6 +7,7 @@ counter it reads means.
 
 [i27]: https://github.com/wienerlabs/square/issues/27
 [i29]: https://github.com/wienerlabs/square/issues/29
+[i30]: https://github.com/wienerlabs/square/issues/30
 [i76]: https://github.com/wienerlabs/square/issues/76
 [i90]: https://github.com/wienerlabs/square/issues/90
 [i100]: https://github.com/wienerlabs/square/issues/100
@@ -108,7 +109,10 @@ Two of them deserve their own sentence.
 **Signal 2 is the payee, not the provider.** A receivable sold through
 `ClaimMarket` pays its buyer ([#29][i29]), and the hook resolves that address
 before the module sees it. Binding to the provider would refuse every proof on a
-sold claim.
+sold claim. Who can become that buyer is itself gated since [#30][i30]: the
+poster's policy approves the buyers its receivables may be sold to
+([buyer-eligibility.md](../decisions/buyer-eligibility.md)), and a proof naming
+the buyer releases to the buyer (`test_soldClaimReleasesToTheBuyerTheProofNames`).
 
 **Signal 6 is what makes the circuit's rule 6 mean anything.** `payment.circom`
 takes the timestamp as a private witness the prover picks; without a window

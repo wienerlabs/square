@@ -73,6 +73,7 @@ interface IPolicyRegistry {
         address indexed poster, uint64 indexed day, uint256 spentAfter, uint128 dailyLimit, Verdict verdict
     );
     event SpenderUpdated(address indexed spender, bool allowed);
+    event BuyerRootCommitted(address indexed poster, bytes32 indexed root);
 
     error ZeroCommitment();
     error ZeroAddress();
@@ -85,6 +86,28 @@ interface IPolicyRegistry {
     /// @dev Keyed by `msg.sender`: an institution writes its own row and there
     ///      is no path to anyone else's, not even for the owner.
     function setPolicy(bytes32 commitment, uint128 dailyLimit) external;
+
+    /// @notice Commit to the buyers the caller's policy lets a receivable be sold
+    ///         to, or replace the list. square#30.
+    /// @dev A sold receivable redirects the poster's money to whoever bought
+    ///      it, so the poster's policy is what decides who may. `root` is the
+    ///      Merkle root of salted leaves
+    ///      `keccak256(bytes.concat(keccak256(abi.encode(buyer, salt))))`, one
+    ///      per approved buyer, with pairs hashed in sorted order as
+    ///      OpenZeppelin's `MerkleProof` expects. Only the root is stored, so
+    ///      the list itself and whoever stands behind each address stay off
+    ///      chain; docs/decisions/buyer-eligibility.md is what was chosen and
+    ///      why.
+    ///
+    ///      Zero is a valid write and means no buyer is approved: the
+    ///      poster's receivables cannot be sold. That is also the state of a
+    ///      poster who never called this. It fails closed for the same reason
+    ///      a zero `dailyLimit` authorises no spending.
+    ///
+    ///      Keyed by `msg.sender`, as `setPolicy` is. It does not move `epoch`:
+    ///      the list is judged when a receivable is bought, and no proof is
+    ///      built against it.
+    function setBuyerRoot(bytes32 root) external;
 
     /// @notice Add `amount` to `poster`'s spend for the current UTC day.
     ///
@@ -125,6 +148,8 @@ interface IPolicyRegistry {
     function policyOf(address poster) external view returns (Policy memory);
     function epochOf(address poster) external view returns (uint64);
     function commitmentOf(address poster) external view returns (bytes32);
+    /// @notice The root `setBuyerRoot` last stored for `poster`; zero when none.
+    function buyerRootOf(address poster) external view returns (bytes32);
     function spentToday(address poster) external view returns (uint256);
     function currentDay() external view returns (uint64);
     function isSpender(address account) external view returns (bool);

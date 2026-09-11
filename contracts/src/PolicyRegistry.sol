@@ -91,6 +91,7 @@ contract PolicyRegistry is IPolicyRegistry, Ownable2Step {
     mapping(address poster => Policy) private _policies;
     mapping(address poster => DailySpend) private _spend;
     mapping(address spender => bool) private _spenders;
+    mapping(address poster => bytes32) private _buyerRoots;
 
     /// @param initialOwner Expected to be a Safe. It administers the spender
     ///        set and nothing else — it cannot write or alter a poster's policy.
@@ -124,6 +125,12 @@ contract PolicyRegistry is IPolicyRegistry, Ownable2Step {
     ///      `recordSpend` is unreachable without a registered spender, so
     ///      renouncing would freeze that set permanently and with it every
     ///      compliance-gated release.
+    /// @inheritdoc IPolicyRegistry
+    function setBuyerRoot(bytes32 root) external {
+        _buyerRoots[msg.sender] = root;
+        emit BuyerRootCommitted(msg.sender, root);
+    }
+
     function renounceOwnership() public view override onlyOwner {
         revert RenounceDisabled();
     }
@@ -187,6 +194,11 @@ contract PolicyRegistry is IPolicyRegistry, Ownable2Step {
     /// @inheritdoc IPolicyRegistry
     function commitmentOf(address poster) external view returns (bytes32) {
         return _policies[poster].commitment;
+    }
+
+    /// @inheritdoc IPolicyRegistry
+    function buyerRootOf(address poster) external view returns (bytes32) {
+        return _buyerRoots[poster];
     }
 
     /// @inheritdoc IPolicyRegistry

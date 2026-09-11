@@ -38,7 +38,7 @@ other is implemented. The two questions #6 was asked answer as follows.
 | `Arbitration` | bonded disputes, versioned arbiter set, M-of-N vote by bitmask, decision record | yes: dispute bonds until the dispute closes |
 | `ClaimMarket` | receivable listing, purchase, cancellation, payee lookup | no: price moves buyer → seller directly |
 | `SquareHook` | the single whitelisted `IACPHook`: payout routing, compliance slot, reputation and validation writes | no |
-| `PolicyRegistry` | the policy commitment and the daily spend counter the compliance module reads and moves | no |
+| `PolicyRegistry` | the policy commitment and the daily spend counter the compliance module reads and moves, and each poster's buyer list root | no |
 
 `SquareJob` never reads a live token balance. Every transfer out is computed
 from the stored `budget` and the fee basis points snapshotted at funding.
@@ -187,6 +187,7 @@ them.
 squareJob        immutable
 keeperEvaluator  immutable
 paymentToken     immutable
+policyRegistry   immutable   where each poster's buyer list root is read from (#30)
 listings         mapping(uint256 jobId => Listing)
 
 Listing
@@ -199,6 +200,12 @@ Listing
 
 One listing per job. A cancelled listing may be replaced; a sold one is final.
 `payeeOf(jobId)` returns `buyer` when `status == Sold`, else the provider.
+
+`buy` takes the buyer's salt and Merkle path and checks the leaf it rebuilds
+from `msg.sender` against `PolicyRegistry.buyerRootOf(client)`. Nothing about the
+list is stored here; the market keeps only the buyer's address, because that is
+the address the kernel will pay
+([buyer-eligibility.md](../decisions/buyer-eligibility.md)).
 
 ## SquareHook storage
 
@@ -225,6 +232,8 @@ spend       mapping(address poster => DailySpend)
               day         uint64      UTC day index, timestamp / 86400
               spent       uint128     recorded against that day; stale days read as zero
 spenders    mapping(address spender => bool)   who may move a counter — #27's module
+buyerRoots  mapping(address poster => bytes32)  Merkle root of the buyers the poster approved;
+                                                zero approves nobody (#30)
 ```
 
 `Policy` is two slots (`bytes32`, then `uint128 + uint64 + uint64`) and
@@ -363,6 +372,7 @@ institution's compliance state filters on the poster address.
 | `SpendRecorded(address indexed poster, uint64 indexed day, uint256 amount, uint256 spentAfter)` | on every release, accepted or not; `day` is the UTC day index |
 | `ReleaseOutsidePolicy(address indexed poster, uint64 indexed day, uint256 spentAfter, uint128 dailyLimit, Verdict verdict)` | beside `SpendRecorded` when the verdict is not `Compliant`, with `verdict` either `NoPolicy` or `LimitExceeded`. The release still happened; this is the record that it happened outside the ceiling |
 | `SpenderUpdated(address indexed spender, bool allowed)` | owner only |
+| `BuyerRootCommitted(address indexed poster, bytes32 indexed root)` | on every `setBuyerRoot`, including a replacement; a zero `root` means the poster approved nobody. The list itself is never emitted, only its root |
 
 A release outside the policy is not refused, it is recorded. `recordSpend` never
 reverts on policy grounds: it advances the counter, returns a `Verdict` and

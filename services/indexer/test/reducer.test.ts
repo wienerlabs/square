@@ -17,7 +17,7 @@ const client = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" as const;
 const provider = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC" as const;
 const buyer = "0x90F79bf6EB2c4f870365E785982E1f101E93b906" as const;
 const evaluator = "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707" as const;
-const hook = "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6" as const;
+const hook = "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318" as const;
 const zero = "0x0000000000000000000000000000000000000000" as const;
 
 let index = 0;

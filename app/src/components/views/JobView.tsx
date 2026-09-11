@@ -4,7 +4,7 @@ import { agentFromDid, hashDeliverable, JobStatus, Outcome, specHashFromDescript
 import { InvalidDidError } from "@squaresdk/did-resolver";
 import { useSearchParams } from "next/navigation";
 import { useMemo, useState, type ReactNode } from "react";
-import { isAddressEqual, type Address } from "viem";
+import { isAddressEqual, zeroHash, type Address } from "viem";
 import { useAccount } from "wagmi";
 import { AddressLink } from "@/components/AddressLink";
 import { AmountUsdc } from "@/components/AmountUsdc";
@@ -19,6 +19,7 @@ import { PanelCard } from "@/components/PanelCard";
 import { PrimaryButton } from "@/components/PrimaryButton";
 import { StatusPill, listingTone, outcomeTone, phaseTone } from "@/components/StatusPill";
 import { addressInputError, readAddressInput } from "@/lib/address";
+import { readEligibilityInput } from "@/lib/eligibility";
 import { challengeWindowClosed, disputeAvailable, keeperEvaluates as evaluatedByKeeper, refundAvailable, submitAvailable, submitDeadline } from "@/lib/actions";
 import { chartColors, formatCompactUsdc, payoutSplit, settlementClock } from "@/lib/charts";
 import { formatBps, formatCountdown, formatDuration, formatTimestamp, formatUsdc, isZeroAddress, parseUsdc, shortAddress, shortHash, statusLabel } from "@/lib/format";
@@ -333,6 +334,72 @@ function ListClaimAction({ ctx, detail, now }: { ctx: ActionContext; detail: Job
       >
         <input id="price" inputMode="decimal" className={inputClass} value={value} onChange={(event) => setValue(event.target.value)} placeholder="0.00" />
       </Field>
+    </ActionCard>
+  );
+}
+
+function BuyClaimAction({ ctx, detail, now, account }: { ctx: ActionContext; detail: JobDetail; now: number; account: Address }) {
+  const [value, setValue] = useState("");
+  const parsed = readEligibilityInput(value);
+  const { listing, buyerRoot } = detail;
+  const issuedToAnother = parsed.kind === "valid" && parsed.buyer !== undefined && !isAddressEqual(parsed.buyer, account);
+  const eligibility = parsed.kind === "valid" && !issuedToAnother ? parsed.eligibility : null;
+  const listOpen = buyerRoot !== null && buyerRoot !== zeroHash;
+  return (
+    <ActionCard
+      title="Buy the receivable"
+      description={
+        <>
+          <p>
+            Pays the seller {formatUsdc(listing.price)} USDC for a face value of {formatUsdc(listing.faceValue)} USDC, and makes you the payee at finalize. The
+            transaction is bound to this price and reverts if the seller relists at another one. An approval is sent first if the allowance is short.
+          </p>
+          <p>
+            Only a buyer the client&apos;s policy approved can buy. The client publishes the root of its buyer list and issues each buyer a salt and a path; the
+            market rebuilds your leaf from the connected account, so an entry issued to another address is refused.
+          </p>
+          <ReceivableOutcomes detail={detail} now={now} audience="buyer" />
+        </>
+      }
+      buttonLabel={`Buy for ${formatUsdc(listing.price)} USDC`}
+      disabled={!listOpen || eligibility === null}
+      onClick={() => {
+        if (listOpen && eligibility !== null) {
+          void ctx.run("Buy claim", () => ctx.square.buyClaim(ctx.id, eligibility, { expectedPrice: listing.price }));
+        }
+      }}
+      ctx={ctx}
+    >
+      {buyerRoot === null ? (
+        <p className="text-caption text-graphite" role="status">
+          The buyer list could not be read from this market, so the purchase is not offered. A market deployed before square#30 has no list to read.
+        </p>
+      ) : buyerRoot === zeroHash ? (
+        <p className="text-caption text-graphite" role="status">
+          The client has approved no buyers, so this receivable cannot be sold.
+        </p>
+      ) : (
+        <Field
+          label="Your entry on the client's buyer list (JSON)"
+          htmlFor="eligibility"
+          error={
+            parsed.kind === "malformed"
+              ? parsed.message
+              : issuedToAnother && parsed.kind === "valid"
+                ? `This entry was issued to ${parsed.buyer}, not to the connected account.`
+                : null
+          }
+        >
+          <JsonEditor
+            id="eligibility"
+            value={value}
+            onChange={setValue}
+            error={parsed.kind === "malformed" ? parsed.message : null}
+            placeholder={'{\n  "salt": "0x...",\n  "proof": ["0x..."]\n}'}
+            minHeight={120}
+          />
+        </Field>
+      )}
     </ActionCard>
   );
 }
@@ -799,24 +866,7 @@ export function JobView() {
               />
             ) : null}
             {showList ? <ListClaimAction ctx={ctx} detail={detail} now={now} /> : null}
-            {showBuy ? (
-              <SimpleAction
-                ctx={ctx}
-                title="Buy the receivable"
-                label="Buy claim"
-                buttonLabel={`Buy for ${formatUsdc(listing.price)} USDC`}
-                description={
-                  <>
-                    <p>
-                      Pays the seller {formatUsdc(listing.price)} USDC for a face value of {formatUsdc(listing.faceValue)} USDC, and makes you the payee at finalize. The
-                      transaction is bound to this price and reverts if the seller relists at another one. An approval is sent first if the allowance is short.
-                    </p>
-                    <ReceivableOutcomes detail={detail} now={now} audience="buyer" />
-                  </>
-                }
-                send={(client) => client.buyClaim(id, { expectedPrice: listing.price })}
-              />
-            ) : null}
+            {showBuy && address !== undefined ? <BuyClaimAction ctx={ctx} detail={detail} now={now} account={address} /> : null}
             {showCancel ? (
               <SimpleAction
                 ctx={ctx}

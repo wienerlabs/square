@@ -11,6 +11,11 @@ export const claimMarketAbi = [
         "name": "keeperEvaluator_",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "policyRegistry_",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "nonpayable"
@@ -28,10 +33,44 @@ export const claimMarketAbi = [
         "name": "expectedPrice",
         "type": "uint64",
         "internalType": "uint64"
+      },
+      {
+        "name": "salt",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "eligibility",
+        "type": "bytes32[]",
+        "internalType": "bytes32[]"
       }
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "buyerLeaf",
+    "inputs": [
+      {
+        "name": "buyer",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "salt",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "pure"
   },
   {
     "type": "function",
@@ -120,6 +159,19 @@ export const claimMarketAbi = [
         "internalType": "uint256"
       }
     ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "policyRegistry",
+    "inputs": [],
     "outputs": [
       {
         "name": "",
@@ -223,6 +275,11 @@ export const claimMarketAbi = [
   {
     "type": "error",
     "name": "BuyerIsSeller",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "BuyerNotEligible",
     "inputs": []
   },
   {
