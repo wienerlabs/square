@@ -46,3 +46,12 @@ production-zk
 Üretime hazır ZK devresi Arc üzerinde doğrulanıyor.
 Prodüksiyon ZK altyapısı hazır.
 Halka açık seremoni tamamlandı.
+
+# All caps, the one Turkish shape case folding does not reach: dotted İ has no
+# lower-case counterpart the locale folds to i, so these escaped lower-case
+# patterns. Headings and banners are where it happens.
+ÜRETİM SEVİYESİNDE KANIT ÜRETİYORUZ.
+ÜRETİME HAZIR ZK DEVRESİ ARC ÜZERİNDE DOĞRULANIYOR.
+PRODÜKSİYON ZK ALTYAPISI HAZIR.
+HALKA AÇIK SEREMONİ TAMAMLANDI.
+TÖREN YAPILDI, ANAHTAR DAĞITILDI.

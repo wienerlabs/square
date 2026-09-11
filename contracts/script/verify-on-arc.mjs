@@ -20,7 +20,16 @@
 //   node script/verify-on-arc.mjs            verify, and report Arc's gas
 //   node script/verify-on-arc.mjs --address 0x…   use a deployed verifier
 //
-// ARC_RPC_URL overrides the endpoint.
+// ARC_RPC_URL overrides the endpoint. The endpoint is then checked before the
+// claim is made, because the only claim here is "Arc's precompiles agreed":
+// it has to report Arc Testnet's chain id, and it must not be an anvil node.
+// The second check is the one that matters. This repository runs anvil forks
+// of Arc with `--chain-id 5042002` (packages/aa/scripts/fork.ts, and the
+// README), so a fork answers the id identically and runs revm, which is the
+// precompile implementation this script exists to compare against, not with.
+// prove-and-verify-on-arc.mjs makes the same two checks for the same reason.
+// A hostile RPC can lie about both; what this catches is the realistic
+// mistake, an ARC_RPC_URL left pointing at somebody's local fork.
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -30,6 +39,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const RPC = process.env.ARC_RPC_URL ?? 'https://rpc.testnet.arc.io';
+const ARC_TESTNET_CHAIN_ID = 5042002;
 const FIXTURES = path.join(ROOT, 'test', 'fixtures', 'proofs.json');
 
 // verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[8])
@@ -75,8 +85,28 @@ async function main() {
   const fixtures = JSON.parse(fs.readFileSync(FIXTURES, 'utf8'));
 
   const chainId = Number(await rpc('eth_chainId', []));
+  if (chainId !== ARC_TESTNET_CHAIN_ID) {
+    throw new Error(
+      `${RPC} is chain ${chainId}, not Arc Testnet (${ARC_TESTNET_CHAIN_ID}). `
+      + 'Nothing below would be a statement about Arc.',
+    );
+  }
+  // An anvil fork of Arc reports Arc's chain id and runs revm. What separates
+  // it from Arc is the development namespace: Arc answers anvil_nodeInfo with
+  // "method not supported" and web3_clientVersion with "arc/v1"; anvil answers
+  // the first with node state and the second with "anvil/…".
+  const client = await rpc('web3_clientVersion', []).catch(() => 'unknown');
+  const isSimulator = await rpc('anvil_nodeInfo', []).then(() => true, () => false);
+  if (isSimulator) {
+    throw new Error(
+      `${RPC} answers anvil_nodeInfo, so it is a development node, very likely `
+      + 'an anvil fork of Arc, which reports Arc\'s chain id and runs revm. This '
+      + 'script exists to check Arc\'s own precompiles, which a fork does not '
+      + 'have; the same proof against revm is `forge test`.',
+    );
+  }
   const block = Number(await rpc('eth_blockNumber', []));
-  process.stdout.write(`rpc      ${RPC}\nchain id ${chainId}\nblock    ${block}\n\n`);
+  process.stdout.write(`rpc      ${RPC}\nchain id ${chainId}\nclient   ${client}\nblock    ${block}\n\n`);
 
   const to = deployed ?? SCRATCH;
   const overrides = deployed ? [] : [{ [SCRATCH]: { code: runtimeBytecode() } }];
@@ -130,7 +160,7 @@ async function main() {
     process.stderr.write(`\n${failures} check(s) failed\n`);
     return 1;
   }
-  process.stdout.write('\nAll checks passed against Arc.\n');
+  process.stdout.write(`\nAll checks passed against Arc Testnet (chain ${chainId}, ${client}) at ${RPC}.\n`);
   return 0;
 }
 
