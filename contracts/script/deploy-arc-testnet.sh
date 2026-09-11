@@ -19,5 +19,19 @@ export MIN_BOND="${MIN_BOND:-1000000}"
 export ARBITER_THRESHOLD="${ARBITER_THRESHOLD:-2}"
 export MIN_REPUTATION_BUDGET="${MIN_REPUTATION_BUDGET:-100000}"
 export ARBITERS="${ARBITERS:-$ARBITER_A_ADDRESS,$ARBITER_B_ADDRESS,$CRANKER_ADDRESS}"
-echo "deployer=$DEPLOYER_ADDRESS arbiters=$ARBITERS windows=$CHALLENGE_WINDOW/$DISPUTE_WINDOW/$FINALIZE_GRACE minReputationBudget=$MIN_REPUTATION_BUDGET"
-forge script script/DeploySettlement.s.sol --rpc-url "$ARC_TESTNET_RPC_URL" --broadcast --slow -vv "$@"
+
+# The endpoint comes from a dotfile, and a wrong one deploys somewhere else
+# without complaint: the constructors make no external calls, so the missing
+# USDC and registry addresses do not revert, and the script writes its record
+# under whatever block.chainid it found. Ask the node which chain it is before
+# a single transaction goes out, and tell forge the same so it checks too.
+EXPECTED_CHAIN_ID="${ARC_TESTNET_CHAIN_ID:-5042002}"
+actual_chain_id="$(cast chain-id --rpc-url "$ARC_TESTNET_RPC_URL")"
+if [ "$actual_chain_id" != "$EXPECTED_CHAIN_ID" ]; then
+  echo "error: $ARC_TESTNET_RPC_URL is chain $actual_chain_id, not $EXPECTED_CHAIN_ID; nothing was broadcast." >&2
+  echo "       Fix ARC_TESTNET_RPC_URL in the deployer env file, or set ARC_TESTNET_CHAIN_ID on purpose." >&2
+  exit 1
+fi
+
+echo "deployer=$DEPLOYER_ADDRESS chain=$actual_chain_id arbiters=$ARBITERS windows=$CHALLENGE_WINDOW/$DISPUTE_WINDOW/$FINALIZE_GRACE minReputationBudget=$MIN_REPUTATION_BUDGET"
+forge script script/DeploySettlement.s.sol --rpc-url "$ARC_TESTNET_RPC_URL" --chain "$EXPECTED_CHAIN_ID" --broadcast --slow -vv "$@"

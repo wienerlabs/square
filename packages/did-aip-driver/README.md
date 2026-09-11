@@ -76,13 +76,20 @@ it is the case implementations get wrong most often.
 `.github/workflows/did-aip-driver.yml` builds, smoke-tests and pushes to GHCR on changes to
 this package or the resolver.
 
-Two rules carried over from the v1 driver:
+Two rules carried over from the v1 driver, and a third added here:
 
 - **The smoke test is hermetic.** It asserts `/health` is up and that a malformed DID
   answers 400, without contacting any chain. Two more checks were added for v2: a v1 DID
   must answer 501 rather than 400, and an unconfigured chain likewise.
 - **`:latest` is never pushed.** Only `:{version}` and `:sha-{short}`. An operator running
   the Universal Resolver must be able to tell which build is deployed.
+- **A version tag is written once.** `:{version}` that already exists in GHCR is left as
+  it is, and only `:sha-{short}` is pushed for that build. Before this, every `main` push
+  that matched the workflow's path filter re-pushed the version tag, and `:0.2.1` was
+  overwritten by builds that were not releases; `0.2.2` is the first tag written under
+  this rule. So a change to anything the Dockerfile copies into the image needs a new
+  version in `package.json`, and the `did-aip-driver version` check says so on the pull
+  request.
 
 After the first successful run the GHCR package has to be made public once, by hand —
 the Universal Resolver pulls anonymously.

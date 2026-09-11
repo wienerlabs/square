@@ -19,6 +19,14 @@
 
 set -euo pipefail
 
+# Case folding is the ctype locale's, and the Turkish patterns need it: under
+# LC_ALL=C nothing outside ASCII folds, so "Üretim" does not match "üretim" and
+# the self-test fails on a stock macOS shell (default LC_CTYPE=C) while passing
+# on a UTF-8 runner. Pinned, so the guard means the same thing everywhere it
+# runs. The one letter no locale folds, dotted İ (U+0130), is handled in the
+# patterns themselves: see docs/disclosure/forbidden-phrases.txt.
+export LC_ALL=C.UTF-8
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PATTERNS_FILE="$ROOT/docs/disclosure/forbidden-phrases.txt"
 FIXTURE_VIOLATIONS="$ROOT/docs/disclosure/guard-fixtures/violations.txt"

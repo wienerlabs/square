@@ -13,9 +13,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only at the workflow level, the rule did-aip-driver.yml states.
+# `pull-requests: write` exists for one step, the gas-report comment in the
+# `forge` job, and is granted there; the `sdk` job runs two `npm install`s,
+# which execute package lifecycle scripts, and had been inheriting it.
 permissions:
   contents: read
-  pull-requests: write
 
 env:
   FOUNDRY_PROFILE: ci
@@ -24,6 +27,9 @@ jobs:
   forge:
     name: build, test, gas
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:

@@ -27,21 +27,24 @@ pull request.
 | `a2a` | `@squaresdk/a2a` typechecks and builds, and an agent still cannot pay itself. |
 | `cli` | The resolver and the CLI build; the CLI's exit codes are unchanged. Hermetic. |
 | `did-aip-driver (unit)` | The driver's config parsing and envelope construction. |
-| `did-aip-driver image` | The container answers, and a malformed DID is still a 400 rather than a 500. |
+| `did-aip-driver image` | The container answers, and a malformed DID is still a 400 rather than a 500. On `main` it then publishes `:<version>` and `:sha-<commit>` to GHCR; the version tag is written once and never overwritten, so a version that already exists is left as it is and only the sha tag is pushed. |
+| `did-aip-driver version` | Pull requests only. If anything the Dockerfile copies into the image changed (the driver's and the resolver's sources, manifests and tsconfigs), `packages/did-aip-driver/package.json` must carry a new version, because the version tag is written once and a change without a bump would never be published under a version. **Not required**, see below. |
 | `local stack (make up)` | The four Dockerfiles build, the whole stack comes up on a runner, and every service answers `/health` with a passing status. Also asserts the contracts have bytecode on the chain and that the prover returns a real proof. **Listed in `branch-protection.json` but not required yet:** that file is applied by hand after a merge, so this one starts gating when the command below is next run. |
 | `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. A red `secret scan` names the rule, the file and the line in the job log: gitleaks runs with `--verbose`, and with `--redact` beside it the value itself is never printed. It walks the git history, so the finding can sit in a commit the diff no longer shows. |
 
-Five are **not** required to merge. Four of them are not required because their
+Six are **not** required to merge. Four of them are not required because their
 red is a statement about Arc Testnet being reachable, or about a funded account,
 rather than about the change, and a young testnet having a bad afternoon should
-not block unrelated work. The fifth, `refuse and replay`, reaches no network and
-is not required only because it is new.
+not block unrelated work. The other two, `refuse and replay` and
+`did-aip-driver version`, reach no network and are not required only because
+they are new.
 
 | Check | Why it is not required |
 |---|---|
 | `end-to-end (Arc Testnet)` | Resolves the permanent smoke agents against the live registry. |
 | `end-to-end (policy → proof → Arc)` | New, and it reaches Arc. Promote it once it has run without flaking, the way `verifies on Arc Testnet` was. Adding it to the required set means re-applying `branch-protection.json`, in the same order: merge first, then the command. |
 | `refuse and replay (policy → proof → anvil)` | New. Unlike the row above it reaches no network beyond the ptau fetch every circuit job makes, so its red is a statement about the change — which makes it the better candidate for promotion. Same rule: once it has run without flaking, merge first, then re-apply `branch-protection.json`. |
+| `did-aip-driver version` | New, and hermetic: a `git diff` against the base branch and two `package.json` reads. Its red means an image input changed without a version bump. Promote it the same way once it has run a while. |
 | `packages/aa (anvil)` | Named for a local chain, but `test/globalSetup.ts` calls `startAnvilFork()`, which defaults to `https://rpc.testnet.arc.io` (`scripts/fork.ts:144`) with no override and no fallback, and rethrows on failure. Arc being down would block a documentation pull request. |
 | `acceptance (Arc Testnet, funded key)` | Spends real testnet gas, needs a secret, does not run on fork pull requests, and lives in its own path-filtered workflow. |
 
@@ -163,6 +166,7 @@ Square's own storage.
 | `circom` | `v2.2.3` | The compiler decides what the constraint tests are testing. Installed from the iden3 release and checked against sha256 `85342c7f…fe53a3` — see [.github/actions/circom](../.github/actions/circom/action.yml). |
 | Node | `22` | Matches the rest of the workflows. |
 | `solc` | `0.8.28` | Already pinned in [foundry.toml](../contracts/foundry.toml) with the optimizer settings, so bytecode is reproducible. |
+| `gitleaks` | `v8.28.0` | The binary that decides whether a secret is in the tree. Downloaded from the gitleaks release and checked against sha256 `a65b5253…a840eb` from the release's checksums file before it is extracted; see [security.yml](../.github/workflows/security.yml). |
 
 `circom` is a Rust binary and building it from source takes minutes, so CI takes
 the iden3 release binary — and checks it, because an unverified download means

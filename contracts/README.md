@@ -53,7 +53,10 @@ export CHALLENGE_WINDOW=120 DISPUTE_WINDOW=300 FINALIZE_GRACE=600
 forge script script/DeploySettlement.s.sol --rpc-url "$ARC_RPC_URL" --broadcast
 ```
 
-`script/deploy-arc-testnet.sh` does the same with the testnet defaults above,
+`script/deploy-arc-testnet.sh` does the same with the testnet defaults above
+and refuses to broadcast unless the endpoint reports chain `5042002`
+(`ARC_TESTNET_CHAIN_ID` to change that on purpose), passing the same id to
+`forge` with `--chain`,
 reading the deployer and the actor set from `~/.square/*.env`. The redeploys are recorded in `docs/deploy/redeploy-<date>.md`, the latest being
 [docs/deploy/redeploy-2026-09-09.md](../docs/deploy/redeploy-2026-09-09.md).
 
@@ -316,6 +319,7 @@ the hook, the counter, the transfer — belongs in
 $ node script/verify-on-arc.mjs
 rpc      https://rpc.testnet.arc.io
 chain id 5042002
+client   arc/v1
 block    60815572
 
 verifier state override at a scratch address (nothing deployed)
@@ -330,7 +334,7 @@ tampering is rejected
 
 Arc gas for one verification: 265653
 
-All checks passed against Arc.
+All checks passed against Arc Testnet (chain 5042002, arc/v1) at https://rpc.testnet.arc.io.
 ```
 
 "It verifies in Foundry" and "it verifies on Arc" are different claims. The
@@ -338,6 +342,15 @@ first says the contract is right; the second says Arc's precompiles agree with
 revm's, which is the one #17 asks for and the one nobody should take on trust.
 An `eth_call` state override gets it without a funded account: the node runs the
 real bytecode against the real precompiles for one call.
+
+Because that is the only claim, the endpoint is checked before it is made:
+`ARC_RPC_URL` has to report chain `5042002`, and it must not answer
+`anvil_nodeInfo`. The second check is the one that matters. The anvil forks
+this repository runs (`anvil --chain-id 5042002 --fork-url …`, above) report
+Arc's chain id and run revm, so a fork would pass the first check and prove
+nothing about Arc; the script refuses it and says so. The same proof against
+revm is `forge test`. The last line names the chain, the client and the
+endpoint that answered, so the claim is not taken on trust either.
 
 Pass `--address 0x…` to point it at a deployed verifier instead.
 

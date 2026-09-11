@@ -19,11 +19,21 @@ jobs:
         with:
           fetch-depth: 0
       # gitleaks-action organizasyonlarda GITLEAKS_LICENSE istiyor; CLI istemiyor.
+      #
+      # The tarball is checked against the sha256 from the release's own
+      # checksums file before anything is extracted, the same rule
+      # .github/actions/circom applies to the compiler and docs/ci.md records
+      # under "Pinned tooling": an unverified download means whoever can
+      # answer for github.com chooses what scans this repository for secrets.
+      # -f on curl, so an HTTP error page is a failure rather than tar input.
       - name: gitleaks (CLI)
         run: |
           set -euo pipefail
           VER=8.28.0
-          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" | tar -xz gitleaks
+          SHA256=a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb
+          curl -fsSL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz"
+          echo "${SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
           # --verbose birlikte --redact ile: bulgunun kural adini, dosyasini ve satirini
           # basar, degerini basmaz. Onsuz cikti yalnizca "leaks found: N" oluyor ve
           # zorunlu bir kapi neyi reddettigini soylemeden merge'i durduruyor (square#174).

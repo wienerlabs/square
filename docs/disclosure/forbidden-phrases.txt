@@ -78,15 +78,25 @@ trusted setup[^.]{0,40}(is|was)[^.]{0,20}(complete|completed|done|final|finalise
 (phase.?1|powers of tau|ptau)[^.]{0,40}(is|are|uses|reuses|based on)[^.]{0,30}(hermez|powersOfTau28_hez)
 
 # --- Turkish -----------------------------------------------------------------
+#
+# Every letter outside ASCII is spelled as a class, [iİ] and [ıI] included,
+# rather than left to `grep -i`. Case folding is the locale's, and the locale
+# does not fold the one letter that matters most: dotted capital İ (U+0130)
+# has no single lower-case counterpart in glibc, so a lower-case pattern misses
+# an all-caps banner with an i in it, "SEREMONİ", "ÜRETİM", "PRODÜKSİYON".
+# Ordinary capitalisation never produces an İ (no pattern word starts with i),
+# so the shape that escaped was exactly headings and banners. The classes make
+# the match independent of the locale and of which grep is on the machine;
+# guard-fixtures/violations.txt carries the all-caps lines that pin it.
 
 # "üretim ZK", "üretim seviyesinde ZK", "üretim kalitesinde kanıt"
-üretim( (seviyesinde|kalitesinde|sınıfı|düzeyinde))?[ -](zk|kanıt|devre|kurulum|seremoni)
+[üÜ]ret[iİ]m( (sev[iİ]yes[iİ]nde|kal[iİ]tes[iİ]nde|s[ıI]n[ıI]f[ıI]|d[üÜ]zey[iİ]nde))?[ -](zk|kan[ıI]t|devre|kurulum|seremon[iİ])
 
 # "üretime hazır ZK / kanıt / devre / kurulum / seremoni"
-üretime hazır[^.]{0,60}(zk|kanıt|devre|kurulum|seremoni|groth16)
+[üÜ]ret[iİ]me haz[ıI]r[^.]{0,60}(zk|kan[ıI]t|devre|kurulum|seremon[iİ]|groth16)
 
 # Turkish loanword spelling
-prodüksiyon[ -]?zk
+prod[üÜ]ks[iİ]yon[ -]?zk
 
 # "seremoni tamamlandı" / "tören yapıldı" before it actually has been
-(seremoni|tören)[^.]{0,30}(tamamland|yapıld|bitti|gerçekleşti)
+(seremon[iİ]|t[öÖ]ren)[^.]{0,30}(tamamland|yap[ıI]ld|b[iİ]tt[iİ]|ger[çÇ]ekle[şŞ]t[iİ])

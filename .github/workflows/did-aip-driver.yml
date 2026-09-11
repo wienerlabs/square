@@ -72,6 +72,54 @@ jobs:
         if: always()
         run: node ../../.github/scripts/vitest-summary.mjs /tmp/driver.json did-aip-driver
 
+  # The version tag is written once (see the push step below), so a change to
+  # what goes into the image has to come with a new version, or it would never
+  # be published under a version at all. This is the check that says so on the
+  # pull request rather than after the merge: if any file the Dockerfile copies
+  # changed against the base branch, the driver's version must have changed
+  # too. Files outside the image (tests, READMEs, this workflow) are free.
+  version:
+    name: did-aip-driver version
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: A change to the image comes with a version bump
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          # What the Dockerfile copies into the image, resolver included.
+          inputs=(
+            packages/did-aip-driver/Dockerfile
+            packages/did-aip-driver/package.json
+            packages/did-aip-driver/tsconfig.json
+            packages/did-aip-driver/tsconfig.build.json
+            packages/did-aip-driver/src
+            packages/did-resolver/package.json
+            packages/did-resolver/package-lock.json
+            packages/did-resolver/tsconfig.json
+            packages/did-resolver/tsconfig.build.json
+            packages/did-resolver/src
+          )
+          changed="$(git diff --name-only "$BASE_SHA" HEAD -- "${inputs[@]}")"
+          if [ -z "$changed" ]; then
+            echo "nothing the image is built from changed; no version bump needed"
+            exit 0
+          fi
+          version() { node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version"; }
+          base_version="$(git show "$BASE_SHA:packages/did-aip-driver/package.json" | version)"
+          head_version="$(version < packages/did-aip-driver/package.json)"
+          echo "image inputs changed:"; echo "$changed" | sed 's/^/  /'
+          echo "driver version: $base_version on the base branch, $head_version here"
+          if [ "$base_version" = "$head_version" ]; then
+            echo "::error::the image's inputs changed but packages/did-aip-driver/package.json still says $head_version. The :$head_version tag is written once, so this build would never be published under a version; bump the version."
+            exit 1
+          fi
+          echo "ok: $base_version -> $head_version"
+
   build-test-publish:
     name: did-aip-driver image
     needs: unit
@@ -141,7 +189,17 @@ jobs:
 
       # Versioned and sha tags only. :latest on a resolver driver means an
       # operator cannot tell which build the Universal Resolver is running.
-      - name: Push versioned tags (never :latest)
+      #
+      # The version tag is written once. Every main push that matches this
+      # workflow's path filter used to re-push :<version> with whatever the
+      # tree held, so :0.2.1 was overwritten by builds that had nothing to do
+      # with a release, and an operator pinning it would have got a different
+      # image on each pull (square#123). Now a version tag that already exists
+      # in the registry is left alone, and only sha-<commit> is pushed; the
+      # `version` job above makes sure a change to the image's inputs cannot
+      # arrive without a new version, so "left alone" only ever happens for a
+      # rebuild of the same inputs.
+      - name: Push versioned tags (never :latest, and a version only once)
         if: github.event_name != 'pull_request'
         env:
           VERSION: ${{ steps.ver.outputs.version }}
@@ -149,5 +207,10 @@ jobs:
           set -euo pipefail
           short=$(echo "${GITHUB_SHA}" | cut -c1-12)
           docker tag "${IMAGE}:${VERSION}" "${IMAGE}:sha-${short}"
-          docker push "${IMAGE}:${VERSION}"
           docker push "${IMAGE}:sha-${short}"
+          if docker manifest inspect "${IMAGE}:${VERSION}" >/dev/null 2>&1; then
+            echo "::notice::${IMAGE}:${VERSION} already exists and is left as it is; this build is ${IMAGE}:sha-${short}"
+          else
+            docker push "${IMAGE}:${VERSION}"
+            echo "published ${IMAGE}:${VERSION}"
+          fi
