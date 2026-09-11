@@ -1,7 +1,7 @@
 import type { Address, Hex, Log, PublicClient } from "viem";
 import { decodeSquareLogs, type SquareDeployment, type SquareEvent } from "@squaresdk/core";
 import { arbiterSets, checkpoints, claimListings, disputes, jobEvents, jobs, ledgerBalances, type Database, type IndexedContract } from "@squaresdk/data";
-import type { Logger, Metrics } from "@squaresdk/observability";
+import { waitUnlessAborted, type Logger, type Metrics } from "@squaresdk/observability";
 import { applyEvent, cloneState, emptyState, ledgerKey, type IndexerState, type ReducerNotice } from "./reducer.js";
 
 const CONTRACTS: IndexedContract[] = ["SquareJob", "KeeperEvaluator", "Arbitration", "ClaimMarket", "SquareHook"];
@@ -442,13 +442,7 @@ export class Indexer {
       } catch (error) {
         this.options.logger.error("indexer.sync_failed", { error: error instanceof Error ? error.message : String(error) });
       }
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, pollIntervalMs);
-        signal.addEventListener("abort", () => {
-          clearTimeout(timer);
-          resolve();
-        }, { once: true });
-      });
+      await waitUnlessAborted(pollIntervalMs, signal);
     }
   }
 }

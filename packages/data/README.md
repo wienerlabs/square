@@ -131,6 +131,8 @@ beyond the database.
 | `0004_hosted_agents` | `hosted_agents` |
 | `0005_keeper` | `keeper_actions` |
 | `0006_x402_reason` | `x402_payments.reason` |
+| `0007_refund_reason_and_expiry_sweep` | `jobs.refund_reason` |
+| `0008_keeper_give_up` | `keeper_actions.gave_up` |
 
 Migrations never run at service boot against a configured database. They are an explicit
 deploy step, run before the new service version starts, with the connection string in

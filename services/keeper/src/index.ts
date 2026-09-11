@@ -1,6 +1,7 @@
 export * from "./decide.js";
 export {
   Keeper,
+  KEEPER_LOG_FIELDS,
   DEFAULT_EXPIRY_BATCH_SIZE,
   DEFAULT_EXPIRY_INTERVAL_MS,
   type KeeperOptions,

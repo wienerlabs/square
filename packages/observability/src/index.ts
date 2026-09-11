@@ -23,6 +23,8 @@ export type {
   ProofFailureReason,
 } from "./metrics.js";
 
+export { waitUnlessAborted } from "./lifecycle.js";
+
 export { createHealth, DEFAULT_CHECK_TIMEOUT_MS } from "./health.js";
 export type {
   Health,

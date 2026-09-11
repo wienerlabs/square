@@ -87,6 +87,14 @@ export async function get(db: Database, chainId: number, jobId: bigint): Promise
   return row === undefined ? null : rowToDispute(row);
 }
 
+export async function countOpen(db: Database, chainId: number): Promise<number> {
+  const { rows } = await db.query<{ open: string }>(
+    `select count(*)::text as open from disputes where chain_id = $1 and not closed`,
+    [chainId],
+  );
+  return Number(rows[0]?.open ?? "0");
+}
+
 export async function listOpen(db: Database, chainId: number): Promise<DisputeRecord[]> {
   const { rows } = await db.query<DisputeRow>(`select ${COLUMNS} from disputes where chain_id = $1 and not closed order by resolve_by, job_id`, [chainId]);
   return rows.map(rowToDispute);
