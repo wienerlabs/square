@@ -7,6 +7,7 @@ import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step
 import {IACPHook} from "./interfaces/IACPHook.sol";
 import {IPayoutResolver} from "./interfaces/IPayoutResolver.sol";
 import {IComplianceModule} from "./interfaces/IComplianceModule.sol";
+import {IScreeningRegistry} from "./interfaces/IScreeningRegistry.sol";
 import {IClaimMarket} from "./interfaces/IClaimMarket.sol";
 import {ISquareJob} from "./interfaces/ISquareJob.sol";
 import {IIdentityRegistry, IReputationRegistry, IValidationRegistry} from "./interfaces/IERC8004.sol";
@@ -19,6 +20,7 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     bytes4 private constant SUBMIT_SELECTOR = ISquareJob.submit.selector;
     bytes4 private constant COMPLETE_SELECTOR = ISquareJob.complete.selector;
     bytes4 private constant REJECT_SELECTOR = ISquareJob.reject.selector;
+    bytes4 private constant FUND_SELECTOR = ISquareJob.fund.selector;
 
     ISquareJob private immutable _squareJob;
     IClaimMarket private immutable _claimMarket;
@@ -31,6 +33,7 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     uint8 private constant CHECK_FAILED = 2;
 
     IComplianceModule private _complianceModule;
+    IScreeningRegistry private _screening;
     address private _trustedEvaluator;
     uint64 private _minReputationBudget;
     mapping(uint256 jobId => uint256) private _agentOf;
@@ -38,6 +41,8 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     mapping(uint256 jobId => bool) private _recorded;
     uint256 private transient _checkedJob;
     uint8 private transient _checkOutcome;
+    uint8 private transient _screenOutcome;
+    bytes32 private transient _screenCommitment;
 
     event AgentBound(uint256 indexed jobId, uint256 indexed agentId, bytes32 validationRequestHash);
     event ComplianceChecked(uint256 indexed jobId, address indexed payee, uint256 amount, bool verified);
@@ -46,6 +51,8 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     event ValidationRecorded(uint256 indexed jobId, bytes32 indexed requestHash, uint8 response);
     event ValidationWriteFailed(uint256 indexed jobId, bytes32 indexed requestHash, bytes reason);
     event ComplianceModuleUpdated(address indexed module);
+    event ScreeningUpdated(address indexed registry);
+    event ScreeningChecked(uint256 indexed jobId, address indexed payee, bool cleared);
     event ComplianceCheckFailed(uint256 indexed jobId, bytes reason);
     event ReputationPolicyUpdated(address indexed trustedEvaluator, uint64 minReputationBudget);
     event ReputationSkipped(uint256 indexed jobId, uint256 indexed agentId, bytes32 reason);
@@ -59,6 +66,7 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     error NotExpired();
     error AlreadyRecorded();
     error NoAgentBound();
+    error NotCleared(address subject);
 
     modifier onlyKernel() {
         if (msg.sender != address(_squareJob)) revert OnlyKernel();
@@ -88,6 +96,16 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         emit ComplianceModuleUpdated(module);
     }
 
+    /// @notice Install, replace or remove the sanctions screening registry.
+    ///         square#35; docs/decisions/sanctions-screening.md.
+    /// @dev Zero removes it. Installed, it is read at `fund` for the client and
+    ///      the provider, where a party that is not cleared reverts the funding,
+    ///      and at release for the payee, where it zeroes the provider's split.
+    function setScreening(address registry) external onlyOwner {
+        _screening = IScreeningRegistry(registry);
+        emit ScreeningUpdated(registry);
+    }
+
     function setReputationPolicy(address trustedEvaluator_, uint64 minReputationBudget_) external onlyOwner {
         _setReputationPolicy(trustedEvaluator_, minReputationBudget_);
     }
@@ -105,8 +123,8 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     ///      wrapped anyway: an unusable module reads as "not verified" rather
     ///      than as a stuck job. See docs/decisions/hook-failure-modes.md.
     ///
-    ///      With no module installed nothing changes and the split arrives from
-    ///      `optParams` as before.
+    ///      With no module and no screening registry installed nothing changes
+    ///      and the split arrives from `optParams` as before.
     function resolvePayout(uint256 jobId, bytes calldata data)
         external
         view
@@ -117,8 +135,14 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         (providerBps, proof) = _decodeComplete(optParams);
         payee = _claimMarket.payeeOf(jobId);
 
-        if (address(_complianceModule) == address(0)) return (payee, providerBps);
-        if (!_previewsCompliant(jobId, payee, providerBps, proof)) providerBps = 0;
+        if (address(_complianceModule) != address(0) && !_previewsCompliant(jobId, payee, providerBps, proof)) {
+            providerBps = 0;
+        }
+        // square#35. The payee is the address money leaves to, and it need not
+        // be the provider screened at funding: a sold receivable pays its buyer,
+        // and an address can be designated while the job runs. Not cleared means
+        // not paid, through the same split and never a revert.
+        if (address(_screening) != address(0) && !_screeningClears(payee)) providerBps = 0;
     }
 
     /// @dev One external call, so one `try` covers everything that can fail.
@@ -139,6 +163,27 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         } catch {
             return false;
         }
+    }
+
+    /// @dev A registry that cannot answer clears nobody. The call is caught for
+    ///      the reason `_previewsCompliant` catches its own: it runs inside the
+    ///      strict `resolvePayout`, where a revert would lock the escrow.
+    function _screeningClears(address subject) private view returns (bool) {
+        try _screening.isCleared(subject) returns (bool cleared) {
+            return cleared;
+        } catch {
+            return false;
+        }
+    }
+
+    /// @dev What the release read about its payee, for the ERC-8004 record:
+    ///      whether it was cleared, and a commitment to the screening record the
+    ///      verdict rests on. A registry that cannot answer clears nobody.
+    function _screeningVerdict(address payee) private view returns (bool cleared, bytes32 commitment) {
+        cleared = _screeningClears(payee);
+        try _screening.screeningOf(payee) returns (IScreeningRegistry.Record memory record) {
+            commitment = keccak256(abi.encode(payee, record));
+        } catch {}
     }
 
     /// @notice The compliance verdict for a release, read-only.
@@ -173,6 +218,14 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
             _agentOf[jobId] = agentId;
             _validationOf[jobId] = requestHash;
             emit AgentBound(jobId, agentId, requestHash);
+        } else if (selector == FUND_SELECTOR) {
+            // square#35. The last point before money enters escrow, and a strict
+            // call: a party that is not cleared reverts the funding and nothing
+            // is locked, because the client still holds its USDC.
+            if (address(_screening) == address(0)) return;
+            ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
+            if (!_screening.isCleared(job.client)) revert NotCleared(job.client);
+            if (!_screening.isCleared(job.provider)) revert NotCleared(job.provider);
         } else if (selector == COMPLETE_SELECTOR) {
             (, bytes memory optParams) = abi.decode(data, (bytes32, bytes));
             _checkRelease(jobId, optParams);
@@ -197,22 +250,42 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         _checkedJob = jobId;
         _checkOutcome = outcome;
         emit ComplianceChecked(jobId, payee, amount, outcome == CHECK_PASSED);
+        if (address(_screening) != address(0)) {
+            (bool cleared, bytes32 commitment) = _screeningVerdict(payee);
+            _screenOutcome = cleared ? CHECK_PASSED : CHECK_FAILED;
+            _screenCommitment = commitment;
+            emit ScreeningChecked(jobId, payee, cleared);
+        }
     }
 
     function afterAction(uint256 jobId, bytes4 selector, bytes calldata data) external onlyKernel {
         if (selector == COMPLETE_SELECTOR) {
             (bytes32 reason,) = abi.decode(data, (bytes32, bytes));
             _writeReputation(jobId, 1, "completed", reason);
-            uint8 outcome = _checkedJob == jobId ? _checkOutcome : CHECK_NOT_RUN;
+            bool checked = _checkedJob == jobId;
+            uint8 outcome = checked ? _checkOutcome : CHECK_NOT_RUN;
+            uint8 screened = checked ? _screenOutcome : CHECK_NOT_RUN;
+            bytes32 screening_ = checked ? _screenCommitment : bytes32(0);
             _checkedJob = 0;
             _checkOutcome = CHECK_NOT_RUN;
-            if (outcome == CHECK_PASSED) _writeValidation(jobId, 100);
-            else if (outcome == CHECK_FAILED) _writeValidation(jobId, 0);
+            _screenOutcome = CHECK_NOT_RUN;
+            _screenCommitment = bytes32(0);
+            // The ERC-8004 validation response is the gate's verdict on this
+            // release, the same verdict `resolvePayout` turned into the split: 100
+            // when every installed check passed and the payee was paid, 0 when the
+            // proof or the payee's screening refused it. With screening installed,
+            // `responseHash` commits to the screening record the verdict read,
+            // which is how square#35's result reaches the ValidationRegistry
+            // (docs/decisions/sanctions-screening.md). Nothing installed, nothing
+            // written, as before.
+            if (outcome == CHECK_NOT_RUN && screened == CHECK_NOT_RUN) return;
+            bool passed = outcome != CHECK_FAILED && screened != CHECK_FAILED;
+            _writeValidation(jobId, passed ? 100 : 0, screening_);
         } else if (selector == REJECT_SELECTOR) {
             if (_squareJob.getJobRecord(jobId).submittedAt == 0) return;
             (bytes32 reason,) = abi.decode(data, (bytes32, bytes));
             _writeReputation(jobId, -1, "rejected", reason);
-            _writeValidation(jobId, 0);
+            _writeValidation(jobId, 0, bytes32(0));
         }
     }
 
@@ -231,6 +304,10 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
 
     function complianceModule() external view returns (address) {
         return address(_complianceModule);
+    }
+
+    function screening() external view returns (address) {
+        return address(_screening);
     }
 
     function trustedEvaluator() external view returns (address) {
@@ -313,10 +390,10 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         }
     }
 
-    function _writeValidation(uint256 jobId, uint8 response) private {
+    function _writeValidation(uint256 jobId, uint8 response, bytes32 responseHash) private {
         bytes32 requestHash = _validationOf[jobId];
         if (requestHash == bytes32(0)) return;
-        try _validationRegistry.validationResponse(requestHash, response, "", bytes32(0), VALIDATION_TAG) {
+        try _validationRegistry.validationResponse(requestHash, response, "", responseHash, VALIDATION_TAG) {
             emit ValidationRecorded(jobId, requestHash, response);
         } catch (bytes memory reason) {
             emit ValidationWriteFailed(jobId, requestHash, reason);

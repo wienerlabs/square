@@ -10,6 +10,7 @@ import {SquareHook} from "../src/SquareHook.sol";
 import {PolicyRegistry} from "../src/PolicyRegistry.sol";
 import {Groth16Verifier} from "../src/Groth16Verifier.sol";
 import {ComplianceModule} from "../src/ComplianceModule.sol";
+import {ScreeningRegistry} from "../src/ScreeningRegistry.sol";
 import {MockUSDC3009} from "../test/mocks/MockUSDC3009.sol";
 import {MockIdentityRegistry, MockReputationRegistry, MockValidationRegistry} from "../test/mocks/MockRegistries.sol";
 
@@ -38,6 +39,7 @@ contract DeployLocal is Script {
         PolicyRegistry policy;
         Groth16Verifier verifier;
         ComplianceModule compliance;
+        ScreeningRegistry screening;
     }
 
     function run() external {
@@ -107,6 +109,18 @@ contract DeployLocal is Script {
         if (vm.envOr("INSTALL_COMPLIANCE_MODULE", false)) {
             s.hook.setComplianceModule(address(s.compliance));
         }
+        // square#35. Deployed last, so every address above stays where the SDK's
+        // local map expects it, and installed only when asked for, for the same
+        // reason as the compliance module: once installed, funding needs both
+        // parties screened by a registered screener, and nothing on a dev chain
+        // screens anyone unless services/screener runs with a key registered
+        // here (setScreener).
+        //
+        //   INSTALL_SCREENING=true forge script script/DeployLocal.s.sol ...
+        s.screening = new ScreeningRegistry(deployer, 1 hours);
+        if (vm.envOr("INSTALL_SCREENING", false)) {
+            s.hook.setScreening(address(s.screening));
+        }
         s.keeper.setArbitration(address(s.arbitration));
         s.kernel.setHookWhitelist(address(s.hook), true);
         address[] memory arbiters = new address[](3);
@@ -134,6 +148,7 @@ contract DeployLocal is Script {
         vm.serializeAddress(json, "PolicyRegistry", address(s.policy));
         vm.serializeAddress(json, "Groth16Verifier", address(s.verifier));
         vm.serializeAddress(json, "ComplianceModule", address(s.compliance));
+        vm.serializeAddress(json, "ScreeningRegistry", address(s.screening));
         vm.serializeAddress(json, "USDC", address(m.usdc));
         vm.serializeAddress(json, "IdentityRegistry", address(m.identity));
         vm.serializeAddress(json, "ReputationRegistry", address(m.reputation));

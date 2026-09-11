@@ -22,7 +22,7 @@ pull request.
 | `refuse and replay (policy → proof → anvil)` | A payment over the policy's ceiling is proved, verified, and still pays the provider nothing; a compliant payment is released once and then refused on replay — as the same bytes and as a re-randomised copy. Every refusal is asserted by the module's own reason. **Not required**, see below. |
 | `services/prover (hermetic)` | The rule evaluator and the encoding with no artifacts — a contributor's `npm test`. |
 | `packages/data`, `packages/hardening`, `packages/observability` | Hermetic package suites. |
-| `packages/x402 (anvil)`, `services/indexer (anvil)`, `services/keeper (anvil)` | Against a local chain the job starts itself: anvil plus `DeployLocal.s.sol`, asserted before the suites run. |
+| `packages/x402 (anvil)`, `services/indexer (anvil)`, `services/keeper (anvil)`, `services/screener (anvil)` | Against a local chain the job starts itself: anvil plus `DeployLocal.s.sol`, asserted before the suites run. `services/screener (anvil)` is **not required**, see below. |
 | `app (static export)`, `site (static export)` | The reference application and the site still build. |
 | `a2a` | `@squaresdk/a2a` typechecks and builds, and an agent still cannot pay itself. |
 | `cli` | The resolver and the CLI build; the CLI's exit codes are unchanged. Hermetic. |
@@ -32,12 +32,12 @@ pull request.
 | `local stack (make up)` | The four Dockerfiles build, the whole stack comes up on a runner, and every service answers `/health` with a passing status. Also asserts the contracts have bytecode on the chain and that the prover returns a real proof. **Listed in `branch-protection.json` but not required yet:** that file is applied by hand after a merge, so this one starts gating when the command below is next run. |
 | `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. A red `secret scan` names the rule, the file and the line in the job log: gitleaks runs with `--verbose`, and with `--redact` beside it the value itself is never printed. It walks the git history, so the finding can sit in a commit the diff no longer shows. |
 
-Six are **not** required to merge. Four of them are not required because their
-red is a statement about Arc Testnet being reachable, or about a funded account,
-rather than about the change, and a young testnet having a bad afternoon should
-not block unrelated work. The other two, `refuse and replay` and
-`did-aip-driver version`, reach no network and are not required only because
-they are new.
+Eight are **not** required to merge. Five of them are not required because their
+red is a statement about Arc Testnet being reachable, TRM's sanctions API
+answering, or a funded account, rather than about the change, and an outside
+service having a bad afternoon should not block unrelated work. The other three,
+`refuse and replay`, `did-aip-driver version` and `services/screener (anvil)`,
+reach no network and are not required only because they are new.
 
 | Check | Why it is not required |
 |---|---|
@@ -47,6 +47,8 @@ they are new.
 | `did-aip-driver version` | New, and hermetic: a `git diff` against the base branch and two `package.json` reads. Its red means an image input changed without a version bump. Promote it the same way once it has run a while. |
 | `packages/aa (anvil)` | Named for a local chain, but `test/globalSetup.ts` calls `startAnvilFork()`, which defaults to `https://rpc.testnet.arc.io` (`scripts/fork.ts:144`) with no override and no fallback, and rethrows on failure. Arc being down would block a documentation pull request. |
 | `acceptance (Arc Testnet, funded key)` | Spends real testnet gas, needs a secret, does not run on fork pull requests, and lives in its own path-filtered workflow. |
+| `services/screener (anvil)` | New. Like the rest of its matrix it reaches nothing but the anvil the job starts; the live tests against TRM are skipped here by design and run in the row below. Promote it the same way. |
+| `sanctions screening (TRM → anvil)` | #35's screener against TRM's real sanctions API, and the end-to-end run with OFAC-listed addresses against the real hook. TRM's keyless tier allows 100 requests a day and a run makes about ten, so a red can mean TRM did not answer. Lives in its own path-filtered workflow (`sanctions-screening.yml`). |
 
 `verifies on Arc Testnet` also depends on Arc's RPC, but it is cheap, read-only
 and defends a claim the README makes, so it is required. If it turns out to
@@ -57,7 +59,7 @@ flake, move it to the list above rather than deleting it.
 This is the failure this setup exists to prevent, and it is not hypothetical:
 `covenant` carried 5,952 lines of tests across 33 files that CI never executed.
 
-The shape it takes here is subtler than "no test job". Twelve suites guard
+The shape it takes here is subtler than "no test job". Fourteen suites guard
 themselves with `skipIf`, and a job that does not satisfy the guard reports green
 having executed nothing. The full inventory, because a partial one is how the
 next instance of this hides:
@@ -71,11 +73,13 @@ next instance of this hides:
 | `!hasArtifacts` | `services/prover/test/prove-route.e2e.test.js` | `prover (real proving key)` | satisfied |
 | `!HAVE_ARTIFACTS` | `services/prover/test/solidity-encoding.test.js` | `prover (real proving key)` | satisfied |
 | `!reachable` | `services/indexer/test/{anvil,sync}.test.ts` | `services/indexer (anvil)` | satisfied — the job now starts anvil and deploys |
-| `!reachable` | `services/keeper/test/anvil.test.ts` | `services/keeper (anvil)` | satisfied — same |
+| `!reachable` | `services/keeper/test/{anvil,screening}.test.ts` | `services/keeper (anvil)` | satisfied — same |
+| `!reachable` | `services/screener/test/anvil.test.ts` | `services/screener (anvil)` | satisfied — same |
 | `!reachable` | `packages/core/test/anvil.test.ts` | `@squaresdk/core against anvil` | satisfied — that job already started one |
 | `!forkUrl` | `packages/core/test/fork.test.ts` | `@squaresdk/core against anvil` | **not satisfied.** `ARC_FORK_RPC_URL` is set by no workflow, so the lifecycle has never been exercised against the real ERC-8004 registries in CI. Named on the run summary so the gap is visible. |
 | `!configured` | `packages/x402/test/live.test.ts` | `packages/x402 (anvil)` | **not satisfied.** Needs `ARC_TESTNET_RPC_URL` and two funded keys. |
 | `!process.env.LIVE` | `packages/did-resolver/test/integration.test.ts` | `cli` | **not satisfied, by design.** `cli` is hermetic; the live reads run in `end-to-end (Arc Testnet)`. |
+| `!process.env.LIVE` | `services/screener/test/live.test.ts` | `sanctions screening (TRM → anvil)` | satisfied there, which runs `test:live`. Skipped in `services/screener (anvil)` by design, which is hermetic. |
 
 Four further guards are *inverse* — `skipIf(HAVE_BUILD)` and the prover's three
 `skipIf(HAVE_*)`. They fire only when the artifact is **absent** and exist to say
