@@ -434,6 +434,76 @@ async function finalize() {
   );
 }
 
+/**
+ * Each contribution the key holds, against the one the transcript claims for it.
+ *
+ * square#229. `verify-chain` compared the two lists' lengths and nothing else,
+ * while printing "matching the transcript" — and `contribute` records the two
+ * values that would make that sentence true: `transcript_hash`, the 64-byte
+ * hash snarkjs prints and the contributor publishes, and `recorded_name`, the
+ * name written into the key. Neither was ever read back.
+ *
+ * What the gap allows: run the real ceremony with outside contributors, publish
+ * their transcripts, then quietly re-run the chain with your own contributions
+ * and publish that key instead. `snarkjs zkey verify` passes, because the
+ * substituted chain is internally consistent; the count matches; the beacon is
+ * genuine. Every trapdoor belongs to the publisher, and this file's own header
+ * says the chain is worth nothing if anybody can quietly drop a link.
+ *
+ * It is also the promise `docs/ceremony/verifying.md` makes to a contributor:
+ * publish your hash, and "if the chain was rewritten to drop or replace your
+ * contribution, this is where it shows". This is where it shows.
+ *
+ * Position matters, so the comparison is positional: a Groth16 phase-2 chain is
+ * sequential, and the i-th record in the key is the i-th contribution. A pair
+ * that matches as a set but not in order is a different chain.
+ *
+ * `zkey_sha256` is recorded per contribution and is not checked here: it
+ * digests an intermediate key, and a third party verifying afterwards has the
+ * final key only. Contributors check it against what they were handed, at the
+ * time, which is the moment it can be checked at all.
+ *
+ * @param {{name: string|null, transcriptHash: string|null}[]} held from the key
+ * @param {{name?: string, recorded_name?: string, transcript_hash?: string}[]} claimed from the transcript
+ * @returns {string[]} one line per disagreement, empty when they agree
+ */
+export function contributionMismatches(held, claimed) {
+  const problems = [];
+  const who = (entry, i) => entry?.name ?? entry?.recorded_name ?? `#${i + 1}`;
+
+  for (let i = 0; i < claimed.length; i += 1) {
+    const want = claimed[i];
+    const have = held[i];
+    if (!have) {
+      problems.push(`the transcript claims contribution ${i + 1} (${who(want, i)}); the key holds none`);
+      continue;
+    }
+    if (!want.transcript_hash) {
+      problems.push(
+        `the transcript records no hash for contribution ${i + 1} (${who(want, i)}), `
+        + 'so it cannot be checked against the key',
+      );
+    } else if ((have.transcriptHash ?? '').toLowerCase() !== want.transcript_hash.toLowerCase()) {
+      problems.push(
+        `contribution ${i + 1} (${who(want, i)}): the key's transcript hash `
+        + `${have.transcriptHash ?? 'is missing'} is not the transcript's ${want.transcript_hash}`,
+      );
+    }
+    if (have.name !== want.recorded_name) {
+      problems.push(
+        `contribution ${i + 1}: the key records ${JSON.stringify(have.name)}, `
+        + `the transcript ${JSON.stringify(want.recorded_name ?? null)}`,
+      );
+    }
+  }
+
+  for (let i = claimed.length; i < held.length; i += 1) {
+    problems.push(`the key holds contribution ${i + 1} (${who(held[i], i)}) that the transcript does not record`);
+  }
+
+  return problems;
+}
+
 // Everything a third party runs. Takes nothing on trust from this repository
 // except the circuit source, which they can compile themselves.
 async function verifyChain() {
@@ -511,10 +581,18 @@ async function verifyChain() {
     const beacons = report.contributions.filter((c) => c.kind === 'beacon');
 
     if (contributions.length === transcript.contributions.length) {
-      ok(`${contributions.length} contribution(s), matching the transcript`);
+      ok(`${contributions.length} contribution(s), as many as the transcript records`);
     } else {
       bad(`key holds ${contributions.length} contribution(s), transcript claims ${transcript.contributions.length}`);
     }
+
+    // The count was the whole check until square#229, under a line that said
+    // "matching the transcript". These are the values that make it true.
+    const mismatches = contributionMismatches(contributions, transcript.contributions);
+    if (mismatches.length === 0 && contributions.length > 0) {
+      ok('every contribution in the key is the one the transcript records, in order');
+    }
+    for (const problem of mismatches) bad(problem);
     if (contributions.length < 2) {
       bad('fewer than two independent contributions — this is not a multi-party ceremony');
     }

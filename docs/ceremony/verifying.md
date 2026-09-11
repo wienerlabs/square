@@ -98,6 +98,12 @@ Then find your contribution hash in the transcript and confirm it is the one you
 published. If the chain was rewritten to drop or replace your contribution, this
 is where it shows.
 
+`ceremony.mjs verify-chain` makes the same comparison for every contribution at
+once: it reads each contribution's hash and recorded name out of the final key
+and checks them against the transcript, in order. Until square#229 it compared
+only how many there were, so a chain re-run with different contributors passed
+it — your own check above was the only place a substitution showed.
+
 ---
 
 ## For third parties
