@@ -9,6 +9,7 @@ import { createAlerting, createHealth, createLogger, createMetrics, keeperStalle
 import { observabilityRoutes } from "@squaresdk/observability/hono";
 import { keeperChecks } from "./checks.js";
 import { Keeper } from "./run.js";
+import { payeeScreening } from "./screening.js";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -68,6 +69,9 @@ async function main(): Promise<void> {
     expiryBatchSize: integer("EXPIRY_BATCH_SIZE", 25),
     expiryIntervalMs: integer("EXPIRY_INTERVAL_MS", 60_000),
     ephemeralMirror,
+    // square#35: with a screener to ask, a release on a hook that screens is
+    // finalized only once its payee is freshly screened.
+    ...(process.env["SCREENER_URL"] ? { screenPayee: payeeScreening({ client, publicClient, screenerUrl: process.env["SCREENER_URL"] }) } : {}),
     retryPolicy: {
       baseDelaySeconds: BigInt(integer("RETRY_BASE_SECONDS", 60)),
       maxDelaySeconds: BigInt(integer("RETRY_MAX_SECONDS", 3_600)),

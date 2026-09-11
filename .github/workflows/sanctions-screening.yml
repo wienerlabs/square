@@ -1,0 +1,109 @@
+name: sanctions screening
+
+# square#35: the screener against TRM's real sanctions API, and the path end to
+# end on a local chain. contracts/script/screening-on-anvil.mjs runs the real
+# screener service against the real hook with addresses on OFAC's SDN list: a
+# designated provider cannot be funded, a designated buyer is not paid, the
+# honest release is, and a screener whose canary the source does not flag
+# records nothing.
+#
+# It reaches TRM's keyless tier, 100 requests a day, and a run makes about ten.
+# That is why it lives in its own workflow with a path filter, as
+# arc-acceptance.yml does, and is not a required check: its red can be a
+# statement about TRM answering rather than about the change. docs/ci.md has
+# the row.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/screener/**"
+      - "services/keeper/src/screening.ts"
+      - "contracts/src/ScreeningRegistry.sol"
+      - "contracts/src/interfaces/IScreeningRegistry.sol"
+      - "contracts/src/SquareHook.sol"
+      - "contracts/script/DeployLocal.s.sol"
+      - "contracts/script/screening-on-anvil.mjs"
+      - ".github/workflows/sanctions-screening.yml"
+  pull_request:
+    paths:
+      - "services/screener/**"
+      - "services/keeper/src/screening.ts"
+      - "contracts/src/ScreeningRegistry.sol"
+      - "contracts/src/interfaces/IScreeningRegistry.sol"
+      - "contracts/src/SquareHook.sol"
+      - "contracts/script/DeployLocal.s.sol"
+      - "contracts/script/screening-on-anvil.mjs"
+      - ".github/workflows/sanctions-screening.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sanctions-screening-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screening:
+    name: sanctions screening (TRM → anvil)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09  # v1.9.1
+        with:
+          version: stable
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Build the contracts
+        working-directory: contracts
+        run: forge build
+
+      - name: A local chain, and the stack on it
+        working-directory: contracts
+        run: |
+          set -euo pipefail
+          anvil --silent &
+          for _ in $(seq 1 30); do cast chain-id --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1 && break; sleep 1; done
+          forge script script/DeployLocal.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
+
+      - name: Build the packages the screener depends on
+        run: |
+          set -euo pipefail
+          for dep in packages/did-resolver packages/core packages/observability; do
+            (cd "$dep" && npm install --install-links && npm run build)
+          done
+
+      # test:live is the whole suite with LIVE=1: the hermetic tests, the
+      # registry on anvil, and two requests to TRM itself.
+      - name: The screener, against TRM and the registry
+        working-directory: services/screener
+        run: |
+          npm install --install-links
+          npm run typecheck
+          npm run test:live
+          npm run build
+
+      - name: End to end, OFAC-listed addresses against the real hook
+        working-directory: contracts
+        run: |
+          set -o pipefail
+          node script/screening-on-anvil.mjs | tee ../screening.txt
+
+      - name: On the run summary
+        if: always()
+        run: |
+          {
+            echo '### Sanctions screening: TRM → anvil'
+            echo
+            echo '```'
+            cat screening.txt 2>/dev/null || echo 'the run produced no output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

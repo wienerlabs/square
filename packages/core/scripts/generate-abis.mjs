@@ -14,6 +14,7 @@ const contracts = [
   ["ClaimMarket", "claimMarketAbi"],
   ["SquareHook", "squareHookAbi"],
   ["PolicyRegistry", "policyRegistryAbi"],
+  ["ScreeningRegistry", "screeningRegistryAbi"],
 ];
 
 const erc20 = [

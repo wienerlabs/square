@@ -299,6 +299,19 @@ export const squareHookAbi = [
   },
   {
     "type": "function",
+    "name": "screening",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "setComplianceModule",
     "inputs": [
       {
@@ -323,6 +336,19 @@ export const squareHookAbi = [
         "name": "minReputationBudget_",
         "type": "uint64",
         "internalType": "uint64"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setScreening",
+    "inputs": [
+      {
+        "name": "registry",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -633,6 +659,44 @@ export const squareHookAbi = [
   },
   {
     "type": "event",
+    "name": "ScreeningChecked",
+    "inputs": [
+      {
+        "name": "jobId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "payee",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "cleared",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ScreeningUpdated",
+    "inputs": [
+      {
+        "name": "registry",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "ValidationRecorded",
     "inputs": [
       {
@@ -706,6 +770,17 @@ export const squareHookAbi = [
     "type": "error",
     "name": "NoAgentBound",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotCleared",
+    "inputs": [
+      {
+        "name": "subject",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
     "type": "error",

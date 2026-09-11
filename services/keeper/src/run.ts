@@ -12,6 +12,7 @@ import {
   type KeeperCandidate,
   type KeeperEconomics,
 } from "./decide.js";
+import type { PayeeScreening } from "./screening.js";
 
 export interface KeeperRetryPolicy {
   baseDelaySeconds: bigint;
@@ -45,6 +46,12 @@ export interface KeeperOptions {
   ephemeralMirror?: boolean;
   retryPolicy?: KeeperRetryPolicy;
   complianceProofFor?: (jobId: bigint) => Promise<Hex>;
+  /**
+   * square#35. Asked before every finalize: whether the payee is cleared by the
+   * job's screening registry, after asking the screener for a fresh screening.
+   * When it says not to proceed the job is held, not refused (payeeScreening).
+   */
+  screenPayee?: (jobId: bigint) => Promise<PayeeScreening>;
 }
 
 interface RetryState {
@@ -236,6 +243,23 @@ export class Keeper {
           });
         }
         continue;
+      }
+      if (this.options.screenPayee) {
+        const screening = await this.options.screenPayee(candidate.jobId);
+        if (!screening.proceed) {
+          report.skipped.push({ jobId: candidate.jobId, reason: "unscreened" });
+          logger.warn("keeper.held", {
+            jobId: candidate.jobId.toString(),
+            reason: "the payee is not cleared and no fresh screening could be had; finalizing now would refuse the release",
+          });
+          continue;
+        }
+        if (screening.state === "sanctioned") {
+          logger.warn("keeper.refusing", {
+            jobId: candidate.jobId.toString(),
+            reason: "a fresh screening says the payee is designated; the release goes back to the client",
+          });
+        }
       }
       const proof = this.options.complianceProofFor ? await this.options.complianceProofFor(candidate.jobId) : "0x";
       try {

@@ -8,3 +8,4 @@ export {
   type ExpirySweepReport,
 } from "./run.js";
 export { keeperChecks, DEFAULT_MIN_ACTIONS_FUNDED, type KeeperChecksOptions } from "./checks.js";
+export { payeeScreening, type PayeeScreening, type PayeeScreeningOptions, type PayeeScreeningState } from "./screening.js";
