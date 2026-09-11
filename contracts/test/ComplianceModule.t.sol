@@ -10,6 +10,7 @@ import {PolicyRegistry} from "../src/PolicyRegistry.sol";
 import {Groth16Verifier} from "../src/Groth16Verifier.sol";
 import {ComplianceModule} from "../src/ComplianceModule.sol";
 import {ISquareJob} from "../src/interfaces/ISquareJob.sol";
+import {SCALAR_FIELD} from "../src/interfaces/IGroth16Verifier.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {MockIdentityRegistry, MockReputationRegistry, MockValidationRegistry} from "./mocks/MockRegistries.sol";
 
@@ -284,9 +285,15 @@ contract ComplianceModuleTest is Test {
         assertEq(module.boundSignalCount(), 8, "a signal was added without a binding");
 
         // 1. policy_data_hash — the client commits to a different policy
+        //
+        // Reduced into the scalar field, because that is where a commitment
+        // lives: this line used to pass the raw keccak digest, which is above
+        // the field and so is a commitment no proof can carry at all (#231).
+        // The refusal looked the same, so the binding read as tested when what
+        // was being tested was a value the registry now refuses outright.
         uint256 jobId = submittedJob();
         vm.prank(client);
-        registry.setPolicy(keccak256("some other policy"), DAILY_LIMIT);
+        registry.setPolicy(bytes32(uint256(keccak256("some other policy")) % SCALAR_FIELD), DAILY_LIMIT);
         completeWith(jobId, compliantProof());
         assertEq(kernel.withdrawable(provider), 0, "policy_data_hash is not bound");
     }
