@@ -20,7 +20,9 @@ async function main(): Promise<void> {
   const config = configFromEnv();
   const logger = createLogger({ service: "square-indexer", version: config.version, allowlist: ["applied"] });
   const metrics = createMetrics({ service: "square-indexer" });
-  const db = config.databaseUrl ? pgDatabase(config.databaseUrl) : await pgliteDatabase();
+  const db = config.databaseUrl
+    ? pgDatabase(config.databaseUrl, { onPoolError: (error) => logger.error("indexer.pool_error", { error: error.message }) })
+    : await pgliteDatabase();
   if (!config.databaseUrl) {
     await migrate(db, MIGRATIONS_DIR, "up");
     logger.warn("indexer.ephemeral_database", { reason: "DATABASE_URL is not set, state lives in memory" });
