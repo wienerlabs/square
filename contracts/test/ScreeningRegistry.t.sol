@@ -52,8 +52,12 @@ contract ScreeningRegistryTest is Test {
         registry.submit(s, _sign(screenerKey, s));
     }
 
+    /// `vm.getBlockTimestamp()`, not `block.timestamp`: under via-IR, as
+    /// `forge coverage --ir-minimum` compiles, the optimizer may reuse a
+    /// timestamp read before a `vm.warp`, since within a real transaction it
+    /// cannot change.
     function _now() internal view returns (uint64) {
-        return uint64(block.timestamp);
+        return uint64(vm.getBlockTimestamp());
     }
 
     // ------------------------------------------------------------- the rule
@@ -69,9 +73,9 @@ contract ScreeningRegistryTest is Test {
     function test_aCleanScreeningClearsUntilItAges() public {
         _submit(subject, false, _now());
         assertTrue(registry.isCleared(subject));
-        vm.warp(block.timestamp + MAX_AGE);
+        vm.warp(vm.getBlockTimestamp() + MAX_AGE);
         assertTrue(registry.isCleared(subject), "good for exactly maxAge");
-        vm.warp(block.timestamp + 1);
+        vm.warp(vm.getBlockTimestamp() + 1);
         assertFalse(registry.isCleared(subject), "and not a second more");
     }
 
@@ -153,7 +157,7 @@ contract ScreeningRegistryTest is Test {
     /// A "cleared" kept back from before a designation cannot overwrite it.
     function test_anOlderScreeningCannotOverwriteANewerOne() public {
         uint64 before = _now();
-        vm.warp(block.timestamp + 10 minutes);
+        vm.warp(vm.getBlockTimestamp() + 10 minutes);
         _submit(subject, true, _now());
         IScreeningRegistry.Screening memory stale = _screening(subject, false, before);
         bytes memory signature = _sign(screenerKey, stale);
@@ -174,7 +178,7 @@ contract ScreeningRegistryTest is Test {
     /// A delisting is a newer screening, and it replaces the record.
     function test_aNewerScreeningReplacesTheRecord() public {
         _submit(subject, true, _now());
-        vm.warp(block.timestamp + 1);
+        vm.warp(vm.getBlockTimestamp() + 1);
         _submit(subject, false, _now());
         assertTrue(registry.isCleared(subject));
     }
@@ -183,7 +187,7 @@ contract ScreeningRegistryTest is Test {
         IScreeningRegistry.Screening memory future = _screening(subject, false, _now() + 1);
         bytes memory signature = _sign(screenerKey, future);
         vm.expectRevert(
-            abi.encodeWithSelector(IScreeningRegistry.ScreenedInTheFuture.selector, _now() + 1, block.timestamp)
+            abi.encodeWithSelector(IScreeningRegistry.ScreenedInTheFuture.selector, _now() + 1, vm.getBlockTimestamp())
         );
         registry.submit(future, signature);
 

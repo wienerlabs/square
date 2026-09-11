@@ -39,7 +39,7 @@ contract SanctionsScreeningTest is BaseTest {
             '[{"address":"', vm.toString(who), '","isSanctioned":', sanctioned ? "true" : "false", "}]"
         );
         IScreeningRegistry.Screening memory s =
-            IScreeningRegistry.Screening(who, sanctioned, uint64(block.timestamp), SOURCE, keccak256(body));
+            IScreeningRegistry.Screening(who, sanctioned, uint64(vm.getBlockTimestamp()), SOURCE, keccak256(body));
         (uint8 v, bytes32 r, bytes32 sig) = vm.sign(screenerKey, registry.digestOf(s));
         registry.submit(s, abi.encodePacked(r, sig, v));
     }
@@ -116,7 +116,7 @@ contract SanctionsScreeningTest is BaseTest {
         uint256 jobId = createJob(BUDGET, address(hook));
         _clear(client);
         _clear(provider);
-        vm.warp(block.timestamp + MAX_AGE + 1);
+        vm.warp(vm.getBlockTimestamp() + MAX_AGE + 1);
         vm.expectRevert(abi.encodeWithSelector(SquareHook.NotCleared.selector, client));
         _fundAs(jobId);
     }
@@ -276,7 +276,7 @@ contract SanctionsScreeningTest is BaseTest {
         _clear(provider);
         uint256 jobId = createJob(BUDGET, address(hook));
         _fundAs(jobId);
-        vm.warp(block.timestamp + 1); // a newer screening than the one that cleared it
+        vm.warp(vm.getBlockTimestamp() + 1); // a newer screening than the one that cleared it
         _designate(client);
         vm.warp(kernel.getJobRecord(jobId).expiredAt);
         kernel.claimRefund(jobId);

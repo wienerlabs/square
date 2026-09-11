@@ -20,6 +20,7 @@
   "dependencies": {
     "@hono/node-server": "^1.13.0",
     "@squaresdk/core": "file:../../packages/core",
+    "@squaresdk/did-resolver": "file:../../packages/did-resolver",
     "@squaresdk/observability": "file:../../packages/observability",
     "hono": "^4.6.0",
     "viem": "^2.21.0"
