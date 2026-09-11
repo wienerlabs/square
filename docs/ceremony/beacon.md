@@ -77,19 +77,36 @@ party defeats it.
    curl -s https://api.drand.sh/v2/beacons/quicknet/rounds/<ROUND> \
      | tee beacon-round-<ROUND>.json
 
-   # randomness = sha256(signature)
-   BEACON=$(python3 -c "import json,hashlib;print(hashlib.sha256(bytes.fromhex(json.load(open('beacon-round-<ROUND>.json'))['signature'])).hexdigest())")
+   # the randomness is the round's BLS signature itself, 96 hex characters
+   BEACON=$(jq -r .signature beacon-round-<ROUND>.json)
 
    snarkjs zkey beacon payment_NN.zkey payment_final.zkey "$BEACON" 10 \
      -n="drand quicknet round <ROUND>"
    ```
+
+   `node scripts/ceremony.mjs beacon <ROUND>` runs exactly this, with the chain
+   and signature checks in front of it, and is what [running.md](./running.md)
+   tells the operator to use. The block above is what that command does, for
+   anyone reconstructing it by hand.
 4. `beacon-round-<ROUND>.json` is published with the transcripts, so a third
    party can re-verify the BLS signature against the chain's public key and
    confirm the value was not chosen.
 
-`10` is the iteration exponent snarkjs applies to the beacon hash; it is
+**The value is the signature, not a digest of it.** `snarkjs zkey beacon` takes
+any even-length hex string up to 255 bytes and stores it in the key verbatim;
+it is the seed the iteration exponent then runs over, so hashing it first buys
+no unpredictability and only adds a step that has to be reproduced identically
+by every third party. A 48-byte signature and its 32-byte digest are different
+lengths, so a key closed with one can never match a check written for the
+other. square#226's sibling, square#227, found this file and
+[verifying.md](./verifying.md) asking for the digest while `ceremony.mjs` wrote
+the signature; the signature is the spelling, and
+`circuits/test/drand-beacon.test.js` now closes a key and reads the value back
+in one run, so the two cannot drift apart again.
+
+`10` is the iteration exponent snarkjs applies to the beacon value; it is
 recorded in the final key and reported by
-`circuits/scripts/inspect-zkey-setup.mjs`, which reads the beacon hash and
+`circuits/scripts/inspect-zkey-setup.mjs`, which reads the beacon value and
 iteration count straight out of the zkey.
 
 ## What has to be true when the ceremony closes
