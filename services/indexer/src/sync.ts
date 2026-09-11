@@ -224,6 +224,14 @@ export class Indexer {
       if (counted) metrics?.recordHookWriteFailure("hookCall");
       return;
     }
+    if (notice.code === "releaseUnconfirmed") {
+      logger.error("indexer.hook_write_failed", {
+        jobId: notice.jobId.toString(),
+        reason: `the kernel paid ${notice.amount} to ${notice.payee} and the compliance check did not book it`,
+      });
+      if (counted) metrics?.recordHookWriteFailure("complianceCheck");
+      return;
+    }
     if (notice.code === "reputationWriteFailed") {
       logger.error("indexer.hook_write_failed", { jobId: notice.jobId.toString(), reason: "reputation" });
       if (counted) metrics?.recordHookWriteFailure("reputation");

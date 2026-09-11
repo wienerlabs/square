@@ -10,6 +10,7 @@ counter it reads means.
 [i76]: https://github.com/wienerlabs/square/issues/76
 [i90]: https://github.com/wienerlabs/square/issues/90
 [i100]: https://github.com/wienerlabs/square/issues/100
+[i225]: https://github.com/wienerlabs/square/issues/225
 
 ## The verdict is a split, not a veto
 
@@ -57,16 +58,17 @@ Both run the same checks over the same state inside one transaction, so they
 agree. That agreement is load-bearing: `checkRelease` sits inside a tolerant
 call, so a revert there is swallowed while the money moves. The module is
 therefore written so that **`previewRelease` returning true implies
-`checkRelease` can complete** — every condition `PolicyRegistry.recordSpend`
-would revert on, including the daily ceiling, is checked by the preview first.
+`checkRelease` completes** — every way the second call can fail, and not only
+the proof, is checked by the preview first. [#225][i225] found three ways it was
+not, and the section below is what was done about them.
 
 The cost of computing the verdict twice is one extra pairing check. Measured:
 
 | Call | Gas | Cap |
 |---|---|---|
-| `resolvePayout`, preview included | 306 452 | 1 000 000 |
-| `checkRelease`, verify plus writes | 303 871 | 1 000 000 |
-| a gated `complete`, end to end | 956 794 | — |
+| `resolvePayout`, preview included | 319 298 | 1 000 000 |
+| `checkRelease`, verify plus writes | 310 799 | 1 000 000 |
+| a gated `complete`, end to end | 977 473 | — |
 
 Each capped call uses under a third of its cap. That margin is the criterion,
 not the total: a preview that ran out of gas inside the cap would be caught and
@@ -78,6 +80,61 @@ through the keeper on a local chain — is in
 [refuse-and-replay-31337.md](../deploy/refuse-and-replay-31337.md): a gated
 `finalize` costs about 580 000 gas more than an ungated one, and a refused
 replay nearly as much, because the mark is checked after the pairing.
+
+## When the preview said yes and the check could not
+
+The invariant above was written about `PolicyRegistry.recordSpend` and checked
+only one of the two things that call reverts on. [#225][i225] measured what the
+gap cost. `SquareJob.complete` takes the split from `resolvePayout` and pays on
+it, then calls `beforeAction`; a `checkRelease` that reverts inside that
+tolerant call takes its whole frame with it, **including the replay mark, which
+was written in it**. So the provider was paid, `spentToday` never moved, the
+mark was rolled back, and the same proof was good for the next job. Three jobs,
+one proof, on main before this change: 15 000 000 paid, counter unmoved,
+`isConsumed` false. Neither defence the section on replay below describes was
+left standing.
+
+Three ways in, and two of them are ordinary administration:
+
+| Way the check could fail | Reached by | What the preview checks now |
+|---|---|---|
+| `OnlyHook` | a hook rotated in with `setComplianceModule` while the module still authorises the old one | the job's own hook is the module's hook, and `setHook` refuses the zero address |
+| `NotASpender` | `PolicyRegistry.setSpender(module, false)`, the first and most careful step of rotating a module, taken by the registry's owner alone | `isSpender(module)`, refusing with `not a spender` |
+| `SpendOverflow` | a day's total past `uint128` | already covered: the ceiling keeps it at or below `dailyLimit` |
+| out of gas | a `hookGasLimit` between what the preview costs and what the check costs, which `HOOK_GAS_LIMIT` in `DeploySettlement.s.sol` can set without anyone making a mistake | the constructor refuses such a kernel |
+
+The gas one is a floor rather than a binding, because it is a property of the
+kernel and not of the release. `ComplianceModule.MIN_HOOK_GAS_LIMIT` is 450 000,
+and the kernel's limit is immutable, so one check in the constructor holds for
+the module's whole life. The figure is measured on every run by
+`test_theFloorCoversTheCheck`, cold, on a job carrying the longest description
+the kernel accepts: 385 896 for the check to book, 16 892 more for a poster's
+first-ever spend, 402 788 in all, rounded up. The same test asserts the gap it
+guards is still there — the check needs 385 896 where the preview needs 362 270.
+
+A caller cannot squeeze the check under the limit instead, which matters because
+`KeeperEvaluator.finalize` is permissionless and the caller picks the gas. When
+a hook call runs out, the kernel keeps one 64th of what it had, and that does
+not pay for the credits and events still to come, so the transaction reverts
+whole rather than settling. `test_noCallerGasPaysWithoutBooking` sweeps 236 gas
+limits from 250 000 to 2 600 000: 76 reverted, 160 paid and booked, none paid
+unbooked.
+
+**Behind that line.** The mark is written before the counter is advanced and
+`recordSpend` is called inside `try`, so a spend the registry refuses no longer
+takes the mark with it: the proof is spent, `checkRelease` returns false with
+`spend not recorded`, and the next job is refused by the mark alone even though
+the counter never moved. And when the preview and the check disagree at all,
+the hook says so by name: `afterAction` reads the split the kernel applied and
+emits `ReleaseUnconfirmed(jobId, payee, amount)` when money left escrow with the
+check not passed. It should never fire; the indexer counts it into
+`square_hook_write_failures_total{kind="complianceCheck"}` and the
+`hookWriteFailures` alert fires on the first one.
+
+**One consequence worth stating.** A rotation now fails closed on both sides. A
+job whose hook is not the module's hook is paid nothing, so jobs left on an old
+hook refund the client rather than paying an unbooked release, and the operator
+finishes the rotation with `setHook` before those jobs settle.
 
 ## The eight bindings
 

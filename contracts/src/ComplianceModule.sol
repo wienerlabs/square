@@ -80,7 +80,10 @@ import {ISquareJob} from "./interfaces/ISquareJob.sol";
 /// **An explicit mark.** `_consumed[keccak(statement)]`, the eight public signals
 /// rather than the bytes that carried them, because the counter's
 /// protection is only as good as the counter: a job whose `amount` is zero
-/// moves it not at all. Belt and braces, and cheap.
+/// moves it not at all. Belt and braces, and cheap. It is written before the
+/// counter is advanced and does not wait on the advance: a release the preview
+/// has already paid spends the proof even if the registry then refuses to book
+/// it (#225).
 ///
 /// A job cannot be completed twice — `complete` requires `Submitted` — so this
 /// is about a proof crossing from one job to another, which the bindings above
@@ -103,6 +106,25 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
     ///      encoding has one length: (2 + 4 + 2 + 8) words.
     uint256 private constant PROOF_BYTES = 16 * 32;
 
+    /// @notice The least `hookGasLimit` a kernel must forward for this module's
+    ///         check to land (#225).
+    /// @dev `checkRelease` costs more than `previewRelease` -- the same pairing,
+    ///      plus the mark and the counter -- and the kernel runs both under its
+    ///      one immutable limit. A limit between the two passes the preview,
+    ///      pays, and then cannot book what it paid. Measured with every slot
+    ///      cold, through `SquareHook.beforeAction`, on a job carrying the
+    ///      longest description the kernel accepts: 385 896 gas, and 16 892 more
+    ///      for a poster's first-ever spend, which writes a slot that was zero.
+    ///      402 788 in all, rounded up to the next 50 000.
+    ///      `test_theFloorCoversTheCheck` searches for the figure on every run
+    ///      and fails once it passes this one.
+    ///
+    ///      A caller cannot squeeze the check under the limit instead. When a
+    ///      hook call runs out, the kernel is left 1/64 of what it had, which is
+    ///      not enough to finish settling, so a transaction that starves the
+    ///      check reverts whole; `test_noCallerGasPaysWithoutBooking` sweeps it.
+    uint256 public constant MIN_HOOK_GAS_LIMIT = 450_000;
+
     IGroth16Verifier private immutable _verifier;
     IPolicyRegistry private immutable _registry;
     ISquareJob private immutable _squareJob;
@@ -121,6 +143,7 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
     error OnlyHook();
     error ProofDoesNotVerify();
     error ZeroAddress();
+    error HookGasLimitTooLow(uint256 hookGasLimit, uint256 required);
 
     /// @dev Reasons carried by `ReleaseRefused`. An operator reading a refusal
     ///      needs to know which binding failed; a boolean tells them only that
@@ -137,6 +160,9 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
     bytes32 private constant R_STRIPE = "stripe_receipt_hash";
     bytes32 private constant R_CONSUMED = "proof already used";
     bytes32 private constant R_CEILING = "daily ceiling";
+    bytes32 private constant R_HOOK = "hook not authorised";
+    bytes32 private constant R_NOT_SPENDER = "not a spender";
+    bytes32 private constant R_UNRECORDED = "spend not recorded";
 
     modifier onlyHook() {
         if (msg.sender != _hook) revert OnlyHook();
@@ -150,6 +176,8 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
     ///        can be straddled. Kept small and owner-adjustable rather than
     ///        immutable, because the right value is a property of the chain's
     ///        block time and the keeper's cadence, not of this code.
+    /// @dev The kernel's `hookGasLimit` is immutable and so is this module's
+    ///      kernel, so checking it once here is checking it for good.
     constructor(
         address verifier_,
         address registry_,
@@ -160,6 +188,8 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         if (verifier_ == address(0) || registry_ == address(0) || squareJob_ == address(0)) {
             revert ZeroAddress();
         }
+        uint256 hookGasLimit = ISquareJob(squareJob_).hookGasLimit();
+        if (hookGasLimit < MIN_HOOK_GAS_LIMIT) revert HookGasLimitTooLow(hookGasLimit, MIN_HOOK_GAS_LIMIT);
         _verifier = IGroth16Verifier(verifier_);
         _registry = IPolicyRegistry(registry_);
         _squareJob = ISquareJob(squareJob_);
@@ -173,7 +203,12 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
     /// @dev `checkRelease` writes — the counter and the consumed mark — so it is
     ///      restricted. `previewRelease` is not: it is `view`, and a verdict
     ///      anybody can read is a verdict anybody can check.
+    ///
+    ///      Zero is refused. It would authorise no hook at all, so every release
+    ///      would be refused by the preview; a module with no hook is the state
+    ///      before the first `setHook`, not one to rotate into (#225).
     function setHook(address hook_) external onlyOwner {
+        if (hook_ == address(0)) revert ZeroAddress();
         _hook = hook_;
         emit HookUpdated(hook_);
     }
@@ -214,6 +249,15 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
             return false;
         }
 
+        // The mark first, and nothing after it can take it back.
+        //
+        // This call runs inside the kernel's tolerant `beforeAction`, after
+        // `previewRelease` has already set the split. A revert here would roll
+        // back every write in the frame, the mark with it, while the payment
+        // stood -- and the same proof would then pay the next job too (#225).
+        // So `recordSpend` is called in `try`, and a failure there leaves the
+        // proof spent. The preview checks everything `recordSpend` reverts on,
+        // so this is the line behind that one rather than the line itself.
         _consumed[statement] = true;
 
         // Advances the poster's day by exactly what the payee receives.
@@ -229,9 +273,15 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         // binding and still comes back NoPolicy or LimitExceeded means the two
         // contracts have drifted apart, and that should be visible on the day it
         // happens rather than as money moving under a policy nobody checked.
-        (, IPolicyRegistry.Verdict verdict) = _registry.recordSpend(client, amount);
-        if (verdict != IPolicyRegistry.Verdict.Compliant) {
-            emit VerdictDisagreed(jobId, verdict);
+        try _registry.recordSpend(client, amount) returns (uint256, IPolicyRegistry.Verdict verdict) {
+            if (verdict != IPolicyRegistry.Verdict.Compliant) {
+                emit VerdictDisagreed(jobId, verdict);
+            }
+        } catch {
+            // Spent and not booked. `false`, so the hook does not record this
+            // release as compliant; the hook reports the payment it cannot undo.
+            emit ReleaseRefused(jobId, R_UNRECORDED);
+            return false;
         }
 
         emit ReleaseVerified(jobId, payee, amount, statement);
@@ -253,7 +303,13 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         address client,
         bytes calldata proof
     ) private view returns (bool, bytes32, bytes32) {
-        jobId; // bound through payee and amount, which the hook resolved from it
+        // The hook that books this release has to be the one this module lets
+        // book it. `checkRelease` is `onlyHook`, and its caller is the job's own
+        // hook: a preview that ignored this passed releases whose bookkeeping
+        // then reverted `OnlyHook` inside the kernel's tolerant call -- after a
+        // hook rotation that updated `setComplianceModule` and not `setHook`,
+        // for one (#225).
+        if (!_hookBooks(jobId)) return (false, R_HOOK, bytes32(0));
 
         // Every component is a fixed-size type, so a well-formed proof is
         // exactly (2 + 4 + 2 + 8) words.
@@ -343,7 +399,28 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         // registry's own verdict is asserted in `checkRelease` as a second line.
         if (spentBefore + amount > _registry.policyOf(client).dailyLimit) return (false, R_CEILING);
 
+        // The counter has to accept the advance. `recordSpend` reverts
+        // `NotASpender` for a module the registry no longer lists -- the first
+        // and most careful step of rotating one, taken by the registry's owner
+        // alone -- and that revert, inside the kernel's tolerant call, was a
+        // release paid with nothing booked (#225). With this and the ceiling
+        // above, nothing `recordSpend` reverts on is left unchecked.
+        if (!_registry.isSpender(address(this))) return (false, R_NOT_SPENDER);
+
         return (true, bytes32(0));
+    }
+
+    /// @dev Whether the job's hook is the one `checkRelease` accepts. Wrapped,
+    ///      because `getJobRecord` reverts for a job that does not exist and
+    ///      the preview is specified never to revert.
+    function _hookBooks(uint256 jobId) private view returns (bool) {
+        address authorised = _hook;
+        if (authorised == address(0)) return false;
+        try _squareJob.getJobRecord(jobId) returns (ISquareJob.JobRecord memory job) {
+            return job.hook == authorised;
+        } catch {
+            return false;
+        }
     }
 
     function _withinWindow(uint256 stamp) private view returns (bool) {

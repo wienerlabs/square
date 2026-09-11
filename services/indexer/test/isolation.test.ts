@@ -153,6 +153,16 @@ function validationWriteFailed(jobId: bigint, blockNumber: bigint): StagedLog {
   };
 }
 
+function releaseUnconfirmed(jobId: bigint, blockNumber: bigint): StagedLog {
+  return {
+    abi: squareHookAbi as Abi,
+    address: deployment.squareHook,
+    eventName: "ReleaseUnconfirmed",
+    args: { jobId, payee: "0x1111111111111111111111111111111111111111" as Hex, amount: 5_000_000n },
+    blockNumber,
+  };
+}
+
 interface Recorded {
   level: string;
   event: string;
@@ -451,6 +461,36 @@ describe("signals the operator can act on", () => {
       const failure = logs.find((entry) => entry.event === "indexer.hook_write_failed");
       expect(failure?.level).toBe("error");
       expect(String(failure?.fields.reason)).toContain("0x12345678");
+
+      const notified: Alert[] = [];
+      const alerting = createAlerting({
+        service: "square-indexer",
+        rules: [hookWriteFailures()],
+        notify: async (alert) => {
+          notified.push(alert);
+        },
+      });
+      await alerting.evaluate({ ...metrics.snapshot() });
+      expect(notified).toHaveLength(1);
+      expect(notified[0]).toMatchObject({ rule: "hookWriteFailures", kind: "firing" });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("counts a release the compliance check did not book and alerts on it", async () => {
+    const db = await openDatabase();
+    try {
+      const staged = [jobCreated(1n, 2n), releaseUnconfirmed(1n, 3n)];
+      const { indexer, metrics, logs } = build(db, staged, 3n);
+      await indexer.start();
+      await indexer.syncOnce();
+
+      expect(metrics.snapshot().hookWriteFailures).toBe(1);
+      const failure = logs.find((entry) => entry.event === "indexer.hook_write_failed");
+      expect(failure?.level).toBe("error");
+      expect(String(failure?.fields.reason)).toContain("paid 5000000 to 0x1111111111111111111111111111111111111111");
+      expect(String(failure?.fields.reason)).toContain("did not book it");
 
       const notified: Alert[] = [];
       const alerting = createAlerting({

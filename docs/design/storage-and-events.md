@@ -348,6 +348,7 @@ What the normative set does not carry and the indexer needs.
 | `ValidationRecorded(uint256 indexed jobId, bytes32 indexed requestHash, uint8 response)` | |
 | `ValidationWriteFailed(uint256 indexed jobId, bytes32 indexed requestHash, bytes reason)` | |
 | `ComplianceCheckFailed(uint256 indexed jobId, bytes reason)` | the installed compliance module reverted while `beforeAction` was checking the release. The revert data is carried, the `ComplianceChecked` that follows reports `verified = false`, and settlement continues |
+| `ReleaseUnconfirmed(uint256 indexed jobId, address indexed payee, uint256 amount)` | at complete, from `afterAction`: the kernel paid `amount` to `payee` on a compliance preview that passed, and the check that books the release, the counter and the replay mark, did not pass. It should never fire (#225); the indexer counts it into `square_hook_write_failures_total{kind="complianceCheck"}` and the `hookWriteFailures` alert fires on it |
 | `ReputationSkipped(uint256 indexed jobId, uint256 indexed agentId, bytes32 reason)` | positive feedback that was deliberately not written, with `reason` either `untrusted evaluator` or `budget below minimum`. No registry call was attempted, so this is neither `ReputationRecorded` nor `ReputationWriteFailed` |
 | `ComplianceModuleUpdated(address indexed module)` | |
 | `ReputationPolicyUpdated(address indexed trustedEvaluator, uint64 minReputationBudget)` | the constructor and every later policy change: whose jobs earn positive reputation, and the budget below which it is not written |
@@ -385,8 +386,9 @@ inherit OpenZeppelin's `Ownable2Step`, so each of them declares the same pair.
 | `OwnershipTransferred(address indexed previousOwner, address indexed newOwner)` | the nominee called `acceptOwnership`, or the constructor set the first owner. This is the transfer |
 
 An event that should never fire needs a consumer in the change that adds it.
-`HookFailed`, `ReputationWriteFailed`, `ValidationWriteFailed` and
-`PayoutUnresolvable` all mean "the design tolerated something it did not want",
+`HookFailed`, `ReputationWriteFailed`, `ValidationWriteFailed`,
+`ReleaseUnconfirmed` and `PayoutUnresolvable` all mean "the design tolerated
+something it did not want",
 and a tolerated failure nobody reads is an unobserved one. So the same change
 that adds such an event adds the reader: a reducer branch, a metric or a mirror
 column, and where it warrants attention an alert rule. A pull request that adds
