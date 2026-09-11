@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import type { Hex } from "viem";
 import { JobStatus, deploymentFor, type SquareClient } from "@squaresdk/core";
 import { jobs, keeperActions, migrate, MIGRATIONS_DIR, pgliteDatabase, type Database } from "@squaresdk/data";
-import { createMetrics, type Metrics } from "@squaresdk/observability";
-import { Keeper } from "../src/run.js";
+import { createLogger, createMetrics, type Metrics } from "@squaresdk/observability";
+import { Keeper, KEEPER_LOG_FIELDS } from "../src/run.js";
 
 const CHAIN = 31337;
 const NOW = 1_760_000_000n;
@@ -213,6 +213,117 @@ describe("a send that keeps failing", () => {
       expect(chain.calls).toHaveLength(2);
       expect(metrics.snapshot().finalizeGasGap).toBe(-15_486);
       expect(metrics.snapshot().lastKeeperTickAt).toBeGreaterThan(0);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe("what a restart carries", () => {
+  const policy = { baseDelaySeconds: 60n, maxDelaySeconds: 600n, giveUpAfter: 3, maxJournalRowsPerJob: 3 };
+
+  it("keeps a job it gave up on instead of attacking it again from zero", async () => {
+    const db = await openDatabase();
+    try {
+      await jobs.upsert(db, job({ jobId: 1n }));
+      const chain: FakeChain = {
+        calls: [],
+        finalize: async () => {
+          throw new Error("execution reverted: NotOurJob");
+        },
+      };
+      const first = build(db, chain, { retryPolicy: policy });
+      let now = NOW;
+      for (let tick = 0; tick < 20; tick += 1) {
+        await first.keeper.tick(now);
+        now += 15n;
+      }
+      expect(chain.calls).toHaveLength(3);
+      const journaled = await keeperActions.recent(db, CHAIN, 100);
+
+      const restarted = build(db, chain, { retryPolicy: policy });
+      expect(await restarted.keeper.restoreGiveUps()).toEqual([1n]);
+      for (let tick = 0; tick < 20; tick += 1) {
+        const report = await restarted.keeper.tick(now);
+        expect(report.skipped).toEqual([{ jobId: 1n, reason: "gaveUp" }]);
+        now += 15n;
+      }
+
+      expect(chain.calls).toHaveLength(3);
+      expect(await keeperActions.recent(db, CHAIN, 100)).toHaveLength(journaled.length);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("tries the job again after an operator clears the give-up", async () => {
+    const db = await openDatabase();
+    try {
+      await jobs.upsert(db, job({ jobId: 1n }));
+      let failing = true;
+      const chain: FakeChain = {
+        calls: [],
+        finalize: async () => {
+          if (failing) throw new Error("execution reverted: NotOurJob");
+          return { hash: `0x${"ef".repeat(32)}` as Hex, receipt: { gasUsed: 465_486n }, events: [] };
+        },
+      };
+      const first = build(db, chain, { retryPolicy: policy });
+      let now = NOW;
+      for (let tick = 0; tick < 20; tick += 1) {
+        await first.keeper.tick(now);
+        now += 15n;
+      }
+      expect(await keeperActions.listGaveUp(db, CHAIN)).toEqual([1n]);
+
+      expect(await keeperActions.clearGiveUp(db, CHAIN, 1n)).toBe(1);
+      failing = false;
+      const restarted = build(db, chain, { retryPolicy: policy });
+      expect(await restarted.keeper.restoreGiveUps()).toEqual([]);
+      const report = await restarted.keeper.tick(now);
+
+      expect(report.finalized).toEqual([1n]);
+      expect(chain.calls).toHaveLength(4);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe("the keeper's own diagnostic fields", () => {
+  it("logs attempts and retryInSeconds, which the default allowlist drops", async () => {
+    const db = await openDatabase();
+    try {
+      await jobs.upsert(db, job({ jobId: 1n }));
+      const chain: FakeChain = {
+        calls: [],
+        finalize: async () => {
+          throw new Error("nonce too low");
+        },
+      };
+      const lines: string[] = [];
+      const logger = createLogger({
+        service: "square-keeper",
+        version: "test",
+        allowlist: KEEPER_LOG_FIELDS,
+        sink: (line) => lines.push(line),
+      });
+      const { keeper } = build(db, chain, {
+        logger,
+        retryPolicy: { baseDelaySeconds: 60n, maxDelaySeconds: 600n, giveUpAfter: 2, maxJournalRowsPerJob: 3 },
+      });
+
+      await keeper.tick(NOW);
+      await keeper.tick(NOW + 600n);
+
+      const written = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+      const failed = written.find((entry) => entry["event"] === "keeper.finalize_failed");
+      const gaveUp = written.find((entry) => entry["event"] === "keeper.gave_up");
+      expect(failed?.["attempts"]).toBe(1);
+      expect(failed?.["retryInSeconds"]).toBe(60);
+      expect(failed?.["dropped_fields"]).toBeUndefined();
+      expect(gaveUp?.["attempts"]).toBe(2);
+      expect(gaveUp?.["dropped_fields"]).toBeUndefined();
     } finally {
       await db.close();
     }
