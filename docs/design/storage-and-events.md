@@ -256,8 +256,8 @@ debit. The reference reducer takes both through the account rather than the job
 (`services/indexer/src/reducer.ts`), and anything else reading these logs has to
 do the same.
 
-**Configuration and administration, which have no job to name:** `FeesUpdated`
-and `HookWhitelistUpdated` on `SquareJob`; `ArbitrationSet`,
+**Configuration and administration, which have no job to name:** `FeesUpdated`,
+`FeesScheduled`, `Skimmed` and `HookWhitelistUpdated` on `SquareJob`; `ArbitrationSet`,
 `WindowsConfigured` and `FinalizeGraceConfigured` on `KeeperEvaluator`;
 `ArbitersUpdated` and `BondParametersUpdated` on `Arbitration`;
 `ComplianceModuleUpdated` and `ReputationPolicyUpdated` on `SquareHook`; and the
@@ -302,6 +302,8 @@ What the normative set does not carry and the indexer needs.
 | `PlatformFeeAccrued(uint256 indexed jobId, address indexed treasury, uint256 amount)` | `complete` | |
 | `Withdrawn(address indexed account, address indexed to, uint256 amount)` | `withdraw`, `withdrawTo` | ledger debit; keyed by account, not by job |
 | `FeesUpdated(uint16 platformFeeBP, uint16 evaluatorFeeBP, address treasury)` | admin | |
+| `FeesScheduled(uint16 platformFeeBP, uint16 evaluatorFeeBP, uint48 effectiveFrom)` | admin | the rate a later `fund` will pin, once `effectiveFrom` passes |
+| `Skimmed(address indexed to, uint256 amount)` | admin | a balance no ledger entry and no escrow claimed, moved out; it can never reduce either |
 | `HookFailed(uint256 indexed jobId, address indexed hook, bytes4 selector, bytes reason)` | `complete`, `reject` | a hook call the kernel makes tolerantly reverted and settlement went ahead regardless. `selector` is the kernel function that was running, `reason` the revert data. A hook that fails on the settlement path is a signal, never a stuck job |
 | `PayoutUnresolvable(uint256 indexed jobId, address indexed hook)` | `claimRefund` | the job was Submitted and its hook resolves the payout, but the hook can no longer answer with a usable payee. Expiry proceeds and the client is refunded; without this branch the escrow would have no way out |
 

@@ -652,11 +652,110 @@ contract SquareJobTest is BaseTest {
         vm.expectRevert(ISquareJob.ZeroAddress.selector);
         vm.prank(owner);
         kernel.setFees(1, 1, address(0));
+        uint16 platformBefore = kernel.platformFeeBP();
+        uint16 evaluatorBefore = kernel.evaluatorFeeBP();
         vm.prank(owner);
         kernel.setFees(200, 100, stranger);
-        assertEq(kernel.platformFeeBP(), 200);
+
+        assertEq(kernel.platformFeeBP(), platformBefore, "a scheduled rate does not apply on the block it is set");
+        assertEq(kernel.evaluatorFeeBP(), evaluatorBefore);
+        assertEq(kernel.platformTreasury(), stranger, "the treasury moves at once, it is not part of the quote");
+        (uint16 pending, uint16 pendingEvaluator, uint48 effectiveFrom) = kernel.scheduledFees();
+        assertEq(pending, 200);
+        assertEq(pendingEvaluator, 100);
+        assertEq(effectiveFrom, uint48(block.timestamp) + kernel.FEE_NOTICE());
+
+        vm.warp(effectiveFrom);
+        assertEq(kernel.platformFeeBP(), 200, "the notice period is over");
         assertEq(kernel.evaluatorFeeBP(), 100);
-        assertEq(kernel.platformTreasury(), stranger);
+    }
+
+    function test_setFees_cannotChangeTheFeeAFundingIsAboutToPin() public {
+        vm.prank(client);
+        uint256 jobId = kernel.createJob(provider, address(keeper), expiry(), "", address(0));
+        vm.prank(provider);
+        kernel.setBudget(jobId, BUDGET, "");
+        uint16 quotedPlatform = kernel.platformFeeBP();
+        uint16 quotedEvaluator = kernel.evaluatorFeeBP();
+
+        vm.prank(owner);
+        kernel.setFees(1_500, 500, treasury);
+        vm.prank(client);
+        kernel.fund(jobId, BUDGET, "");
+
+        assertEq(record(jobId).platformFeeBP, quotedPlatform, "the funder pays the fee it could read before it called");
+        assertEq(record(jobId).evaluatorFeeBP, quotedEvaluator);
+
+        vm.warp(block.timestamp + kernel.FEE_NOTICE());
+        vm.prank(client);
+        uint256 later = kernel.createJob(provider, address(keeper), expiry(), "", address(0));
+        vm.prank(provider);
+        kernel.setBudget(later, BUDGET, "");
+        vm.prank(client);
+        kernel.fund(later, BUDGET, "");
+        assertEq(record(later).platformFeeBP, 1_500, "a job funded after the notice pays the new rate");
+    }
+
+    function test_skim_movesOnlyWhatNoLedgerClaims() public {
+        uint256 jobId = submittedJob(BUDGET, address(0));
+        uint256 escrowed = kernel.totalEscrowed();
+        assertEq(escrowed, BUDGET);
+        assertEq(kernel.unaccounted(), 0);
+
+        vm.prank(client);
+        usdc.transfer(address(kernel), 9_602);
+        assertEq(kernel.unaccounted(), 9_602, "a stray transfer belongs to nobody");
+
+        vm.expectRevert();
+        vm.prank(stranger);
+        kernel.skim(stranger);
+
+        uint256 before = usdc.balanceOf(treasury);
+        vm.prank(owner);
+        kernel.skim(treasury);
+
+        assertEq(usdc.balanceOf(treasury), before + 9_602);
+        assertEq(kernel.unaccounted(), 0);
+        assertEq(kernel.totalEscrowed(), escrowed, "the escrow of a live job is untouched");
+        assertEq(usdc.balanceOf(address(kernel)), escrowed + kernel.totalWithdrawable());
+
+        vm.expectRevert(ISquareJob.NothingToSkim.selector);
+        vm.prank(owner);
+        kernel.skim(treasury);
+
+        vm.prank(address(keeper));
+        kernel.complete(jobId, keccak256("ok"), abi.encode(uint16(FULL_BPS), bytes("")));
+        assertEq(kernel.totalEscrowed(), 0);
+        assertSolvent();
+    }
+
+    function test_claimRefund_waitsOutTheMinimumWindowEvenWithoutAHorizon() public {
+        uint256 horizonless = 3 * uint256(kernel.MIN_SETTLEMENT_WINDOW());
+        vm.prank(client);
+        uint256 jobId = kernel.createJob(provider, client, block.timestamp + horizonless, "", address(0));
+        vm.prank(provider);
+        kernel.setBudget(jobId, BUDGET, "");
+        vm.prank(client);
+        kernel.fund(jobId, BUDGET, "");
+        uint48 deadline = record(jobId).expiredAt;
+
+        vm.warp(deadline - 1);
+        vm.expectRevert(abi.encodeWithSelector(ISquareJob.ExpiryTooShort.selector, deadline - 1 + kernel.MIN_SETTLEMENT_WINDOW()));
+        vm.prank(provider);
+        kernel.submit(jobId, keccak256("deliverable"), "");
+
+        vm.warp(deadline - kernel.MIN_SETTLEMENT_WINDOW());
+        vm.prank(provider);
+        kernel.submit(jobId, keccak256("deliverable"), "");
+        assertEq(record(jobId).submittedAt + kernel.MIN_SETTLEMENT_WINDOW(), deadline, "the window ends exactly at the expiry");
+
+        vm.warp(deadline - 1);
+        vm.expectRevert(ISquareJob.NotExpired.selector);
+        kernel.claimRefund(jobId);
+
+        vm.warp(deadline);
+        kernel.claimRefund(jobId);
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Expired));
     }
 
     function test_getJob_revertsOnUnknownJob() public {
