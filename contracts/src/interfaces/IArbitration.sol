@@ -44,6 +44,7 @@ interface IArbitration {
     event DisputeExpired(uint256 indexed jobId);
     event BondSettled(uint256 indexed jobId, address indexed to, uint64 amount);
     event BondWithdrawn(address indexed account, address indexed to, uint256 amount);
+    event RejectionNotApplied(uint256 indexed jobId, bytes reason);
 
     error ZeroAddress();
     error OnlyKeeperEvaluator();
@@ -60,6 +61,7 @@ interface IArbitration {
     error NothingToSettle();
     error InsufficientBalance();
     error SplitNeedsAPayoutResolver();
+    error JobNoLongerVotable(uint8 status);
 
     function open(
         uint256 jobId,

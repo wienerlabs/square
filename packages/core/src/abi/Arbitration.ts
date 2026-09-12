@@ -694,6 +694,25 @@ export const arbitrationAbi = [
   },
   {
     "type": "event",
+    "name": "RejectionNotApplied",
+    "inputs": [
+      {
+        "name": "jobId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "reason",
+        "type": "bytes",
+        "indexed": false,
+        "internalType": "bytes"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "VoteCast",
     "inputs": [
       {
@@ -769,6 +788,17 @@ export const arbitrationAbi = [
     "type": "error",
     "name": "InsufficientBalance",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "JobNoLongerVotable",
+    "inputs": [
+      {
+        "name": "status",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ]
   },
   {
     "type": "error",
