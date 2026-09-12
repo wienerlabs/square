@@ -14,13 +14,24 @@ const ALL = [
   "0008_keeper_give_up",
   "0009_x402_last_checked",
   "0010_quarantined_events",
+  "0011_x402_valid_before_repair",
 ];
+
+const LAST = "0011_x402_valid_before_repair";
 
 async function tableNames(db: Database): Promise<string[]> {
   const { rows } = await db.query<{ table_name: string }>(
     "select table_name from information_schema.tables where table_schema = 'public' order by table_name",
   );
   return rows.map((row) => row.table_name);
+}
+
+async function indexNames(db: Database, table: string): Promise<string[]> {
+  const { rows } = await db.query<{ indexname: string }>(
+    "select indexname from pg_indexes where schemaname = 'public' and tablename = $1 order by indexname",
+    [table],
+  );
+  return rows.map((row) => row.indexname);
 }
 
 async function columnNames(db: Database, table: string): Promise<string[]> {
@@ -55,7 +66,7 @@ async function schemaSnapshot(db: Database): Promise<unknown> {
 }
 
 describe("migrations", () => {
-  it("applies all ten in order, reverts the last one, and re-applies it", async () => {
+  it("applies all eleven in order, reverts the last one, and re-applies it", async () => {
     const db = await pgliteDatabase();
     try {
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(ALL);
@@ -77,12 +88,15 @@ describe("migrations", () => {
         "x402_payments",
       ]);
 
-      expect((await migrate(db, MIGRATIONS_DIR, "down")).applied).toEqual(["0010_quarantined_events"]);
-      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL.slice(0, 9), pending: ["0010_quarantined_events"] });
-      expect(await tableNames(db)).not.toContain("quarantined_events");
-
-      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0010_quarantined_events"]);
       expect(await tableNames(db)).toContain("quarantined_events");
+
+      expect((await migrate(db, MIGRATIONS_DIR, "down")).applied).toEqual([LAST]);
+      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL.slice(0, 10), pending: [LAST] });
+      expect(await indexNames(db, "x402_payments")).not.toContain("x402_payments_expiry");
+
+      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual([LAST]);
+      expect(await indexNames(db, "x402_payments")).toContain("x402_payments_expiry");
+      expect(await columnNames(db, "x402_payments")).toContain("last_checked_at");
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL, pending: [] });
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual([]);
     } finally {
@@ -90,13 +104,13 @@ describe("migrations", () => {
     }
   });
 
-  it("up, down ten steps, up leaves the schema identical", async () => {
+  it("up, down eleven steps, up leaves the schema identical", async () => {
     const db = await pgliteDatabase();
     try {
       await migrate(db, MIGRATIONS_DIR, "up");
       const first = await schemaSnapshot(db);
 
-      expect((await migrate(db, MIGRATIONS_DIR, "down", 10)).applied).toEqual([...ALL].reverse());
+      expect((await migrate(db, MIGRATIONS_DIR, "down", 11)).applied).toEqual([...ALL].reverse());
       expect(await tableNames(db)).toEqual(["schema_migrations"]);
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: [], pending: ALL });
 
@@ -138,6 +152,7 @@ describe("migrations", () => {
         "0008_keeper_give_up",
         "0009_x402_last_checked",
         "0010_quarantined_events",
+        LAST,
       ]);
 
       await db.query("insert into schema_migrations (name) values ('0003_x402')");
@@ -149,6 +164,7 @@ describe("migrations", () => {
         "0008_keeper_give_up",
         "0009_x402_last_checked",
         "0010_quarantined_events",
+        LAST,
       ]);
       expect(await tableNames(db)).toContain("keeper_actions");
     } finally {
@@ -184,6 +200,30 @@ describe("migrations", () => {
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: [ALL[0]], pending: ALL.slice(1) });
       const { rows } = await db.query<{ n: number }>("select count(*)::int as n from schema_migrations");
       expect(rows[0]).toEqual({ n: 1 });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("removes a valid_before no retention sweep could ever reach, and keeps the rows that are reachable", async () => {
+    const db = await pgliteDatabase();
+    try {
+      await migrate(db, MIGRATIONS_DIR, "up", 9);
+      const insert = `insert into x402_payments (chain_id, asset, payer, nonce, amount, pay_to, resource, status, valid_before)
+         values (5042002, $1, $2, $3, 1, $4, '/v1/resolve', 1, $5)`;
+      const bytes = (seed: number) => Uint8Array.from([seed]);
+      await db.query(insert, [bytes(0xa0), bytes(0xb1), bytes(0x01), bytes(0xc2), (2n ** 62n).toString()]);
+      await db.query(insert, [bytes(0xa0), bytes(0xb1), bytes(0x02), bytes(0xc2), "9224315424000"]);
+      await db.query(insert, [bytes(0xa0), bytes(0xb1), bytes(0x03), bytes(0xc2), "9224315423999"]);
+      await db.query(insert, [bytes(0xa0), bytes(0xb1), bytes(0x04), bytes(0xc2), "1800000000"]);
+
+      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0010_quarantined_events", LAST]);
+
+      const { rows } = await db.query<{ valid_before: string }>(
+        "select valid_before from x402_payments order by valid_before",
+      );
+      expect(rows.map((row) => row.valid_before)).toEqual(["1800000000", "9224315423999"]);
+      expect(await indexNames(db, "x402_payments")).toContain("x402_payments_expiry");
     } finally {
       await db.close();
     }

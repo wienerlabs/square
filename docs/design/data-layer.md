@@ -309,9 +309,12 @@ reads.
 | `keeper_actions` | 90 days | operational, feeds the metrics in #50 |
 
 All four are removed by `square-data sweep`, which runs every sweep once and prints
-what each removed. Nothing sweeps on its own: the operator schedules that command
-hourly, from cron or a systemd timer, on the host that already holds `DATABASE_URL`
-for the migration step. `packages/data/README.md` carries both schedule examples.
+what each removed. The four are independent: a sweep that throws is reported by table
+and message, and the ones after it still run, so one unsweepable row cannot stop the
+retention of every other table. Nothing sweeps on its own: the operator schedules that
+command hourly, from cron or a systemd timer, on the host that already holds
+`DATABASE_URL` for the migration step. `packages/data/README.md` carries both schedule
+examples.
 
 ## Access layer
 

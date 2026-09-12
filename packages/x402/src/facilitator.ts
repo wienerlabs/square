@@ -81,7 +81,11 @@ export const REJECTION = {
   recipientMismatch: "authorization_recipient_mismatch",
   amountBelowRequired: "authorization_value_below_required",
   replayed: "replayed_authorization",
+  validBeforeTooFar: "invalid_valid_before",
 } as const;
+
+export const DEFAULT_MAX_TIMEOUT_SECONDS = 300;
+export const VALID_BEFORE_SKEW_SECONDS = 300;
 
 const SETTLEMENT_PENDING = "settlement_pending";
 const SETTLED_WITHOUT_HASH = "settled_without_transaction_hash";
@@ -173,11 +177,21 @@ export interface AllowlistVerdict {
   eip3009?: Eip3009PaymentPayload;
 }
 
+function declaredTimeoutSeconds(requirements: PaymentRequirements): number {
+  const declared = requirements.maxTimeoutSeconds;
+  return typeof declared === "number" && Number.isInteger(declared) && declared > 0 ? declared : DEFAULT_MAX_TIMEOUT_SECONDS;
+}
+
+export function validBeforeCeiling(requirements: PaymentRequirements, nowSeconds: number): bigint {
+  return BigInt(nowSeconds) + BigInt(declaredTimeoutSeconds(requirements)) + BigInt(VALID_BEFORE_SKEW_SECONDS);
+}
+
 export function checkAgainstAllowlist(
   payload: PaymentPayload,
   requirements: PaymentRequirements,
   allowlist: PaymentAllowlistEntry[],
-  network: Network
+  network: Network,
+  nowSeconds: number = Math.floor(Date.now() / 1000)
 ): AllowlistVerdict {
   if (payload.x402Version !== 2) {
     return { ok: false, reason: REJECTION.unsupportedVersion };
@@ -222,6 +236,9 @@ export function checkAgainstAllowlist(
   }
   if (BigInt(eip3009.authorization.value) < BigInt(requirements.amount)) {
     return { ok: false, reason: REJECTION.amountBelowRequired };
+  }
+  if (BigInt(eip3009.authorization.validBefore) > validBeforeCeiling(requirements, nowSeconds)) {
+    return { ok: false, reason: REJECTION.validBeforeTooFar };
   }
   return { ok: true, eip3009 };
 }
@@ -339,8 +356,13 @@ export function createSquareFacilitator(options: SquareFacilitatorOptions): Squa
       });
       return;
     }
-    await markFailed(key, result.errorReason ?? "settle_failed");
-    logger.error("x402 settlement failed", { payer: key.payer, nonce: key.nonce, reason: result.errorReason });
+    await markFailed(key, result.errorReason ?? "settle_failed", transaction);
+    logger.error("x402 settlement failed", {
+      payer: key.payer,
+      nonce: key.nonce,
+      reason: result.errorReason,
+      transaction,
+    });
   });
 
   facilitator.onSettleFailure(async ({ paymentPayload, requirements, error }) => {
@@ -353,8 +375,8 @@ export function createSquareFacilitator(options: SquareFacilitatorOptions): Squa
     logger.error("x402 settlement threw", { payer: key.payer, nonce: key.nonce, error: error.message });
   });
 
-  async function markFailed(key: ReplayKey, reason: string): Promise<void> {
-    const held = await replayStore.markFailed(key, reason);
+  async function markFailed(key: ReplayKey, reason: string, txHash?: Hex): Promise<void> {
+    const held = await replayStore.markFailed(key, reason, txHash);
     if (!held) {
       logger.error("x402 ledger refused the failed transition", { payer: key.payer, nonce: key.nonce, reason });
     }
