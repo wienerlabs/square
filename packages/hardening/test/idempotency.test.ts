@@ -72,6 +72,19 @@ describe("hashRequest", () => {
   it("treats a missing body and actor as null", () => {
     expect(hashRequest({ method: "GET", path: "/" })).toBe(hashRequest({ method: "GET", path: "/", body: null, actor: null }));
   });
+
+  it("refuses a Map body rather than giving two different payouts the same hash", () => {
+    const alice = { method: "POST", path: "/payouts", actor: "0xabc", body: new Map<string, unknown>([["amount", 1], ["to", "0xalice"]]) };
+    const mallory = { method: "POST", path: "/payouts", actor: "0xabc", body: new Map<string, unknown>([["amount", 1_000_000], ["to", "0xmallory"]]) };
+
+    expect(() => hashRequest(alice)).toThrow(TypeError);
+    expect(() => hashRequest(mallory)).toThrow(TypeError);
+
+    const asObjects = [alice, mallory].map((request) =>
+      hashRequest({ ...request, body: Object.fromEntries(request.body) })
+    );
+    expect(asObjects[0]).not.toBe(asObjects[1]);
+  });
 });
 
 describe("withIdempotency", () => {

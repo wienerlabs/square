@@ -100,6 +100,15 @@ verb), `"GET /jobs/:id"`, `"GET /files/*"`. Parameters may be written either as 
 `:id` or as Next's `[id]`; `"GET /jobs/[id]"` and `"GET /jobs/:id"` configure the same
 route.
 
+Because they configure the same route, writing both is a configuration error and
+`createGatewayApp` throws on it rather than picking a winner. The same holds for any two
+keys that reach one canonical form: a lowercase verb, extra whitespace between the verb
+and the path, or the two parameter dialects. The error names both spellings and the
+canonical form they share. Left silent it would split the route in two, since the price
+is stored under the canonical key (last key wins) while Hono keeps a handler for every
+key (first match runs), so the surviving handler would be the one whose price was
+discarded.
+
 `createGatewayApp` serves each key to two consumers that must agree on it, or a paid
 endpoint answers `200` with no payment: the `@x402/hono` `paymentMiddleware`, which
 decides whether a request needs paying, and Hono's router, which decides which handler

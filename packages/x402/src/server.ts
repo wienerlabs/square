@@ -102,18 +102,44 @@ export function routePatternKey(parsed: ParsedRoutePattern): string {
   return parsed.method === "*" ? parsed.path : `${parsed.method} ${parsed.path}`;
 }
 
+export function routeCollisionMessage(first: string, second: string, key: string): string {
+  return (
+    `createGatewayApp: two route keys collapse to the same route: ${JSON.stringify(first)} and ` +
+    `${JSON.stringify(second)} both mean ${JSON.stringify(key)}. Keep one.`
+  );
+}
+
+interface CanonicalGatewayRoute extends ParsedRoutePattern {
+  key: string;
+  config: PaidRouteConfig;
+  handler: GatewayHandler;
+}
+
+function canonicalGatewayRoutes(routes: Record<string, GatewayRoute>): CanonicalGatewayRoute[] {
+  const spellingByKey = new Map<string, string>();
+  const canonical: CanonicalGatewayRoute[] = [];
+  for (const [pattern, route] of Object.entries(routes)) {
+    const { method, path } = parseRoutePattern(pattern);
+    const key = routePatternKey({ method, path });
+    const previous = spellingByKey.get(key);
+    if (previous !== undefined) throw new Error(routeCollisionMessage(previous, pattern, key));
+    spellingByKey.set(key, pattern);
+    const { handler, ...config } = route;
+    canonical.push({ method, path, key, config, handler });
+  }
+  return canonical;
+}
+
 export function createGatewayApp(options: GatewayAppOptions): Hono {
   const asset = options.asset ?? ARC_TESTNET_USDC;
   const app = new Hono();
   app.get("/health", (c) =>
     c.json({ ok: true, network: options.network, payTo: getAddress(options.payTo), asset })
   );
-  const parsed = Object.entries(options.routes).map(([pattern, route]) => ({ ...parseRoutePattern(pattern), route }));
+  const canonical = canonicalGatewayRoutes(options.routes);
   const paidRoutes: Record<string, PaidRouteConfig> = {};
-  for (const { method, path, route } of parsed) {
-    const { handler, ...config } = route;
-    void handler;
-    paidRoutes[routePatternKey({ method, path })] = config;
+  for (const { key, config } of canonical) {
+    paidRoutes[key] = config;
   }
   app.use(
     "*",
@@ -126,11 +152,11 @@ export function createGatewayApp(options: GatewayAppOptions): Hono {
       ...(options.settlement !== undefined ? { settlement: options.settlement } : {}),
     })
   );
-  for (const { method, path, route } of parsed) {
+  for (const { method, path, handler } of canonical) {
     if (method === "*") {
-      app.all(path, route.handler);
+      app.all(path, handler);
     } else {
-      app.on(method, path, route.handler);
+      app.on(method, path, handler);
     }
   }
   return app;

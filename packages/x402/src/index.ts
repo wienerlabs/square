@@ -64,6 +64,7 @@ export {
   createGatewayApp,
   createPaidRoutes,
   parseRoutePattern,
+  routeCollisionMessage,
   routePatternKey,
 } from "./server.js";
 export type {

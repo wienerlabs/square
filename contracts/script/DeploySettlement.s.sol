@@ -105,6 +105,7 @@ contract DeploySettlement is Script {
     function _record(Deployment memory d, Params memory p) private {
         string memory json = "deployment";
         vm.serializeUint(json, "chainId", block.chainid);
+        vm.serializeUint(json, "block", block.number);
         vm.serializeAddress(json, "SquareJob", d.squareJob);
         vm.serializeAddress(json, "KeeperEvaluator", d.keeperEvaluator);
         vm.serializeAddress(json, "Arbitration", d.arbitration);
@@ -122,6 +123,7 @@ contract DeploySettlement is Script {
         console2.log("Arbitration      ", d.arbitration);
         console2.log("ClaimMarket      ", d.claimMarket);
         console2.log("SquareHook       ", d.squareHook);
+        console2.log("block            ", block.number);
         console2.log("written          ", path);
     }
 }
