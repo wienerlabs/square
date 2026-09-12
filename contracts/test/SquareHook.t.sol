@@ -106,8 +106,7 @@ contract SquareHookTest is BaseTest {
         uint256 jobId = submittedHookedJob(BUDGET);
         vm.prank(provider);
         market.list(jobId, uint64(900 * USDC));
-        vm.prank(buyer);
-        market.buy(jobId, uint64(900 * USDC));
+        buyAs(buyer, jobId, uint64(900 * USDC));
         pastWindow(jobId);
 
         bytes memory proof = hex"deadbeef";

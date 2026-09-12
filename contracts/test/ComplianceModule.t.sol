@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {Test, stdJson} from "forge-std/Test.sol";
+import {BuyerLists} from "./BuyerLists.sol";
 import {SquareJob} from "../src/SquareJob.sol";
 import {KeeperEvaluator} from "../src/KeeperEvaluator.sol";
 import {ClaimMarket} from "../src/ClaimMarket.sol";
@@ -35,7 +36,7 @@ import {MockIdentityRegistry, MockReputationRegistry, MockValidationRegistry} fr
 ///
 /// A change to the fee constants breaks `setUp`'s assertion rather than silently
 /// producing a job whose net payout no longer matches the proof.
-contract ComplianceModuleTest is Test {
+contract ComplianceModuleTest is Test, BuyerLists {
     using stdJson for string;
 
     uint16 internal constant FULL_BPS = 10_000;
@@ -49,6 +50,8 @@ contract ComplianceModuleTest is Test {
     uint256 internal constant AGENT_ID = 1;
     bytes32 internal constant REQUEST_HASH = keccak256("request");
     bytes32 internal constant DELIVERABLE = keccak256("deliverable");
+    uint256 internal constant SELLER_AGENT_ID = 2;
+    bytes32 internal constant SELLER_REQUEST_HASH = keccak256("seller request");
 
     // From test/fixtures/proofs.json, the `compliant` proof.
     address internal constant FIXTURE_TOKEN = 0x3600000000000000000000000000000000000000;
@@ -113,7 +116,8 @@ contract ComplianceModuleTest is Test {
 
         kernel = new SquareJob(FIXTURE_TOKEN, treasury, PLATFORM_FEE_BP, EVALUATOR_FEE_BP, HOOK_GAS_LIMIT, owner);
         keeper = new KeeperEvaluator(address(kernel), owner, CHALLENGE_WINDOW, DISPUTE_WINDOW, FINALIZE_GRACE);
-        market = new ClaimMarket(address(kernel), address(keeper));
+        registry = new PolicyRegistry(owner);
+        market = new ClaimMarket(address(kernel), address(keeper), address(registry));
         hook = new SquareHook(
             address(kernel),
             address(market),
@@ -124,7 +128,6 @@ contract ComplianceModuleTest is Test {
             address(keeper),
             MIN_REPUTATION_BUDGET
         );
-        registry = new PolicyRegistry(owner);
         verifier = new Groth16Verifier();
         module = new ComplianceModule(address(verifier), address(registry), address(kernel), owner, TOLERANCE);
 
@@ -146,6 +149,14 @@ contract ComplianceModuleTest is Test {
         usdc.approve(address(kernel), type(uint256).max);
         vm.prank(buyer);
         usdc.approve(address(market), type(uint256).max);
+
+        // square#30: who the client's policy lets a receivable be sold to. The
+        // fixture's recipient is on it so a sale can route to the address the
+        // proof names.
+        address[] memory approved = new address[](2);
+        approved[0] = buyer;
+        approved[1] = FIXTURE_RECIPIENT;
+        approveBuyers(registry, client, approved);
 
         // The policy, and the day already partly spent, exactly as the proof says.
         vm.prank(client);
@@ -480,8 +491,7 @@ contract ComplianceModuleTest is Test {
         uint64 price = uint64(FIXTURE_AMOUNT / 2);
         vm.prank(provider);
         market.list(jobId, price);
-        vm.prank(buyer);
-        market.buy(jobId, price);
+        buyFrom(market, client, buyer, jobId, price);
         assertEq(market.payeeOf(jobId), buyer, "the buyer is the payee");
 
         // The fixture's recipient is the provider, so a proof naming the provider
@@ -489,6 +499,47 @@ contract ComplianceModuleTest is Test {
         completeWith(jobId, compliantProof());
         assertEq(kernel.withdrawable(buyer), 0, "a proof for the provider paid the buyer");
         assertEq(kernel.withdrawable(client), FIXTURE_AMOUNT);
+    }
+
+    /// The other half: a proof that names the buyer releases to the buyer.
+    ///
+    /// square#30. The fixture's proof was built by the prover for a payment to
+    /// 0x1111…1111, so here 0x1111…1111 buys the receivable from a seller who
+    /// did the work. Nothing about the proof changes; what changes is that its
+    /// recipient is now the address the kernel pays, and the gate agrees.
+    function test_soldClaimReleasesToTheBuyerTheProofNames() public {
+        address seller = makeAddr("seller");
+        identity.setAgent(SELLER_AGENT_ID, seller, seller);
+        vm.prank(seller);
+        validation.validationRequest(address(hook), SELLER_AGENT_ID, "", SELLER_REQUEST_HASH);
+        vm.prank(client);
+        uint256 jobId =
+            kernel.createJob(seller, address(keeper), block.timestamp + 30 days, "spec:0xabc", address(hook));
+        vm.prank(seller);
+        kernel.setBudget(jobId, BUDGET, "");
+        vm.prank(client);
+        kernel.fund(jobId, BUDGET, "");
+        vm.prank(seller);
+        kernel.submit(jobId, DELIVERABLE, abi.encode(SELLER_AGENT_ID, SELLER_REQUEST_HASH));
+
+        uint64 price = uint64(FIXTURE_AMOUNT / 2);
+        vm.prank(seller);
+        market.list(jobId, price);
+        usdc.mint(FIXTURE_RECIPIENT, price);
+        vm.prank(FIXTURE_RECIPIENT);
+        usdc.approve(address(market), price);
+        buyFrom(market, client, FIXTURE_RECIPIENT, jobId, price);
+        assertEq(market.payeeOf(jobId), FIXTURE_RECIPIENT, "the buyer is the payee");
+        assertEq(usdc.balanceOf(seller), price, "and the seller was paid at the sale");
+
+        bytes memory proof = compliantProof();
+        vm.expectEmit(true, true, false, true, address(module));
+        emit ComplianceModule.ReleaseVerified(jobId, FIXTURE_RECIPIENT, FIXTURE_AMOUNT, statementOf(proof));
+        completeWith(jobId, proof);
+        assertEq(kernel.withdrawable(FIXTURE_RECIPIENT), FIXTURE_AMOUNT, "the buyer the proof names is paid");
+        assertEq(kernel.withdrawable(seller), 0);
+        assertEq(kernel.withdrawable(client), 0, "nothing went back to the client");
+        assertEq(registry.spentToday(client), FIXTURE_SPENT_BEFORE + FIXTURE_AMOUNT, "counted as the client's spend");
     }
 
     // ------------------------------------------------------------------- gas

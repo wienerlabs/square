@@ -12,8 +12,17 @@ import {
   type Transport,
   type WalletClient,
 } from "viem";
-import { arbitrationAbi, claimMarketAbi, erc20Abi, keeperEvaluatorAbi, squareHookAbi, squareJobAbi } from "./abi/index.js";
+import {
+  arbitrationAbi,
+  claimMarketAbi,
+  erc20Abi,
+  keeperEvaluatorAbi,
+  policyRegistryAbi,
+  squareHookAbi,
+  squareJobAbi,
+} from "./abi/index.js";
 import { agentFromDid, type AgentReference } from "./agent.js";
+import { type BuyerEligibility } from "./buyers.js";
 import { deploymentFor, type SquareDeployment } from "./deployments.js";
 import { decodeSquareLogs, eventsNamed, type SquareEvent } from "./events.js";
 import { encodeCompleteOptParams, encodeSubmitOptParams, ZERO_HASH } from "./optParams.js";
@@ -510,7 +519,17 @@ export class SquareClient {
     });
   }
 
-  async buyClaim(jobId: bigint, options: { autoApprove?: boolean; expectedPrice?: bigint } = {}): Promise<TransactionResult> {
+  /**
+   * Buy a listed receivable. `eligibility` is this account's salt and path on
+   * the poster's buyer list (square#30), as the poster issued them:
+   * `buyerListFrom(entries).eligibilityOf(account)`. The market rebuilds the
+   * leaf from the sender, so a path issued to another address is refused.
+   */
+  async buyClaim(
+    jobId: bigint,
+    eligibility: BuyerEligibility,
+    options: { autoApprove?: boolean; expectedPrice?: bigint } = {},
+  ): Promise<TransactionResult> {
     const listing = await this.listing(jobId);
     const expectedPrice = options.expectedPrice ?? listing.price;
     if (options.autoApprove ?? true) await this.ensureAllowance(this.deployment.claimMarket, expectedPrice);
@@ -518,12 +537,43 @@ export class SquareClient {
       abi: claimMarketAbi,
       address: this.deployment.claimMarket,
       functionName: "buy",
-      args: [jobId, expectedPrice],
+      args: [jobId, expectedPrice, eligibility.salt, [...eligibility.proof]],
     });
   }
 
   async cancelClaim(jobId: bigint): Promise<TransactionResult> {
     return this.write({ abi: claimMarketAbi, address: this.deployment.claimMarket, functionName: "cancel", args: [jobId] });
+  }
+
+  /** Where buyer lists live. Read from the market, which is bound to it at construction. */
+  async policyRegistry(): Promise<Address> {
+    return this.publicClient.readContract({
+      abi: claimMarketAbi,
+      address: this.deployment.claimMarket,
+      functionName: "policyRegistry",
+    });
+  }
+
+  async buyerRootOf(poster: Address): Promise<Hex> {
+    return this.publicClient.readContract({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "buyerRootOf",
+      args: [poster],
+    });
+  }
+
+  /**
+   * Publish this account's buyer list (square#30): `approveBuyers(...).root`.
+   * Zero approves nobody. Only the root reaches the chain; keep the entries.
+   */
+  async setBuyerRoot(root: Hex): Promise<TransactionResult> {
+    return this.write({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "setBuyerRoot",
+      args: [root],
+    });
   }
 
   async recordExpiry(jobId: bigint): Promise<TransactionResult> {

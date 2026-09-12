@@ -7,6 +7,7 @@ import {KeeperEvaluator} from "../src/KeeperEvaluator.sol";
 import {Arbitration} from "../src/Arbitration.sol";
 import {ClaimMarket} from "../src/ClaimMarket.sol";
 import {SquareHook} from "../src/SquareHook.sol";
+import {PolicyRegistry} from "../src/PolicyRegistry.sol";
 
 contract DeploySettlement is Script {
     struct Params {
@@ -37,6 +38,7 @@ contract DeploySettlement is Script {
         address arbitration;
         address claimMarket;
         address squareHook;
+        address policyRegistry;
     }
 
     function run() external returns (Deployment memory d) {
@@ -75,7 +77,10 @@ contract DeploySettlement is Script {
         KeeperEvaluator keeper =
             new KeeperEvaluator(address(kernel), p.deployer, p.challengeWindow, p.disputeWindow, p.finalizeGrace);
         Arbitration arbitration = new Arbitration(address(keeper), p.deployer, p.bondBps, p.minBond);
-        ClaimMarket market = new ClaimMarket(address(kernel), address(keeper));
+        // square#30: a receivable sells only to a buyer on its poster's list,
+        // and the list lives in the registry, so the market needs it first.
+        PolicyRegistry registry = new PolicyRegistry(p.deployer);
+        ClaimMarket market = new ClaimMarket(address(kernel), address(keeper), address(registry));
         SquareHook hook = new SquareHook(
             address(kernel),
             address(market),
@@ -95,11 +100,15 @@ contract DeploySettlement is Script {
             keeper.transferOwnership(p.owner);
             arbitration.transferOwnership(p.owner);
             hook.transferOwnership(p.owner);
+            registry.transferOwnership(p.owner);
             console2.log("ownership offered to", p.owner);
             console2.log("it passes only when that account calls acceptOwnership() on each of");
-            console2.log("SquareJob, KeeperEvaluator, Arbitration and SquareHook; until then the deployer owns them");
+            console2.log("SquareJob, KeeperEvaluator, Arbitration, SquareHook and PolicyRegistry;");
+            console2.log("until then the deployer owns them");
         }
-        d = Deployment(address(kernel), address(keeper), address(arbitration), address(market), address(hook));
+        d = Deployment(
+            address(kernel), address(keeper), address(arbitration), address(market), address(hook), address(registry)
+        );
     }
 
     function _record(Deployment memory d, Params memory p) private {
@@ -110,6 +119,7 @@ contract DeploySettlement is Script {
         vm.serializeAddress(json, "Arbitration", d.arbitration);
         vm.serializeAddress(json, "ClaimMarket", d.claimMarket);
         vm.serializeAddress(json, "SquareHook", d.squareHook);
+        vm.serializeAddress(json, "PolicyRegistry", d.policyRegistry);
         vm.serializeAddress(json, "USDC", p.usdc);
         vm.serializeAddress(json, "IdentityRegistry", p.identity);
         vm.serializeAddress(json, "ReputationRegistry", p.reputation);
@@ -122,6 +132,7 @@ contract DeploySettlement is Script {
         console2.log("Arbitration      ", d.arbitration);
         console2.log("ClaimMarket      ", d.claimMarket);
         console2.log("SquareHook       ", d.squareHook);
+        console2.log("PolicyRegistry   ", d.policyRegistry);
         console2.log("written          ", path);
     }
 }

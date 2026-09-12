@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.28;
 
+import {Vm} from "forge-std/Vm.sol";
 import {BaseTest} from "./Base.t.sol";
+import {BuyerTree} from "./BuyerLists.sol";
+import {IPolicyRegistry} from "../src/interfaces/IPolicyRegistry.sol";
 import {ISquareJob} from "../src/interfaces/ISquareJob.sol";
 import {IClaimMarket} from "../src/interfaces/IClaimMarket.sol";
 import {IArbitration} from "../src/interfaces/IArbitration.sol";
@@ -22,8 +25,7 @@ contract ClaimMarketTest is BaseTest {
 
     function _sold() internal returns (uint256 jobId) {
         jobId = _listed();
-        vm.prank(buyer);
-        market.buy(jobId, PRICE);
+        buyAs(buyer, jobId, PRICE);
     }
 
     function test_list_onlyProviderOnlySubmittedOnlyOptimistic() public {
@@ -95,8 +97,7 @@ contract ClaimMarketTest is BaseTest {
         uint256 buyerBefore = usdc.balanceOf(buyer);
         vm.expectEmit(true, true, true, true);
         emit IClaimMarket.ClaimBought(jobId, buyer, provider, PRICE);
-        vm.prank(buyer);
-        market.buy(jobId, PRICE);
+        buyAs(buyer, jobId, PRICE);
         assertEq(usdc.balanceOf(provider), sellerBefore + PRICE, "the agent has its money now");
         assertEq(usdc.balanceOf(buyer), buyerBefore - PRICE);
         assertEq(market.payeeOf(jobId), buyer);
@@ -105,17 +106,17 @@ contract ClaimMarketTest is BaseTest {
         market.cancel(jobId);
         vm.expectRevert(IClaimMarket.NotListed.selector);
         vm.prank(stranger);
-        market.buy(jobId, PRICE);
+        market.buy(jobId, PRICE, bytes32(0), new bytes32[](0));
     }
 
     function test_buy_buyerCannotBeSellerOrClient() public {
         uint256 jobId = _listed();
         vm.expectRevert(IClaimMarket.BuyerIsSeller.selector);
         vm.prank(provider);
-        market.buy(jobId, PRICE);
+        market.buy(jobId, PRICE, bytes32(0), new bytes32[](0));
         vm.expectRevert(IClaimMarket.BuyerIsClient.selector);
         vm.prank(client);
-        market.buy(jobId, PRICE);
+        market.buy(jobId, PRICE, bytes32(0), new bytes32[](0));
     }
 
     function test_buy_blockedWhileDisputed() public {
@@ -123,8 +124,7 @@ contract ClaimMarketTest is BaseTest {
         vm.prank(client);
         keeper.dispute(jobId, bytes32(0));
         vm.expectRevert(IClaimMarket.Disputed.selector);
-        vm.prank(buyer);
-        market.buy(jobId, PRICE);
+        buyAs(buyer, jobId, PRICE);
     }
 
     function test_cancel_onlySellerOnlyListed() public {
@@ -224,12 +224,11 @@ contract ClaimMarketTest is BaseTest {
         vm.prank(provider);
         market.list(jobId, PRICE);
         vm.expectRevert(IClaimMarket.NotListed.selector);
-        vm.prank(buyer);
-        market.buy(jobId, PRICE);
+        buyAs(buyer, jobId, PRICE);
     }
 
     function test_list_revertsWhenTheResolverReadsAnotherMarket() public {
-        ClaimMarket other = new ClaimMarket(address(kernel), address(keeper));
+        ClaimMarket other = new ClaimMarket(address(kernel), address(keeper), address(registry));
         SquareHook foreign = new SquareHook(
             address(kernel),
             address(other),
@@ -274,11 +273,9 @@ contract ClaimMarketTest is BaseTest {
         market.list(jobId, raised);
         uint256 buyerBefore = usdc.balanceOf(buyer);
         vm.expectRevert(abi.encodeWithSelector(IClaimMarket.PriceMismatch.selector, PRICE, raised));
-        vm.prank(buyer);
-        market.buy(jobId, PRICE);
+        buyAs(buyer, jobId, PRICE);
         assertEq(usdc.balanceOf(buyer), buyerBefore, "the buyer paid nothing at a price they did not agree to");
-        vm.prank(buyer);
-        market.buy(jobId, raised);
+        buyAs(buyer, jobId, raised);
         assertEq(usdc.balanceOf(buyer), buyerBefore - raised);
         assertEq(market.payeeOf(jobId), buyer);
     }
@@ -294,5 +291,145 @@ contract ClaimMarketTest is BaseTest {
         vm.prank(provider);
         market.list{gas: 3_000_000}(jobId, PRICE);
         assertLt(gasBefore - gasleft(), 400_000, "a looping probe is cut off at the cap instead of eating the call");
+    }
+
+    // ----------------------------------------------------- who may buy (#30)
+
+    function _fund(address who, uint256 amount) internal {
+        usdc.mint(who, amount);
+        vm.prank(who);
+        usdc.approve(address(market), type(uint256).max);
+    }
+
+    /// A buyer off the client's list is refused, and pays nothing for trying.
+    function test_eligibility_aBuyerOffTheListCannotBuy() public {
+        uint256 jobId = _listed();
+        _fund(stranger, PRICE);
+        vm.expectRevert(IClaimMarket.BuyerNotEligible.selector);
+        vm.prank(stranger);
+        market.buy(jobId, PRICE, bytes32(vm.randomUint()), new bytes32[](0));
+        assertEq(usdc.balanceOf(stranger), PRICE, "nothing was taken");
+        assertEq(market.payeeOf(jobId), provider, "the claim still pays the provider");
+        assertEq(uint8(market.getListing(jobId).status), uint8(IClaimMarket.Status.Listed), "and is still for sale");
+    }
+
+    /// A buyer's salt and path are public the moment its transaction is
+    /// broadcast. They prove nothing for anyone else, because the leaf is
+    /// rebuilt from `msg.sender`.
+    function test_eligibility_aCopiedPathProvesNothingForTheCopier() public {
+        uint256 jobId = _listed();
+        _fund(stranger, PRICE);
+        (bytes32 salt, bytes32[] memory path) = eligibility(client, buyer);
+        vm.expectRevert(IClaimMarket.BuyerNotEligible.selector);
+        vm.prank(stranger);
+        market.buy(jobId, PRICE, salt, path);
+
+        vm.prank(buyer);
+        market.buy(jobId, PRICE, salt, path);
+        assertEq(market.payeeOf(jobId), buyer, "the same path works for the address it was issued to");
+    }
+
+    /// The salt is part of the leaf: the right path under the wrong salt fails.
+    function test_eligibility_theSaltIsPartOfTheLeaf() public {
+        uint256 jobId = _listed();
+        (bytes32 salt, bytes32[] memory path) = eligibility(client, buyer);
+        vm.expectRevert(IClaimMarket.BuyerNotEligible.selector);
+        vm.prank(buyer);
+        market.buy(jobId, PRICE, bytes32(uint256(salt) ^ 1), path);
+    }
+
+    /// A cleared list approves nobody, including a buyer approved a moment ago.
+    function test_eligibility_aClearedListApprovesNobody() public {
+        uint256 jobId = _listed();
+        (bytes32 salt, bytes32[] memory path) = eligibility(client, buyer);
+        vm.prank(client);
+        registry.setBuyerRoot(bytes32(0));
+        vm.expectRevert(IClaimMarket.BuyerNotEligible.selector);
+        vm.prank(buyer);
+        market.buy(jobId, PRICE, salt, path);
+        assertEq(market.payeeOf(jobId), provider);
+    }
+
+    /// Eligibility is judged against the poster of the job being bought. A
+    /// poster who never wrote a list approves nobody; a place on one poster's
+    /// list is no answer for another's.
+    function test_eligibility_theListIsThePostersOwn() public {
+        address poster = makeAddr("poster");
+        usdc.mint(poster, BUDGET);
+        vm.prank(poster);
+        usdc.approve(address(kernel), BUDGET);
+        vm.prank(poster);
+        uint256 jobId = kernel.createJob(provider, address(keeper), expiry(), "spec:0xabc", address(hook));
+        vm.prank(provider);
+        kernel.setBudget(jobId, BUDGET, "");
+        vm.prank(poster);
+        kernel.fund(jobId, BUDGET, "");
+        vm.prank(provider);
+        kernel.submit(jobId, DELIVERABLE, abi.encode(AGENT_ID, REQUEST_HASH));
+        vm.prank(provider);
+        market.list(jobId, PRICE);
+        _fund(buyerB, PRICE);
+
+        assertEq(registry.buyerRootOf(poster), bytes32(0));
+        (bytes32 salt, bytes32[] memory path) = eligibility(client, buyerB);
+        vm.expectRevert(IClaimMarket.BuyerNotEligible.selector);
+        vm.prank(buyerB);
+        market.buy(jobId, PRICE, salt, path);
+
+        // A list of one: the leaf is its own root and the path is empty.
+        address[] memory approved = new address[](1);
+        approved[0] = buyerB;
+        approveBuyers(registry, poster, approved);
+
+        (salt, path) = eligibility(client, buyer);
+        vm.expectRevert(IClaimMarket.BuyerNotEligible.selector);
+        vm.prank(buyer);
+        market.buy(jobId, PRICE, salt, path);
+
+        buyFrom(market, poster, buyerB, jobId, PRICE);
+        assertEq(market.payeeOf(jobId), buyerB);
+    }
+
+    /// What reaches the chain when a poster publishes a list: one root, in one
+    /// slot, and an event carrying the poster and that root. Not the addresses,
+    /// not how many there are, not who stands behind them.
+    function test_privacy_publishingAListWritesTheRootAndNothingElse() public {
+        address[] memory approved = new address[](3);
+        approved[0] = buyer;
+        approved[1] = buyerB;
+        approved[2] = buyerC;
+        vm.record();
+        vm.recordLogs();
+        bytes32 root = approveBuyers(registry, client, approved);
+        (, bytes32[] memory writes) = vm.accesses(address(registry));
+        assertEq(writes.length, 1, "one slot written");
+        assertEq(vm.load(address(registry), writes[0]), root, "and it holds the root");
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 1, "one event");
+        assertEq(logs[0].topics.length, 3);
+        assertEq(logs[0].topics[0], IPolicyRegistry.BuyerRootCommitted.selector);
+        assertEq(logs[0].topics[1], bytes32(uint256(uint160(client))));
+        assertEq(logs[0].topics[2], root);
+        assertEq(logs[0].data.length, 0, "and nothing beside them");
+    }
+
+    /// What reaches the chain when a buyer buys: its own salt and a path of
+    /// hashes. The path does hold the other members' leaves, salted, so an
+    /// observer who suspects an address is on the list has nothing to test the
+    /// suspicion against. The first two assertions are the control: the
+    /// members really are in the path, recognisable only with their salts.
+    function test_privacy_aPurchaseRevealsNoOtherMember() public view {
+        (, bytes32[] memory path) = eligibility(client, buyer);
+        assertEq(path.length, 2, "a sibling, then the unpaired node");
+        assertEq(path[0], BuyerTree.leaf(buyerB, saltOf[client][buyerB]));
+        assertEq(path[1], BuyerTree.leaf(buyerC, saltOf[client][buyerC]));
+        address[2] memory others = [buyerB, buyerC];
+        for (uint256 o = 0; o < others.length; o++) {
+            for (uint256 i = 0; i < path.length; i++) {
+                assertNotEq(path[i], BuyerTree.leaf(others[o], bytes32(0)), "an unsalted guess matches nothing");
+                assertNotEq(path[i], keccak256(abi.encode(others[o])), "nor does the address hashed");
+                assertNotEq(path[i], bytes32(uint256(uint160(others[o]))), "nor the address itself");
+            }
+        }
     }
 }

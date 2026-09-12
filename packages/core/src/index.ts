@@ -49,6 +49,17 @@ export {
 } from "./events.js";
 export { agentFromDid, UnsupportedDidError, type AgentReference } from "./agent.js";
 export {
+  approveBuyers,
+  BUYER_SALT_FLOOR,
+  buyerLeaf,
+  buyerListFrom,
+  BuyerListError,
+  drawBuyerSalt,
+  type BuyerEligibility,
+  type BuyerEntry,
+  type BuyerList,
+} from "./buyers.js";
+export {
   AgentIdMismatchError,
   createSquareClient,
   DeploymentChainMismatchError,
