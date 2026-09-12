@@ -35,6 +35,19 @@ Other places that carry an address and have to be updated by hand:
 - `site/src/lib/links.ts`, the explorer link of the kernel
 - `contracts/src/PolicyRegistry.sol`, the docstring that names the deployed hook
 
+### The block, and who needs it
+
+The deploy script also writes `"block"` into `contracts/deployments/<chainId>.json`,
+the block the stack was deployed in. The indexer reads it through
+`deploymentFromJson` whenever `START_BLOCK` is unset, so the number that decides
+where indexing starts comes from the same record as the addresses rather than
+from an operator's memory. `packages/core/src/deployments.ts` carries no block:
+the compiled constants are for the app and the SDK, neither of which indexes.
+
+An indexer given neither a `START_BLOCK` nor a record with a block refuses to
+start. That is deliberate: the old default was zero, and on Arc that is about a
+day of catching up from genesis with the lag check red throughout.
+
 ## 3. After the deploy
 
 1. Read the parameters back from the chain and record them

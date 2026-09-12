@@ -1,5 +1,5 @@
 export type { Database, QueryResult } from "./database.js";
-export { pgDatabase, type PgDatabaseOptions } from "./pg.js";
+export { pgDatabase, pgDatabaseFromPool, type PgDatabaseOptions } from "./pg.js";
 export { pgliteDatabase, type PgliteDatabaseOptions } from "./pglite.js";
 export {
   migrate,
@@ -32,4 +32,5 @@ export * as idempotencyKeys from "./repositories/idempotencyKeys.js";
 export * as rateLimits from "./repositories/rateLimits.js";
 export * as x402Payments from "./repositories/x402Payments.js";
 export * as keeperActions from "./repositories/keeperActions.js";
+export * as quarantinedEvents from "./repositories/quarantinedEvents.js";
 export * as hostedAgents from "./repositories/hostedAgents.js";

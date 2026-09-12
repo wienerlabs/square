@@ -116,4 +116,89 @@ describe("x402Payments", () => {
       await db.close();
     }
   });
+  it("settles a payment whose transaction hash never arrived, and says so in the reason", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      const payment: x402Payments.AcceptedPayment = {
+        chainId: 5042002,
+        asset: address(0xa0),
+        payer: address(0xb1),
+        nonce: hash32(0x51),
+        amount: 25n,
+        payTo: address(0xc2),
+        resource: "/v1/resolve",
+        validBefore: 1_800_000_000n,
+      };
+      await x402Payments.insertAccepted(db, payment);
+
+      expect(await x402Payments.markSettled(db, payment, null, "settled_without_transaction_hash")).toBe(true);
+
+      const settled = await x402Payments.get(db, payment);
+      expect(settled?.status).toBe(x402Payments.X402_STATUS.settled);
+      expect(settled?.txHash).toBeNull();
+      expect(settled?.reason).toBe("settled_without_transaction_hash");
+      expect(await x402Payments.listAccepted(db)).toEqual([]);
+      expect(await x402Payments.markFailed(db, payment, { reason: "authorization_expired" })).toBe(false);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps a hash already on the row when a later settle carries none", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      const payment: x402Payments.AcceptedPayment = {
+        chainId: 5042002,
+        asset: address(0xa0),
+        payer: address(0xb1),
+        nonce: hash32(0x52),
+        amount: 25n,
+        payTo: address(0xc2),
+        resource: "/v1/resolve",
+        validBefore: 1_800_000_000n,
+      };
+      await x402Payments.insertAccepted(db, payment);
+      await x402Payments.recordSettlementAttempt(db, payment, hash32(0x8a));
+
+      await x402Payments.markSettled(db, payment, null, "settled_without_transaction_hash");
+
+      expect((await x402Payments.get(db, payment))?.txHash).toBe(hash32(0x8a));
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("sends a row the reconciler could not close to the back of the queue", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      const base = {
+        chainId: 5042002,
+        asset: address(0xa0),
+        payer: address(0xb1),
+        amount: 25n,
+        payTo: address(0xc2),
+        resource: "/v1/resolve",
+        validBefore: 1_800_000_000n,
+      };
+      const first = { ...base, nonce: hash32(0x61) };
+      const second = { ...base, nonce: hash32(0x62) };
+      const third = { ...base, nonce: hash32(0x63) };
+      await x402Payments.insertAccepted(db, first);
+      await x402Payments.insertAccepted(db, second);
+      await x402Payments.insertAccepted(db, third);
+
+      expect((await x402Payments.listAccepted(db)).map((row) => row.nonce)).toEqual([first.nonce, second.nonce, third.nonce]);
+
+      expect(await x402Payments.markChecked(db, first)).toBe(true);
+      expect(await x402Payments.markChecked(db, second)).toBe(true);
+
+      expect((await x402Payments.listAccepted(db)).map((row) => row.nonce)).toEqual([third.nonce, first.nonce, second.nonce]);
+      expect((await x402Payments.listAccepted(db, 1)).map((row) => row.nonce)).toEqual([third.nonce]);
+
+      await x402Payments.markSettled(db, third, hash32(0x9a));
+      expect(await x402Payments.markChecked(db, third)).toBe(false);
+    } finally {
+      await db.close();
+    }
+  });
 });
