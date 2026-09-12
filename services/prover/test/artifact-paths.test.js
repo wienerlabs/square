@@ -64,6 +64,15 @@ async function withService({ cwd, env = {} }, body) {
       // bind a port. What is under test here is a service started from a
       // different working directory, so it has to be a real one.
       NODE_ENV: 'production',
+      // And a relative PROVER_ARTIFACTS_DIR has to be resolved before it is
+      // handed over. CI runs the real-key job from services/prover with
+      // `PROVER_ARTIFACTS_DIR=./artifacts`; this process resolves that against
+      // the package, the child would resolve it against the decoy working
+      // directory, and the two would name different files — the very confusion
+      // this suite exists to rule out, reintroduced by the suite itself.
+      ...(process.env.PROVER_ARTIFACTS_DIR
+        ? { PROVER_ARTIFACTS_DIR: path.resolve(process.env.PROVER_ARTIFACTS_DIR) }
+        : {}),
       ...env,
       PROVER_SERVICE_PORT: String(port),
     },
