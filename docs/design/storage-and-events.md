@@ -304,6 +304,7 @@ What the normative set does not carry and the indexer needs.
 | `FeesUpdated(uint16 platformFeeBP, uint16 evaluatorFeeBP, address treasury)` | admin | |
 | `FeesScheduled(uint16 platformFeeBP, uint16 evaluatorFeeBP, uint48 effectiveFrom)` | admin | the rate a later `fund` will pin, once `effectiveFrom` passes |
 | `Skimmed(address indexed to, uint256 amount)` | admin | a balance no ledger entry and no escrow claimed, moved out; it can never reduce either |
+| `ComplianceProofSet(uint256 indexed jobId, address indexed client, bytes32 digest)` | the job's client | the proof the hook will read at settlement; the digest, not the proof, so the log carries no witness |
 | `HookFailed(uint256 indexed jobId, address indexed hook, bytes4 selector, bytes reason)` | `complete`, `reject` | a hook call the kernel makes tolerantly reverted and settlement went ahead regardless. `selector` is the kernel function that was running, `reason` the revert data. A hook that fails on the settlement path is a signal, never a stuck job |
 | `PayoutUnresolvable(uint256 indexed jobId, address indexed hook)` | `claimRefund` | the job was Submitted and its hook resolves the payout, but the hook can no longer answer with a usable payee. Expiry proceeds and the client is refunded; without this branch the escrow would have no way out |
 

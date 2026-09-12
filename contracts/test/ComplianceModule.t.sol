@@ -203,9 +203,18 @@ contract ComplianceModuleTest is Test {
 
     /// Move to the moment the proof was built for, then complete with it.
     function completeWith(uint256 jobId, bytes memory proof) internal {
+        bindProof(jobId, proof);
         vm.warp(FIXTURE_TIMESTAMP);
         vm.prank(address(keeper));
         kernel.complete(jobId, bytes32(0), abi.encode(FULL_BPS, proof));
+    }
+
+    /// The proof belongs to the job, not to whoever cranks it: the client that
+    /// holds the mandate writes it, and the hook reads it from there.
+    function bindProof(uint256 jobId, bytes memory proof) internal {
+        address mandate = kernel.getJobRecord(jobId).client;
+        vm.prank(mandate);
+        kernel.setComplianceProof(jobId, proof);
     }
 
     // ------------------------------------------------------- the happy path
@@ -321,6 +330,7 @@ contract ComplianceModuleTest is Test {
         // A split moves the amount the kernel will pay; the proof's signal 3
         // still claims the whole net.
         uint256 jobId = submittedJob();
+        bindProof(jobId, compliantProof());
         vm.warp(FIXTURE_TIMESTAMP);
         vm.prank(address(keeper));
         kernel.complete(jobId, bytes32(0), abi.encode(uint16(5_000), compliantProof()));
@@ -337,6 +347,7 @@ contract ComplianceModuleTest is Test {
 
     function test_binding_timestamp() public {
         uint256 jobId = submittedJob();
+        bindProof(jobId, compliantProof());
         vm.warp(FIXTURE_TIMESTAMP + TOLERANCE + 1);
         vm.prank(address(keeper));
         kernel.complete(jobId, bytes32(0), abi.encode(FULL_BPS, compliantProof()));
@@ -345,6 +356,7 @@ contract ComplianceModuleTest is Test {
 
     function test_binding_timestampAcceptsTheEdgeOfTheWindow() public {
         uint256 jobId = submittedJob();
+        bindProof(jobId, compliantProof());
         vm.warp(FIXTURE_TIMESTAMP + TOLERANCE);
         vm.prank(address(keeper));
         kernel.complete(jobId, bytes32(0), abi.encode(FULL_BPS, compliantProof()));
@@ -405,6 +417,7 @@ contract ComplianceModuleTest is Test {
         assertEq(registry.spentToday(client), FIXTURE_SPENT_BEFORE, "the counter is back where the proof wants it");
 
         uint256 second = submittedJob();
+        bindProof(second, compliantProof());
         vm.warp(FIXTURE_TIMESTAMP + 1 days);
         vm.prank(address(keeper));
         kernel.complete(second, bytes32(0), abi.encode(FULL_BPS, compliantProof()));
@@ -457,6 +470,7 @@ contract ComplianceModuleTest is Test {
         );
 
         uint256 second = submittedJob();
+        bindProof(second, copy);
         // Named, so the test cannot pass for a different reason later.
         vm.expectEmit(true, false, false, true, address(module));
         emit ComplianceModule.ReleaseRefused(second, "proof already used");
@@ -498,6 +512,7 @@ contract ComplianceModuleTest is Test {
         uint256 jobId = submittedJob();
         vm.warp(FIXTURE_TIMESTAMP);
         bytes memory proof = compliantProof();
+        bindProof(jobId, proof);
 
         uint256 before = gasleft();
         vm.prank(address(keeper));
@@ -524,6 +539,7 @@ contract ComplianceModuleTest is Test {
         uint256 jobId = submittedJob();
         vm.warp(FIXTURE_TIMESTAMP);
         bytes memory proof = compliantProof();
+        bindProof(jobId, proof);
         bytes memory data = abi.encode(bytes32(0), abi.encode(FULL_BPS, proof));
 
         uint256 before = gasleft();

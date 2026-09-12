@@ -105,19 +105,22 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     ///      wrapped anyway: an unusable module reads as "not verified" rather
     ///      than as a stuck job. See docs/decisions/hook-failure-modes.md.
     ///
-    ///      With no module installed nothing changes and the split arrives from
-    ///      `optParams` as before.
+    ///      The split arrives from `optParams`, which the evaluator encodes.
+    ///      The proof does not: it is read from the job through
+    ///      `complianceProofOf`, where only the client can put it. A
+    ///      permissionless crank's bytes therefore decide nothing, which is
+    ///      what square#245 closed. With no module installed neither is read.
     function resolvePayout(uint256 jobId, bytes calldata data)
         external
         view
         returns (address payee, uint16 providerBps)
     {
         (, bytes memory optParams) = abi.decode(data, (bytes32, bytes));
-        bytes memory proof;
-        (providerBps, proof) = _decodeComplete(optParams);
+        (providerBps,) = _decodeComplete(optParams);
         payee = _claimMarket.payeeOf(jobId);
 
         if (address(_complianceModule) == address(0)) return (payee, providerBps);
+        bytes memory proof = _squareJob.complianceProofOf(jobId);
         if (!_previewsCompliant(jobId, payee, providerBps, proof)) providerBps = 0;
     }
 
@@ -180,7 +183,8 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     }
 
     function _checkRelease(uint256 jobId, bytes memory optParams) private {
-        (uint16 providerBps, bytes memory proof) = _decodeComplete(optParams);
+        (uint16 providerBps,) = _decodeComplete(optParams);
+        bytes memory proof = _squareJob.complianceProofOf(jobId);
         address payee = _claimMarket.payeeOf(jobId);
         uint256 amount = (_squareJob.netPayout(jobId) * providerBps) / FULL_BPS;
         uint8 outcome = CHECK_NOT_RUN;

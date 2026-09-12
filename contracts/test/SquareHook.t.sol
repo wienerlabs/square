@@ -100,6 +100,91 @@ contract SquareHookTest is BaseTest {
         assertEq(responder, address(0), "nothing was verified, nothing is claimed");
     }
 
+    function test_complete_aStrangerCannotZeroThePayoutWithFabricatedBytes() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        compliance.setExpectedProof(keccak256(hex"deadbeef"));
+        uint256 jobId = submittedHookedJob(BUDGET);
+        vm.prank(client);
+        kernel.setComplianceProof(jobId, hex"deadbeef");
+        pastWindow(jobId);
+
+        vm.prank(stranger);
+        keeper.finalize(jobId, hex"c0ffee");
+
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET), "the crank's bytes decided nothing");
+        assertEq(kernel.withdrawable(client), 0, "and the client was handed nothing back");
+        assertEq(compliance.lastCheck().proof, hex"deadbeef");
+    }
+
+    function test_complete_anEmptyProofFromACrankDoesNotPunishTheProvider() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        compliance.setExpectedProof(keccak256(hex"deadbeef"));
+        uint256 jobId = submittedHookedJob(BUDGET);
+        vm.prank(client);
+        kernel.setComplianceProof(jobId, hex"deadbeef");
+        pastWindow(jobId);
+
+        vm.prank(stranger);
+        keeper.finalize(jobId, "");
+
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET), "an empty crank is not a refusal");
+    }
+
+    function test_complete_aSoldClaimIsProtectedTheSameWay() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        compliance.setExpectedProof(keccak256(hex"deadbeef"));
+        uint256 jobId = submittedHookedJob(BUDGET);
+        vm.prank(provider);
+        market.list(jobId, uint64(900 * USDC));
+        vm.prank(buyer);
+        market.buy(jobId, uint64(900 * USDC));
+        vm.prank(client);
+        kernel.setComplianceProof(jobId, hex"deadbeef");
+        pastWindow(jobId);
+
+        vm.prank(stranger);
+        keeper.finalize(jobId, hex"c0ffee");
+
+        assertEq(kernel.withdrawable(buyer), netOf(BUDGET), "the buyer keeps the receivable it paid for");
+        assertEq(kernel.withdrawable(client), 0);
+    }
+
+    function test_setComplianceProof_belongsToTheClientAndToALiveJob() public {
+        uint256 jobId = submittedHookedJob(BUDGET);
+
+        vm.expectRevert(ISquareJob.Unauthorized.selector);
+        vm.prank(stranger);
+        kernel.setComplianceProof(jobId, hex"deadbeef");
+        vm.expectRevert(ISquareJob.Unauthorized.selector);
+        vm.prank(provider);
+        kernel.setComplianceProof(jobId, hex"deadbeef");
+
+        vm.prank(client);
+        kernel.setComplianceProof(jobId, hex"deadbeef");
+        assertEq(kernel.complianceProofOf(jobId), hex"deadbeef");
+
+        vm.prank(client);
+        kernel.setComplianceProof(jobId, hex"feed");
+        assertEq(kernel.complianceProofOf(jobId), hex"feed", "the client may replace its own proof");
+
+        bytes memory tooLong = new bytes(kernel.MAX_COMPLIANCE_PROOF() + 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(ISquareJob.ComplianceProofTooLarge.selector, kernel.MAX_COMPLIANCE_PROOF())
+        );
+        vm.prank(client);
+        kernel.setComplianceProof(jobId, tooLong);
+
+        pastWindow(jobId);
+        vm.prank(cranker);
+        keeper.finalize(jobId, "");
+        vm.expectRevert(ISquareJob.WrongStatus.selector);
+        vm.prank(client);
+        kernel.setComplianceProof(jobId, hex"deadbeef");
+    }
+
     function test_complete_withModuleBindsPayeeAmountTokenClientAndProof() public {
         vm.prank(owner);
         hook.setComplianceModule(address(compliance));
@@ -111,11 +196,14 @@ contract SquareHookTest is BaseTest {
         pastWindow(jobId);
 
         bytes memory proof = hex"deadbeef";
+        vm.prank(client);
+        kernel.setComplianceProof(jobId, proof);
         vm.expectEmit(true, true, false, true);
         emit SquareHook.ComplianceChecked(jobId, buyer, netOf(BUDGET), true);
         vm.expectEmit(true, true, false, true);
         emit SquareHook.ValidationRecorded(jobId, REQUEST_HASH, 100);
-        keeper.finalize(jobId, proof);
+        vm.prank(stranger);
+        keeper.finalize(jobId, hex"c0ffee");
 
         MockComplianceModule.Check memory c = compliance.lastCheck();
         assertEq(c.jobId, jobId);
@@ -123,7 +211,7 @@ contract SquareHookTest is BaseTest {
         assertEq(c.amount, netOf(BUDGET));
         assertEq(c.token, address(usdc));
         assertEq(c.client, client);
-        assertEq(c.proof, proof);
+        assertEq(c.proof, proof, "the module reads the job's proof, not the crank's bytes");
         (address validator,, uint8 response,, string memory tag,) = validation.getValidationStatus(REQUEST_HASH);
         assertEq(validator, address(hook));
         assertEq(response, 100);
