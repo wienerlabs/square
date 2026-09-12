@@ -160,7 +160,7 @@ abstract contract BaseTest is Test {
                 escrowed += job.budget;
             }
         }
-        assertGe(usdc.balanceOf(address(kernel)), escrowed + kernel.totalWithdrawable(), "kernel insolvent");
+        assertEq(usdc.balanceOf(address(kernel)), escrowed + kernel.totalWithdrawable(), "kernel insolvent");
     }
 
     function vote(address arbiter, uint256 jobId, IArbitration.Outcome outcome, uint16 bps) internal {

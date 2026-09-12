@@ -88,7 +88,15 @@ dropped from the SDK and the docs:
 2. Have every account with `withdrawable(account) > 0` on the old `SquareJob`
    and the old `Arbitration` call `withdraw()`; the deploy record lists the
    accounts that did and the balances that remain claimable.
-3. Record the transactions in `docs/deploy/redeploy-<date>.md`.
+3. Read `unaccounted()` on the old `SquareJob`. It is the balance no ledger
+   entry and no live escrow claims, and `skim(to)` is the only way it can move.
+   A plain ERC-20 transfer to the kernel lands there, which is how
+   `0x76E8690c...` came to hold 0.009602 USDC that the first three steps cannot
+   reach.
+4. Check that `balanceOf(kernel)` is zero. The three steps above drain the
+   ledger and the escrow, so anything left is unaccounted and step 3 is what
+   moves it.
+5. Record the transactions in `docs/deploy/redeploy-<date>.md`.
 
 A dry run against a fork of the testnet with the real ERC-8004 registries is
 `packages/core/test/fork.test.ts`. It escrows an EIP-3009 mock instead of the

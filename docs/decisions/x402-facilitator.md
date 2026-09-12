@@ -109,8 +109,12 @@ The rule the surviving implementation carries:
   a failed row is never promoted.
 - `markSettled` and `markFailed` return whether the update held, so the facilitator
   logs a refused transition instead of passing over a zero-row update in silence.
-- `markFailed` stores its reason in the `reason` column, so the authoritative ledger
-  says why a payment failed and reconciliation does not depend on log retention.
+- `markFailed` stores its reason in the `reason` column, and the transaction hash when
+  the failure has one, so the authoritative ledger says why a payment failed and can be
+  traced to a block, and reconciliation does not depend on log retention. A settlement
+  that was broadcast and then reverted, and one that was mined without a matching
+  `Transfer` event, both carry a hash; a failure that never reached the chain carries
+  none and leaves the column as it found it.
 - `has()` is status-blind on purpose. It answers whether the authorization identity
   was ever presented, which is the question replay protection asks.
 

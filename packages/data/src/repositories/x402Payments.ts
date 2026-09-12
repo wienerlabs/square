@@ -157,6 +157,8 @@ export async function get(db: Database, identity: PaymentIdentity): Promise<X402
 }
 
 export async function sweep(db: Database): Promise<number> {
-  const { rowCount } = await db.query("delete from x402_payments where to_timestamp(valid_before) + interval '30 days' <= now()");
+  const { rowCount } = await db.query(
+    "delete from x402_payments where valid_before <= extract(epoch from now() - interval '30 days')",
+  );
   return rowCount;
 }

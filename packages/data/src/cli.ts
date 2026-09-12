@@ -51,9 +51,10 @@ async function runSweep(argv: string[]): Promise<number> {
     return 2;
   }
   return withDatabase(async (db) => {
-    const removed = await sweepAll(db, { rateLimitWindowMs });
+    const { removed, failures } = await sweepAll(db, { rateLimitWindowMs });
     for (const [table, rows] of Object.entries(removed)) console.log(`swept ${rows} from ${table}`);
-    return 0;
+    for (const failure of failures) console.error(`sweep failed for ${failure.table}: ${failure.message}`);
+    return failures.length === 0 ? 0 : 1;
   });
 }
 
