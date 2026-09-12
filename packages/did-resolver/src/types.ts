@@ -90,6 +90,29 @@ export interface DidDocumentMetadata {
   agentRegistry?: string;
   /** Set on a v1 DID resolved through an injected v1 resolver. */
   deprecated?: boolean;
+  /**
+   * The scheme of the agentURI the services came from, as the chain gives it
+   * (`ipfs`, `https`, `data`, ...), so a consumer can apply its own policy: an
+   * `ipfs` CID commits to the content, an `https` document can change with no
+   * on-chain trace (spec §10.3). Present whenever the agentURI is non-empty
+   * and has a scheme, whether or not the file could be read.
+   */
+  agentUriScheme?: string;
+  /**
+   * The cross-registrations the Registration File claims (spec §8), as
+   * did:aip v2 DIDs. A claim is `verified` only when the counterpart's own
+   * Registration File lists this agent back; it is `unverified` when it does
+   * not, and when the round trip could not be made at all: no RPC for that
+   * chain, a registry outside the allowlist, a read or fetch that failed. Only
+   * the first `MAX_CROSS_REGISTRATION_CHECKS` are checked; the rest are
+   * reported unverified with a warning. Absent when the file claims none.
+   */
+  crossRegistrations?: CrossRegistrations;
+}
+
+export interface CrossRegistrations {
+  verified: string[];
+  unverified: string[];
 }
 
 export interface DidResolutionResult {

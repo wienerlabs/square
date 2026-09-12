@@ -6,11 +6,13 @@ import {
   http,
   type PublicClient,
 } from "viem";
+import { claimedCrossRegistrations } from "./crossRegistrations.js";
 import { buildDidDocument, type RegistrationFile } from "./document.js";
 import { AgentUriError, defaultFetchAgentUri } from "./fetch.js";
 import { InvalidDidError, parseDid } from "./parse.js";
 import { IDENTITY_REGISTRY_ABI } from "./registry.js";
 import type {
+  CrossRegistrations,
   DidResolutionResult,
   ParsedV2,
   ResolutionErrorCode,
@@ -18,10 +20,31 @@ import type {
   ResolverOptions,
 } from "./types.js";
 
+/**
+ * How many cross-registrations one resolution will round-trip. Each check is
+ * a chain read and a fetch chosen by the file's owner, and the file can list
+ * any number; the rest are reported unverified, with a warning saying so.
+ */
+export const MAX_CROSS_REGISTRATION_CHECKS = 8;
+
 /** The contract answered, and the answer was a revert or empty data: the chain's own "no". */
 function chainSaidNo(err: unknown): boolean {
   if (!(err instanceof BaseError)) return false;
   return err.walk((e) => e instanceof ContractFunctionRevertedError || e instanceof ContractFunctionZeroDataError) !== null;
+}
+
+/** The scheme of a URI as the chain gives it, or undefined when it has none. */
+function schemeOf(uri: string): string | undefined {
+  return /^([a-z][a-z0-9+.-]*):/i.exec(uri)?.[1]?.toLowerCase();
+}
+
+/**
+ * A JSON array is an object to typeof and a registration file to nothing
+ * else: neither `active` nor `services` can be read from it, so it is the
+ * "could not be parsed" case of spec §6.1, not a read file (#273).
+ */
+function isRegistrationFile(doc: unknown): doc is RegistrationFile {
+  return typeof doc === "object" && doc !== null && !Array.isArray(doc);
 }
 
 function failure(
@@ -50,6 +73,17 @@ export class AipDidResolver {
   private networkFailure(context: string, cause: unknown): DidResolutionResult {
     this.options.onNetworkError?.(context, cause);
     return failure("networkError", context);
+  }
+
+  private fetchAgentUri(uri: string): Promise<unknown> {
+    const fetcher = this.options.fetchAgentUri
+      ?? ((u: string) => defaultFetchAgentUri(u, {
+        ...(this.options.ipfsGateway !== undefined ? { ipfsGateway: this.options.ipfsGateway } : {}),
+        ...(this.options.timeoutMs !== undefined ? { timeoutMs: this.options.timeoutMs } : {}),
+        ...(this.options.maxAgentUriBytes !== undefined ? { maxResponseBytes: this.options.maxAgentUriBytes } : {}),
+        ...(this.options.allowedAgentUriHosts !== undefined ? { allowedHosts: this.options.allowedAgentUriHosts } : {}),
+      }));
+    return fetcher(uri);
   }
 
   private client(chainId: number): PublicClient | null {
@@ -201,24 +235,20 @@ export class AipDidResolver {
       registrationKnown = false;
     }
 
+    // The scheme is what the chain says, reported whether or not the file
+    // behind it could be read: it is the one fact about the file's integrity
+    // a consumer can build a policy on, an `ipfs` CID committing to the
+    // content where an `https` document can change with no trace (spec
+    // §10.3, #152).
+    const agentUriScheme = agentUri ? schemeOf(agentUri) : undefined;
+
     let registration: RegistrationFile | null = null;
     if (agentUri) {
       registrationKnown = false;
       try {
-        const fetcher = this.options.fetchAgentUri
-          ?? ((u: string) => defaultFetchAgentUri(u, {
-            ...(this.options.ipfsGateway !== undefined ? { ipfsGateway: this.options.ipfsGateway } : {}),
-            ...(this.options.timeoutMs !== undefined ? { timeoutMs: this.options.timeoutMs } : {}),
-            ...(this.options.maxAgentUriBytes !== undefined ? { maxResponseBytes: this.options.maxAgentUriBytes } : {}),
-            ...(this.options.allowedAgentUriHosts !== undefined ? { allowedHosts: this.options.allowedAgentUriHosts } : {}),
-          }));
-        const doc = await fetcher(agentUri);
-        // A JSON array is an object to typeof and a registration file to
-        // nothing else: neither `active` nor `services` can be read from it,
-        // so it is the "could not be parsed" case of spec §6.1, not a read
-        // file (#273).
-        if (typeof doc === "object" && doc !== null && !Array.isArray(doc)) {
-          registration = doc as RegistrationFile;
+        const doc = await this.fetchAgentUri(agentUri);
+        if (isRegistrationFile(doc)) {
+          registration = doc;
           registrationKnown = true;
         } else {
           warnings.push({ code: "agentUriMalformed", message: "registration file is not a JSON object" });
@@ -235,6 +265,10 @@ export class AipDidResolver {
 
     const inactive = registration !== null && registration.active === false;
 
+    const crossRegistrations = registration
+      ? await this.checkCrossRegistrations(parsed, registration, blockNumber, warnings)
+      : undefined;
+
     return {
       didDocument: buildDidDocument({ parsed, owner, agentWallet, registration }),
       didResolutionMetadata: {
@@ -246,7 +280,99 @@ export class AipDidResolver {
         agentRegistry: parsed.agentRegistry,
         ...(inactive ? { deactivated: true, deactivationReason: "registrationInactive" as const } : {}),
         ...(registrationKnown ? {} : { registrationFile: "unavailable" as const }),
+        ...(agentUriScheme !== undefined ? { agentUriScheme } : {}),
+        ...(crossRegistrations !== undefined ? { crossRegistrations } : {}),
       },
     };
+  }
+
+  /**
+   * The file's `registrations[]`, sorted into the claims whose counterpart
+   * lists this agent back and the claims that do not, or could not be asked.
+   *
+   * These are claims, not facts: anyone may write any `agentRegistry` into
+   * their own file, and unverified, a cross-registration is an impersonation
+   * primitive (spec §8). So nothing here is merged into the document, and a
+   * claim is verified by one round trip only: the counterpart's registry is
+   * asked for its `tokenURI`, the file there is fetched, and it has to name
+   * `(agentId, agentRegistry)` of the DID being resolved. The counterpart is
+   * not resolved in full, and its own claims are not followed, so a chain of
+   * files cannot make this recurse (#152).
+   */
+  private async checkCrossRegistrations(
+    parsed: ParsedV2,
+    registration: RegistrationFile,
+    blockNumber: bigint,
+    warnings: ResolutionWarning[]
+  ): Promise<CrossRegistrations | undefined> {
+    const claims = claimedCrossRegistrations(registration.registrations, parsed.did);
+    if (claims.malformed > 0) {
+      warnings.push({
+        code: "crossRegistrationMalformed",
+        message: `${claims.malformed} of the file's registrations[] entries name no agent and were not read`,
+      });
+    }
+    if (claims.dids.length === 0) return undefined;
+
+    const checked = claims.dids.slice(0, MAX_CROSS_REGISTRATION_CHECKS);
+    const unchecked = claims.dids.slice(MAX_CROSS_REGISTRATION_CHECKS);
+    if (unchecked.length > 0) {
+      warnings.push({
+        code: "crossRegistrationsUnchecked",
+        message: `only the first ${MAX_CROSS_REGISTRATION_CHECKS} cross-registrations were checked; the rest are reported unverified`,
+      });
+    }
+    const outcomes = await Promise.all(checked.map((did) => this.listsBack(did, parsed, blockNumber)));
+    return {
+      verified: checked.filter((_, i) => outcomes[i]),
+      unverified: [...checked.filter((_, i) => !outcomes[i]), ...unchecked],
+    };
+  }
+
+  /**
+   * Does the Registration File of `counterpart` name `original`? False for
+   * every way the answer cannot be had, and each of those is a reason not to
+   * trust the claim rather than a failure of the resolution: a chain this
+   * resolver has no endpoint for, a registry outside its allowlist, an
+   * endpoint answering with another chain id, a registry that reverts or
+   * names no file, a file that cannot be fetched or parsed. A read on the
+   * chain being resolved is pinned to the block the rest of the document
+   * was read at; another chain has no such block.
+   */
+  private async listsBack(counterpart: string, original: ParsedV2, blockNumber: bigint): Promise<boolean> {
+    let target: ParsedV2;
+    try {
+      const p = parseDid(counterpart);
+      if (p.version !== 2) return false;
+      target = p;
+    } catch {
+      return false;
+    }
+    const allow = this.options.allowedRegistries;
+    if (allow && !allow.some((a) => a.toLowerCase() === target.registry)) return false;
+    const client = this.client(target.chainId);
+    if (!client) return false;
+    try {
+      if ((await client.getChainId()) !== target.chainId) return false;
+      const uri = (await client.readContract({
+        address: target.registry,
+        abi: IDENTITY_REGISTRY_ABI,
+        functionName: "tokenURI",
+        args: [target.agentId],
+        ...(target.chainId === original.chainId ? { blockNumber } : {}),
+      })) as string;
+      if (!uri) return false;
+      const doc = await this.fetchAgentUri(uri);
+      if (!isRegistrationFile(doc)) return false;
+      return claimedCrossRegistrations(doc.registrations, counterpart).dids.includes(original.did);
+    } catch (err) {
+      // The fetcher's errors never carry a URL and a revert is the chain's
+      // own answer; anything else is a transport failure, and the operator
+      // gets it the way they get every other one (#267).
+      if (!chainSaidNo(err) && !(err instanceof AgentUriError)) {
+        this.options.onNetworkError?.(`cross-registration ${counterpart} could not be checked`, err);
+      }
+      return false;
+    }
   }
 }
