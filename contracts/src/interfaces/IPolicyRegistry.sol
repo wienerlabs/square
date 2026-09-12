@@ -78,12 +78,25 @@ interface IPolicyRegistry {
     error ZeroAddress();
     error NotASpender(address caller);
     error LimitExceedsProofRange(uint128 dailyLimit);
+    error CommitmentOutsideProofRange(bytes32 commitment);
     error RenounceDisabled();
     error SpendOverflow(address poster, uint256 spentAfter);
 
     /// @notice Commit to a policy for the caller, or replace the commitment.
     /// @dev Keyed by `msg.sender`: an institution writes its own row and there
     ///      is no path to anyone else's, not even for the owner.
+    ///
+    ///      Both arguments are bounded to what a proof can express, and for the
+    ///      same reason: a value outside that range is one no release could ever
+    ///      satisfy, and the refusal would arrive as an ordinary policy mismatch
+    ///      rather than as the configuration error it is.
+    ///
+    ///      - `dailyLimit` must fit 64 bits, the circuit's `Num2Bits(64)` on
+    ///        `daily_spent_before`.
+    ///      - `commitment` must be below the BN254 scalar field. It is compared
+    ///        against public signal 1, a Poseidon output, and the verifier
+    ///        refuses any signal at or above the field — so a commitment above
+    ///        it cannot be matched by any proof that verifies (#231).
     function setPolicy(bytes32 commitment, uint128 dailyLimit) external;
 
     /// @notice Add `amount` to `poster`'s spend for the current UTC day.
