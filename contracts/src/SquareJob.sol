@@ -18,6 +18,8 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
     uint256 public constant BPS = 10_000;
     uint256 public constant MAX_TOTAL_FEE_BP = 2_000;
     uint256 public constant MAX_DESCRIPTION = 256;
+    uint48 public constant FEE_NOTICE = 1 days;
+    uint48 public constant MIN_SETTLEMENT_WINDOW = 15 minutes;
 
     IERC20 private immutable _paymentToken;
     uint256 private immutable _hookGasLimit;
@@ -27,6 +29,10 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
     uint16 private _evaluatorFeeBP;
     address private _platformTreasury;
     uint256 private _totalWithdrawable;
+    uint256 private _totalEscrowed;
+    uint16 private _pendingPlatformFeeBP;
+    uint16 private _pendingEvaluatorFeeBP;
+    uint48 private _feesEffectiveFrom;
 
     mapping(uint256 jobId => JobRecord) private _jobs;
     mapping(address hook => bool) private _whitelistedHooks;
@@ -55,10 +61,21 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
     function setFees(uint16 platformFeeBP_, uint16 evaluatorFeeBP_, address treasury) external onlyOwner {
         if (treasury == address(0)) revert ZeroAddress();
         if (uint256(platformFeeBP_) + evaluatorFeeBP_ > MAX_TOTAL_FEE_BP) revert FeesTooHigh();
-        _platformFeeBP = platformFeeBP_;
-        _evaluatorFeeBP = evaluatorFeeBP_;
+        _settleMaturedFees();
         _platformTreasury = treasury;
-        emit FeesUpdated(platformFeeBP_, evaluatorFeeBP_, treasury);
+        _pendingPlatformFeeBP = platformFeeBP_;
+        _pendingEvaluatorFeeBP = evaluatorFeeBP_;
+        _feesEffectiveFrom = uint48(block.timestamp) + FEE_NOTICE;
+        emit FeesScheduled(platformFeeBP_, evaluatorFeeBP_, _feesEffectiveFrom);
+        emit FeesUpdated(_platformFeeBP, _evaluatorFeeBP, treasury);
+    }
+
+    function skim(address to) external onlyOwner nonReentrant {
+        if (to == address(0)) revert ZeroAddress();
+        uint256 amount = unaccounted();
+        if (amount == 0) revert NothingToSkim();
+        emit Skimmed(to, amount);
+        _paymentToken.safeTransfer(to, amount);
     }
 
     function setHookWhitelist(address hook, bool allowed) external onlyOwner {
@@ -142,13 +159,15 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         if (amount != expectedBudget) revert BudgetMismatch();
         if (block.timestamp >= job.expiredAt) revert PastExpiry();
 
+        (uint16 platformFeeBP_, uint16 evaluatorFeeBP_) = _effectiveFees();
         _beforeHook(job.hook, jobId, optParams);
         job.status = JobStatus.Funded;
         job.fundedAt = uint48(block.timestamp);
-        job.platformFeeBP = _platformFeeBP;
-        job.evaluatorFeeBP = _evaluatorFeeBP;
+        job.platformFeeBP = platformFeeBP_;
+        job.evaluatorFeeBP = evaluatorFeeBP_;
+        _totalEscrowed += amount;
         emit JobFunded(jobId, msg.sender, amount);
-        emit FeesSnapshotted(jobId, _platformFeeBP, _evaluatorFeeBP, uint48(block.timestamp));
+        emit FeesSnapshotted(jobId, platformFeeBP_, evaluatorFeeBP_, uint48(block.timestamp));
         _paymentToken.safeTransferFrom(msg.sender, address(this), amount);
         _afterHook(job.hook, jobId, optParams);
     }
@@ -158,7 +177,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         if (job.status != JobStatus.Funded) revert WrongStatus();
         if (msg.sender != job.provider) revert Unauthorized();
         if (block.timestamp >= job.expiredAt) revert PastExpiry();
-        uint256 earliest = block.timestamp + job.settlementHorizon;
+        uint256 earliest = block.timestamp + _settlementWindow(job.settlementHorizon);
         if (job.expiredAt < earliest) revert ExpiryTooShort(earliest);
 
         bytes memory data = abi.encode(deliverable, optParams);
@@ -185,6 +204,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         job.providerBps = providerBps;
 
         uint256 amount = job.budget;
+        _totalEscrowed -= amount;
         uint256 platformFee = (amount * job.platformFeeBP) / BPS;
         uint256 evaluatorFee = (amount * job.evaluatorFeeBP) / BPS;
         uint256 net = amount - platformFee - evaluatorFee;
@@ -227,6 +247,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         job.status = JobStatus.Rejected;
         if (previous != JobStatus.Open) {
             uint256 amount = job.budget;
+            _totalEscrowed -= amount;
             _credit(job.client, amount);
             emit Refunded(jobId, job.client, amount);
         }
@@ -245,6 +266,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
 
         job.status = JobStatus.Expired;
         uint256 amount = job.budget;
+        _totalEscrowed -= amount;
         _credit(job.client, amount);
         emit Refunded(jobId, job.client, amount);
         emit JobExpired(jobId);
@@ -321,11 +343,39 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
     }
 
     function platformFeeBP() external view returns (uint16) {
-        return _platformFeeBP;
+        (uint16 platform,) = _effectiveFees();
+        return platform;
     }
 
     function evaluatorFeeBP() external view returns (uint16) {
-        return _evaluatorFeeBP;
+        (, uint16 evaluator) = _effectiveFees();
+        return evaluator;
+    }
+
+    function scheduledFees() external view returns (uint16 platformFeeBP_, uint16 evaluatorFeeBP_, uint48 effectiveFrom) {
+        return (_pendingPlatformFeeBP, _pendingEvaluatorFeeBP, _feesEffectiveFrom);
+    }
+
+    function totalEscrowed() external view returns (uint256) {
+        return _totalEscrowed;
+    }
+
+    function unaccounted() public view returns (uint256) {
+        return _paymentToken.balanceOf(address(this)) - _totalWithdrawable - _totalEscrowed;
+    }
+
+    function _effectiveFees() private view returns (uint16 platform, uint16 evaluator) {
+        if (_feesEffectiveFrom != 0 && block.timestamp >= _feesEffectiveFrom) {
+            return (_pendingPlatformFeeBP, _pendingEvaluatorFeeBP);
+        }
+        return (_platformFeeBP, _evaluatorFeeBP);
+    }
+
+    function _settleMaturedFees() private {
+        if (_feesEffectiveFrom == 0 || block.timestamp < _feesEffectiveFrom) return;
+        _platformFeeBP = _pendingPlatformFeeBP;
+        _evaluatorFeeBP = _pendingEvaluatorFeeBP;
+        _feesEffectiveFrom = 0;
     }
 
     function platformTreasury() external view returns (address) {
@@ -345,6 +395,10 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
     function _settlementHorizon(address evaluator) private view returns (uint48) {
         if (!evaluator.supportsInterface(type(ISettlementHorizon).interfaceId)) return 0;
         return ISettlementHorizon(evaluator).settlementHorizon();
+    }
+
+    function _settlementWindow(uint48 horizon) private pure returns (uint48) {
+        return horizon < MIN_SETTLEMENT_WINDOW ? MIN_SETTLEMENT_WINDOW : horizon;
     }
 
     function _resolvePayout(JobRecord storage job, uint256 jobId, bytes memory data)
