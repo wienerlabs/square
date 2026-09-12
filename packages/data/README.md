@@ -150,11 +150,8 @@ beyond the database.
 | `0007_refund_reason_and_expiry_sweep` | `jobs.refund_reason` |
 | `0008_keeper_give_up` | `keeper_actions.gave_up` |
 | `0009_x402_last_checked` | `x402_payments.last_checked_at` |
-<<<<<<< HEAD
-| `0010_x402_valid_before_repair` | `x402_payments.valid_before` rows and index |
-=======
 | `0010_quarantined_events` | `quarantined_events` |
->>>>>>> origin/main
+| `0011_x402_valid_before_repair` | `x402_payments.valid_before` rows and index |
 
 Migrations never run at service boot against a configured database. They are an explicit
 deploy step, run before the new service version starts, with the connection string in
