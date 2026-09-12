@@ -157,7 +157,12 @@ function verifierBytecodeFor(verificationKey) {
   const rebuilt = (source.slice(0, first) + constants + '\n' + source.slice(end))
     // A distinct name so it cannot collide with the real contract in any
     // `forge` command that resolves by name rather than by path.
-    .replace('contract Groth16Verifier {', 'contract VerifierForThisBuild {');
+    .replace('contract Groth16Verifier {', 'contract VerifierForThisBuild {')
+    // The copy lands one directory deeper than the original, so its imports have
+    // to climb one further. square#231 moved SCALAR_FIELD into
+    // IGroth16Verifier.sol, where PolicyRegistry reads the same value, and this
+    // line is what keeps the generated copy compiling.
+    .replace(/from "\.\/interfaces\//g, 'from "../interfaces/');
 
   // Compiled inside this Foundry project, not a scratch one.
   //

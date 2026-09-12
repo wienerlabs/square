@@ -75,11 +75,11 @@ export async function insertAccepted(db: Database, payment: AcceptedPayment): Pr
   return rowCount === 1;
 }
 
-export async function markSettled(db: Database, identity: PaymentIdentity, txHash: Hex): Promise<boolean> {
+export async function markSettled(db: Database, identity: PaymentIdentity, txHash: Hex | null, reason?: string): Promise<boolean> {
   const { rowCount } = await db.query(
-    `update x402_payments set status = ${X402_STATUS.settled}, tx_hash = $5
+    `update x402_payments set status = ${X402_STATUS.settled}, tx_hash = coalesce($5::bytea, tx_hash), reason = coalesce($6, reason)
      where ${IDENTITY_MATCH} and status = ${X402_STATUS.accepted}`,
-    [...identityParams(identity), hexToBytes(txHash)],
+    [...identityParams(identity), txHash === null ? null : hexToBytes(txHash), reason ?? null],
   );
   return rowCount === 1;
 }
@@ -97,6 +97,14 @@ export async function markFailed(db: Database, identity: PaymentIdentity, failur
   return rowCount === 1;
 }
 
+export async function markChecked(db: Database, identity: PaymentIdentity): Promise<boolean> {
+  const { rowCount } = await db.query(
+    `update x402_payments set last_checked_at = now() where ${IDENTITY_MATCH} and status = ${X402_STATUS.accepted}`,
+    identityParams(identity),
+  );
+  return rowCount === 1;
+}
+
 export async function recordSettlementAttempt(db: Database, identity: PaymentIdentity, txHash: Hex): Promise<boolean> {
   const { rowCount } = await db.query(
     `update x402_payments set tx_hash = $5 where ${IDENTITY_MATCH} and status = ${X402_STATUS.accepted}`,
@@ -108,7 +116,8 @@ export async function recordSettlementAttempt(db: Database, identity: PaymentIde
 export async function listAccepted(db: Database, limit = 100): Promise<AcceptedSettlement[]> {
   const { rows } = await db.query<AcceptedSettlementRow>(
     `select chain_id, asset, payer, nonce, tx_hash, valid_before from x402_payments
-     where status = ${X402_STATUS.accepted} order by created_at, payer, nonce limit $1`,
+     where status = ${X402_STATUS.accepted}
+     order by last_checked_at asc nulls first, created_at, payer, nonce limit $1`,
     [limit],
   );
   return rows.map((row) => ({

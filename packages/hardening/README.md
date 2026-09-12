@@ -290,6 +290,15 @@ number of actors it dropped; `size()` reports how many actors are held. `canonic
 keys, no whitespace, numbers exactly as JSON prints them, `toJSON` honoured, and it refuses `NaN`, `Infinity`, bigint
 and top-level `undefined` rather than producing a form that could collide.
 
+**Only a plain object carries its whole state in its own enumerable keys, so only a plain object is serialised.** A
+`Map`, a `Set`, and an instance of a class that keeps its state in private fields or accessors all answer
+`Object.keys` with nothing, which would make every one of them the same `{}` and hand two unrelated requests one
+hash. A typed array is the other half of the same problem: its indices are own keys, so it would serialise as the
+plain object with those indices and collide with it. Each is refused with a `TypeError` that names what it saw. The
+escape hatch is the one JSON already defines: give the class a `toJSON` method and it is serialised through that,
+before the check runs. Objects created with `Object.create(null)` are serialised, because all of their state is own
+enumerable keys too.
+
 ## Tests
 
 ```bash

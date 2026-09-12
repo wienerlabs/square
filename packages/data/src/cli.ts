@@ -63,7 +63,10 @@ async function withDatabase(run: (db: Database) => Promise<number>): Promise<num
     console.error("DATABASE_URL is not set");
     return 2;
   }
-  const db = pgDatabase(connectionString, { max: 1 });
+  const db = pgDatabase(connectionString, {
+    max: 1,
+    onPoolError: (error) => console.error(`pool connection lost: ${error.message}`),
+  });
   try {
     return await run(db);
   } finally {
