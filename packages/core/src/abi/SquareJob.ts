@@ -50,6 +50,19 @@ export const squareJobAbi = [
   },
   {
     "type": "function",
+    "name": "FEE_NOTICE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint48",
+        "internalType": "uint48"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_DESCRIPTION",
     "inputs": [],
     "outputs": [
@@ -70,6 +83,19 @@ export const squareJobAbi = [
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MIN_SETTLEMENT_WINDOW",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint48",
+        "internalType": "uint48"
       }
     ],
     "stateMutability": "view"
@@ -530,6 +556,29 @@ export const squareJobAbi = [
   },
   {
     "type": "function",
+    "name": "scheduledFees",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "platformFeeBP_",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "evaluatorFeeBP_",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "effectiveFrom",
+        "type": "uint48",
+        "internalType": "uint48"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "setBudget",
     "inputs": [
       {
@@ -617,6 +666,19 @@ export const squareJobAbi = [
   },
   {
     "type": "function",
+    "name": "skim",
+    "inputs": [
+      {
+        "name": "to",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "submit",
     "inputs": [
       {
@@ -637,6 +699,19 @@ export const squareJobAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "totalEscrowed",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -663,6 +738,19 @@ export const squareJobAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "unaccounted",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -767,6 +855,31 @@ export const squareJobAbi = [
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "FeesScheduled",
+    "inputs": [
+      {
+        "name": "platformFeeBP",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      },
+      {
+        "name": "evaluatorFeeBP",
+        "type": "uint16",
+        "indexed": false,
+        "internalType": "uint16"
+      },
+      {
+        "name": "effectiveFrom",
+        "type": "uint48",
+        "indexed": false,
+        "internalType": "uint48"
       }
     ],
     "anonymous": false
@@ -1248,6 +1361,25 @@ export const squareJobAbi = [
   },
   {
     "type": "event",
+    "name": "Skimmed",
+    "inputs": [
+      {
+        "name": "to",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "SubmissionTimed",
     "inputs": [
       {
@@ -1399,6 +1531,11 @@ export const squareJobAbi = [
   {
     "type": "error",
     "name": "NotExpired",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NothingToSkim",
     "inputs": []
   },
   {
