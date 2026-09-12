@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {PolicyRegistry} from "../src/PolicyRegistry.sol";
 import {IPolicyRegistry} from "../src/interfaces/IPolicyRegistry.sol";
+import {SCALAR_FIELD} from "../src/interfaces/IGroth16Verifier.sol";
 
 /// @notice The on-chain state the compliance module reads, and the counter it moves.
 ///
@@ -377,6 +378,38 @@ contract PolicyRegistryTest is Test {
         vm.prank(alice);
         registry.setPolicy(COMMITMENT, type(uint64).max);
         assertEq(registry.policyOf(alice).dailyLimit, type(uint64).max);
+    }
+
+    /// The commitment is bounded for the same reason, and it was not (#231).
+    ///
+    /// Public signal 1 is a Poseidon output, always below the BN254 scalar
+    /// field, and the verifier refuses any signal at or above it. A commitment
+    /// above the field is therefore one no verifying proof can match: every
+    /// gated release for this poster would be refused with `policy commitment`,
+    /// the same reason a genuine rotation gives, and it would never clear.
+    function test_setPolicy_refusesACommitmentNoProofCanCarry() public {
+        bytes32 outside = bytes32(SCALAR_FIELD);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IPolicyRegistry.CommitmentOutsideProofRange.selector, outside));
+        registry.setPolicy(outside, LIMIT);
+
+        // The shape an operator actually arrives with: a keccak digest where a
+        // Poseidon commitment belongs. Four in five land above the field, and
+        // this particular one does.
+        bytes32 digest = keccak256("some other policy");
+        assertGe(uint256(digest), SCALAR_FIELD, "the fixture stopped being out of range");
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(IPolicyRegistry.CommitmentOutsideProofRange.selector, digest));
+        registry.setPolicy(digest, LIMIT);
+
+        assertEq(registry.commitmentOf(alice), bytes32(0), "a refused policy left a row behind");
+    }
+
+    function test_setPolicy_allowsTheLargestCommitmentAProofCanCarry() public {
+        bytes32 largest = bytes32(SCALAR_FIELD - 1);
+        vm.prank(alice);
+        registry.setPolicy(largest, LIMIT);
+        assertEq(registry.commitmentOf(alice), largest);
     }
 
     // ------------------------------------------------------------ the epoch

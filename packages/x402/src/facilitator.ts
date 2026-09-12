@@ -84,6 +84,7 @@ export const REJECTION = {
 } as const;
 
 const SETTLEMENT_PENDING = "settlement_pending";
+const SETTLED_WITHOUT_HASH = "settled_without_transaction_hash";
 const INTEGER = /^\d+$/;
 const TRANSACTION_HASH = /^0x[0-9a-fA-F]{64}$/;
 
@@ -311,6 +312,10 @@ export function createSquareFacilitator(options: SquareFacilitatorOptions): Squa
     if (result.success) {
       if (transaction === undefined) {
         logger.error("x402 settle reported success without a transaction hash", { payer: key.payer, nonce: key.nonce });
+        const settled = await replayStore.markSettled(key, null, SETTLED_WITHOUT_HASH);
+        if (!settled) {
+          logger.error("x402 ledger refused the settled transition", { payer: key.payer, nonce: key.nonce });
+        }
         return;
       }
       const held = await replayStore.markSettled(key, transaction);

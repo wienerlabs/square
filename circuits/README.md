@@ -184,10 +184,16 @@ the policy the proof covered were different documents. Since [#181][i181] the
 service refuses the second entry instead. An empty `allowed_days` is refused
 for the same reason as the overnight window: it forbids every weekday, so no
 payment could satisfy the rule. Leaving `time_restrictions` out is how a policy
-says it has no window at all.
+says it has no window at all — and since [#226][i226], leaving it out is the
+*only* way to say that. An empty list used to say it too, quietly: `[]` made
+the builder's `[0]` undefined, `time_active` fell to 0, and rule 6 was off
+while the caller believed they had sent a window. It was the one refusal in
+this area that failed open, so a payment outside the policy's hours proved
+compliant; it is a 400 now.
 
 [i148]: https://github.com/wienerlabs/square/issues/148
 [i181]: https://github.com/wienerlabs/square/issues/181
+[i226]: https://github.com/wienerlabs/square/issues/226
 
 ### Rule 5 binds nobody, and the reason is structural
 

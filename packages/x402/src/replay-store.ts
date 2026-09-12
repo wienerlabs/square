@@ -32,8 +32,9 @@ export interface UnsettledPayment extends ReplayKey {
 export interface ReplayStore {
   insertAccepted(entry: ReplayEntry): Promise<boolean>;
   markPending(key: ReplayKey, txHash: Hex): Promise<boolean>;
-  markSettled(key: ReplayKey, txHash: Hex): Promise<boolean>;
+  markSettled(key: ReplayKey, txHash: Hex | null, reason?: string): Promise<boolean>;
   markFailed(key: ReplayKey, reason: string): Promise<boolean>;
+  markChecked(key: ReplayKey): Promise<boolean>;
   has(key: ReplayKey): Promise<boolean>;
   listUnsettled(limit?: number): Promise<UnsettledPayment[]>;
 }
@@ -55,6 +56,8 @@ export function replayKeyString(key: ReplayKey): string {
 
 export function memoryReplayStore(): MemoryReplayStore {
   const records = new Map<string, ReplayRecord>();
+  const checkedAt = new Map<string, number>();
+  let checks = 0;
   const accepted = (key: ReplayKey): ReplayRecord | undefined => {
     const record = records.get(replayKeyString(key));
     return record?.status === "accepted" ? record : undefined;
@@ -74,11 +77,12 @@ export function memoryReplayStore(): MemoryReplayStore {
       record.txHash = txHash;
       return true;
     },
-    async markSettled(key, txHash) {
+    async markSettled(key, txHash, reason) {
       const record = accepted(key);
       if (record === undefined) return false;
       record.status = "settled";
-      record.txHash = txHash;
+      if (txHash !== null) record.txHash = txHash;
+      if (reason !== undefined) record.reason = reason;
       return true;
     },
     async markFailed(key, reason) {
@@ -88,24 +92,30 @@ export function memoryReplayStore(): MemoryReplayStore {
       record.reason = reason;
       return true;
     },
+    async markChecked(key) {
+      const record = accepted(key);
+      if (record === undefined) return false;
+      checks += 1;
+      checkedAt.set(replayKeyString(key), checks);
+      return true;
+    },
     async has(key) {
       return records.has(replayKeyString(key));
     },
     async listUnsettled(limit = 100) {
-      const unsettled: UnsettledPayment[] = [];
-      for (const record of records.values()) {
-        if (unsettled.length >= limit) break;
-        if (record.status !== "accepted") continue;
-        unsettled.push({
-          chainId: record.chainId,
-          asset: record.asset,
-          payer: record.payer,
-          nonce: record.nonce,
-          txHash: record.txHash ?? null,
-          validBefore: record.validBefore,
-        });
+      const open: Array<{ id: string; record: ReplayRecord }> = [];
+      for (const [id, record] of records) {
+        if (record.status === "accepted") open.push({ id, record });
       }
-      return unsettled;
+      open.sort((left, right) => (checkedAt.get(left.id) ?? 0) - (checkedAt.get(right.id) ?? 0));
+      return open.slice(0, limit).map(({ record }) => ({
+        chainId: record.chainId,
+        asset: record.asset,
+        payer: record.payer,
+        nonce: record.nonce,
+        txHash: record.txHash ?? null,
+        validBefore: record.validBefore,
+      }));
     },
     get(key) {
       return records.get(replayKeyString(key));
@@ -124,11 +134,14 @@ export function postgresReplayStore(db: Database): ReplayStore {
     markPending(key, txHash) {
       return x402Payments.recordSettlementAttempt(db, key, txHash);
     },
-    markSettled(key, txHash) {
-      return x402Payments.markSettled(db, key, txHash);
+    markSettled(key, txHash, reason) {
+      return x402Payments.markSettled(db, key, txHash, reason);
     },
     markFailed(key, reason) {
       return x402Payments.markFailed(db, key, { reason });
+    },
+    markChecked(key) {
+      return x402Payments.markChecked(db, key);
     },
     has(key) {
       return x402Payments.exists(db, key);

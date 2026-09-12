@@ -268,6 +268,12 @@ export async function deployWithForgeScript(rpcUrl: string): Promise<SquareDeplo
   await fundNative(rpcUrl, [anvilAccount(0).address]);
   const env = { ...process.env };
   delete env["DEPLOYER_PRIVATE_KEY"];
+  // DeployLocal deploys mocks and refuses any chain but 31337 unless the caller
+  // names the one it means (square#232). This fork answers with Arc's chain id
+  // and is ours: spawned above, and `removeLocalDeploymentArtifacts` deletes
+  // everything the script writes, including the deployment file that path shares
+  // with the real testnet.
+  env["DEPLOY_LOCAL_ALLOW_CHAIN_ID"] = String(ARC_TESTNET_CHAIN_ID);
   try {
     execSync(`forge script script/DeployLocal.s.sol --rpc-url ${rpcUrl} --broadcast --slow`, {
       cwd: contractsDir,
