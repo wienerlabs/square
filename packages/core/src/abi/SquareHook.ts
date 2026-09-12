@@ -119,6 +119,30 @@ export const squareHookAbi = [
   },
   {
     "type": "function",
+    "name": "boundAgentOf",
+    "inputs": [
+      {
+        "name": "jobId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "bound",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "agentId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "claimMarket",
     "inputs": [],
     "outputs": [

@@ -2,9 +2,11 @@ import {
   type Abi,
   type Account,
   type Address,
+  BaseError,
   type Chain,
   type ContractFunctionArgs,
   type ContractFunctionName,
+  ContractFunctionRevertedError,
   type Hex,
   isAddressEqual,
   type PublicClient,
@@ -147,6 +149,17 @@ type ReadArgs<TAbi extends Abi, TName extends ContractFunctionName<TAbi, "pure" 
   functionName: TName;
   args?: ContractFunctionArgs<TAbi, "pure" | "view", TName>;
 };
+
+/**
+ * A call that reverted carrying nothing: no error data, no reason string.
+ * Solidity's dispatcher answers an unknown selector exactly so, which is how
+ * a contract deployed before a function existed looks from here.
+ */
+function isUnknownSelectorRevert(error: unknown): boolean {
+  if (!(error instanceof BaseError)) return false;
+  const reverted = error.walk((candidate) => candidate instanceof ContractFunctionRevertedError);
+  return reverted instanceof ContractFunctionRevertedError && reverted.data === undefined && reverted.signature === undefined;
+}
 
 export class SquareClient {
   readonly publicClient: PublicClient;
@@ -371,13 +384,47 @@ export class SquareClient {
     });
   }
 
-  async agentOf(jobId: bigint): Promise<bigint> {
-    return this.read({
+  /**
+   * Whether the hook answers `boundAgentOf`. Decided once per client, on the
+   * first `agentOf()`: a hook deployed before #300 has no such selector and
+   * the call reverts with no data, which is the one shape taken to mean
+   * "older hook"; anything else is an error and is thrown.
+   */
+  private hookAnswersBoundAgentOf: boolean | undefined;
+
+  /**
+   * The ERC-8004 agent a job's submit bound, or null when none was.
+   *
+   * Agent id 0 is a real agent (on Arc's registry it is the first
+   * registration), so 0 cannot stand for "none": the hook's `agentOf` reverts
+   * with NoAgentBound when nothing is bound and `boundAgentOf` answers both
+   * questions, and this reads the latter. On a hook deployed before #300 only
+   * `agentOf` exists and answers 0 for both; that is read as null, which is
+   * what it meant there and is wrong only for agent 0.
+   */
+  async agentOf(jobId: bigint): Promise<bigint | null> {
+    if (this.hookAnswersBoundAgentOf !== false) {
+      try {
+        const [bound, agentId] = await this.read({
+          abi: squareHookAbi,
+          address: this.deployment.squareHook,
+          functionName: "boundAgentOf",
+          args: [jobId],
+        });
+        this.hookAnswersBoundAgentOf = true;
+        return bound ? agentId : null;
+      } catch (error) {
+        if (!isUnknownSelectorRevert(error)) throw error;
+        this.hookAnswersBoundAgentOf = false;
+      }
+    }
+    const agentId = await this.read({
       abi: squareHookAbi,
       address: this.deployment.squareHook,
       functionName: "agentOf",
       args: [jobId],
     });
+    return agentId === 0n ? null : agentId;
   }
 
   async usdcBalance(account: Address): Promise<bigint> {

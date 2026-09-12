@@ -1,4 +1,4 @@
-import { BaseError, isHex, type Address, type Hash, type Hex } from "viem";
+import { BaseError, InvalidParamsRpcError, isHex, type Address, type Hash, type Hex } from "viem";
 
 export class EntryPointMismatchError extends BaseError {
   override name = "EntryPointMismatchError";
@@ -60,4 +60,23 @@ export function isExecutionRevert(error: unknown): boolean {
   if (!(error instanceof BaseError)) return false;
   if (revertDataOf(error) !== undefined) return true;
   return error.walk((candidate) => candidate instanceof Error && /revert/i.test(candidate.message)) !== null;
+}
+
+/**
+ * The node refused the request's shape rather than executing it: JSON-RPC's
+ * invalid params (-32602), which is what a node without state overrides
+ * answers to an `eth_estimateGas` that carries one, or a message naming the
+ * override. This is the one failure of the undeployed simulation that means
+ * "cannot be simulated here"; a timeout or a rate limit means "not this
+ * time", and the two must not be read alike (#297).
+ */
+export function isStateOverrideUnsupported(error: unknown): boolean {
+  if (!(error instanceof BaseError)) return false;
+  return (
+    error.walk(
+      (candidate) =>
+        candidate instanceof InvalidParamsRpcError ||
+        (candidate instanceof Error && /state ?override/i.test(candidate.message)),
+    ) !== null
+  );
 }

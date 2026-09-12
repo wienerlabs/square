@@ -10,10 +10,61 @@ export class SpecError extends Error {
   }
 }
 
-export function canonicalSpec(spec: unknown): string {
-  if (spec === undefined || typeof spec === "function" || typeof spec === "symbol") {
-    throw new SpecError("a spec must be JSON data");
+/**
+ * The hash is the job's commitment: `specDescription` goes on chain and any
+ * party holding the spec recomputes it, so the canonical text has to be one
+ * a JSON parser can read back to a value that canonicalises to the same
+ * text. `canonicalize` defines that for JSON data and undertakes nothing for
+ * the rest: a nested function came out as `{"f":undefined}`, an `undefined`
+ * in an array as `[1,null,undefined]`, both hashed, and a bigint, `NaN`,
+ * `Infinity` or a cycle threw a TypeError, an Error or a RangeError where
+ * `SpecError` was promised (#298). So JSON data is checked for first, at
+ * every depth, and named by path when it is not.
+ *
+ * JSON data: null, booleans, strings, finite numbers, arrays of it, and
+ * plain objects of it. A key whose value is `undefined` is dropped, as
+ * `JSON.stringify` drops it. A Date, a Map or a class instance is not JSON
+ * data, whatever `toJSON` would have made of it: a commitment is not the
+ * place for a silent conversion.
+ */
+function assertJsonData(value: unknown, path: string, seen: Set<object>): void {
+  switch (typeof value) {
+    case "string":
+    case "boolean":
+      return;
+    case "number":
+      if (Number.isFinite(value)) return;
+      throw new SpecError(`a spec must be JSON data: ${path} is ${String(value)}`);
+    case "object":
+      break;
+    default:
+      throw new SpecError(`a spec must be JSON data: ${path} is a ${typeof value}`);
   }
+  if (value === null) return;
+  if (seen.has(value)) throw new SpecError(`a spec must be JSON data: ${path} refers back to itself`);
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      if (item === undefined) throw new SpecError(`a spec must be JSON data: ${path}[${index}] is undefined`);
+      assertJsonData(item, `${path}[${index}]`, seen);
+    });
+  } else {
+    const proto: unknown = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      const kind = (value as { constructor?: { name?: string } }).constructor?.name ?? "object";
+      throw new SpecError(`a spec must be JSON data: ${path} is a ${kind}, not a plain object`);
+    }
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (item === undefined) continue;
+      assertJsonData(item, `${path}.${key}`, seen);
+    }
+  }
+  seen.delete(value);
+}
+
+export function canonicalSpec(spec: unknown): string {
+  if (spec === undefined) throw new SpecError("a spec must be JSON data: spec is undefined");
+  assertJsonData(spec, "spec", new Set());
   const canonical = canonicalize(spec);
   if (canonical === undefined) throw new SpecError("a spec must be JSON data");
   return canonical;
