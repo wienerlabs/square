@@ -336,6 +336,8 @@ network operations. Step 7 is the only step that leaves the chain.
 | `didDocumentMetadata.deactivated` | `true` per §7.4 |
 | `didDocumentMetadata.registrationFile` | `"unavailable"` when a non-empty Agent URI could not be dereferenced or parsed (§5). `service` and `deactivated` then reflect on-chain state alone: the file was not read, and a consumer that reads only `deactivated` must not take that for "active" |
 | `didDocumentMetadata.agentRegistry` | The ERC-8004 `agentRegistry` string |
+| `didDocumentMetadata.agentUriScheme` | The scheme of the Agent URI as `tokenURI` gives it (`ipfs`, `https`, `data`, ...), lowercase, present whenever the URI is non-empty and has one, whether or not the file could be read. This is the report §10.3 asks for: `ipfs` commits the content to a CID, `https` can change with no on-chain trace |
+| `didDocumentMetadata.crossRegistrations` | `{ verified, unverified }`, each an array of `did:aip` v2 DIDs, present when the Registration File lists at least one well-formed cross-registration (§8). A claim is `verified` only when the counterpart's own Registration File lists this agent back; every other outcome, including a chain the resolver has no endpoint for, is `unverified`. Nothing claimed is merged into the DID Document |
 
 `versionId` is the block number, not a timestamp: on a chain with sub-second deterministic
 finality, the block number is the only value that identifies the state exactly.
@@ -446,6 +448,13 @@ Unverified, a cross-registration is an impersonation primitive: an agent on a ch
 can claim to be a reputable agent on Mainnet, and any consumer that merges reputation
 across the claimed pair inherits a reputation it did not earn. Resolvers **SHOULD** expose
 verified and unverified cross-registrations as distinct fields rather than merging them.
+
+The reference resolver does so in `didDocumentMetadata.crossRegistrations` (§6.1). Its
+round trip reads the counterpart's `tokenURI` and fetches that file, and stops there: the
+counterpart is not resolved and its own claims are not followed, so a chain of files cannot
+make resolution recurse. An entry that does not map to a DID by §3.2 is counted in a
+warning and not read. A resolver **MAY** bound how many claims it checks per resolution;
+the reference resolver checks eight and reports the rest unverified, with a warning.
 
 ---
 
@@ -689,7 +698,9 @@ of them failing blocks the merge. Three of them bear directly on this document:
 ## Appendix A — Test Vectors (Informative)
 
 A machine-readable form of this appendix is in [`test-vectors.json`](./test-vectors.json).
-The resolver implementation consumes it directly, so the two cannot drift.
+The resolver implementation consumes it directly, so the two cannot drift. Its `metadata`
+section carries vectors for §6.1's `agentUriScheme` and `crossRegistrations` that need no
+network: each Registration File is inline, served to a stub chain as a `data:` Agent URI.
 
 Read from Arc Testnet (`eip155:5042002`), Identity Registry
 `0x8004a818bfb912233c491871b3d84c89a494bd9e`. Values were live at the time of writing;

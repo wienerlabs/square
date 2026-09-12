@@ -20,7 +20,9 @@ The parser tests are driven by the spec's own
 ## What resolution does
 
 Three `eth_call`s against one contract — `ownerOf`, `getAgentWallet`, `tokenURI` — and, if
-the agent has a registration file, one fetch. That is the whole method.
+the agent has a registration file, one fetch. That is the whole method. If that file claims
+cross-registrations, one more `tokenURI` read and one more fetch per claim, up to eight, to
+check whether the counterpart claims this agent back; see below.
 
 ## Four behaviours worth knowing
 
@@ -59,6 +61,32 @@ new AipDidResolver({ rpc, v1Resolver: async (parsed) => { /* … */ } });
 v1 support is injected rather than bundled: pulling a Solana client into a package whose
 point is reading ERC-8004 would defeat the purpose, for identifiers we are migrating away
 from. The spec allows either choice (§9.2) and requires only that v1 is recognised.
+
+## What the metadata says about the file
+
+The registration file is owner-controlled input at an owner-controlled URI (spec §5), and
+two fields in `didDocumentMetadata` exist so a consumer can decide how far to trust what
+came out of it (#152):
+
+**`agentUriScheme`** is the scheme of the agentURI as `tokenURI` gives it, lowercase:
+`ipfs`, `https`, `data`, or whatever the chain says. An `ipfs` CID commits to the content;
+an `https` document can change without any on-chain trace (spec §10.3). It is reported
+whether or not the file could be read, so a policy of "services only from content-addressed
+cards" is one comparison, and absent only when the agentURI is empty or has no scheme.
+
+**`crossRegistrations`** is `{ verified, unverified }`, each a list of `did:aip` DIDs, present
+when the file's `registrations[]` names at least one other agent (spec §8). These are
+claims: anyone may write any `agentRegistry` into their own file, and unverified, a claim
+is how an agent on a cheap chain impersonates a reputable one. A claim is `verified` only
+when the round trip closes: the counterpart's registry is asked for its `tokenURI`, the file
+there is fetched, and it lists this agent back. Everything else is `unverified`: the
+counterpart does not list this agent, or has no file, or is not minted, or the round trip
+could not be made because this resolver has no endpoint for that chain, the registry is
+outside `allowedRegistries`, or a read or fetch failed. The counterpart is not resolved and
+its own claims are not followed, so a chain of files cannot make resolution recurse; at most
+eight claims are checked per resolution and the rest are reported unverified with a
+`crossRegistrationsUnchecked` warning. Entries that name no agent are counted in a
+`crossRegistrationMalformed` warning. Nothing claimed is merged into the document.
 
 ## Options
 
@@ -135,3 +163,6 @@ npm run test:live     # also hits Arc Testnet
 
 The live suite resolves the agents named in the spec's vectors, so it checks the resolver
 and the vectors at once — if the chain moves out from under the documentation, it fails.
+The vectors' `metadata` section, for `agentUriScheme` and `crossRegistrations`, runs in the
+unit suite against a stub chain: every registration file in it is inline, served as a
+`data:` agentURI, so those fields are held to the spec without a network.

@@ -1,6 +1,6 @@
 {
   "name": "@squaresdk/did-aip-driver",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "description": "DIF Universal Resolver driver for did:aip v2.",
   "license": "Apache-2.0",
