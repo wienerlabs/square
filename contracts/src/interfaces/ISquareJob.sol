@@ -79,6 +79,7 @@ interface ISquareJob {
     event FeesUpdated(uint16 platformFeeBP, uint16 evaluatorFeeBP, address treasury);
     event FeesScheduled(uint16 platformFeeBP, uint16 evaluatorFeeBP, uint48 effectiveFrom);
     event Skimmed(address indexed to, uint256 amount);
+    event ComplianceProofSet(uint256 indexed jobId, address indexed client, bytes32 digest);
     event HookFailed(uint256 indexed jobId, address indexed hook, bytes4 selector, bytes reason);
     event PayoutUnresolvable(uint256 indexed jobId, address indexed hook);
 
@@ -98,6 +99,7 @@ interface ISquareJob {
     error ProviderAlreadySet();
     error FeesTooHigh();
     error NothingToSkim();
+    error ComplianceProofTooLarge(uint256 maximum);
     error HookNotWhitelisted(address hook);
     error InvalidHook(address hook);
     error HookReverted(address hook);
@@ -136,6 +138,8 @@ interface ISquareJob {
     function totalEscrowed() external view returns (uint256);
 
     function unaccounted() external view returns (uint256);
+
+    function complianceProofOf(uint256 jobId) external view returns (bytes memory);
     function jobCounter() external view returns (uint256);
     function whitelistedHooks(address hook) external view returns (bool);
     function paymentToken() external view returns (address);

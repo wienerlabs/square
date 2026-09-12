@@ -20,6 +20,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
     uint256 public constant MAX_DESCRIPTION = 256;
     uint48 public constant FEE_NOTICE = 1 days;
     uint48 public constant MIN_SETTLEMENT_WINDOW = 15 minutes;
+    uint256 public constant MAX_COMPLIANCE_PROOF = 1024;
 
     IERC20 private immutable _paymentToken;
     uint256 private immutable _hookGasLimit;
@@ -37,6 +38,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
     mapping(uint256 jobId => JobRecord) private _jobs;
     mapping(address hook => bool) private _whitelistedHooks;
     mapping(address account => uint256) private _withdrawable;
+    mapping(uint256 jobId => bytes) private _complianceProofs;
 
     constructor(
         address token,
@@ -76,6 +78,15 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         if (amount == 0) revert NothingToSkim();
         emit Skimmed(to, amount);
         _paymentToken.safeTransfer(to, amount);
+    }
+
+    function setComplianceProof(uint256 jobId, bytes calldata proof) external {
+        JobRecord storage job = _existing(jobId);
+        if (msg.sender != job.client) revert Unauthorized();
+        if (job.status != JobStatus.Funded && job.status != JobStatus.Submitted) revert WrongStatus();
+        if (proof.length > MAX_COMPLIANCE_PROOF) revert ComplianceProofTooLarge(MAX_COMPLIANCE_PROOF);
+        _complianceProofs[jobId] = proof;
+        emit ComplianceProofSet(jobId, msg.sender, keccak256(proof));
     }
 
     function setHookWhitelist(address hook, bool allowed) external onlyOwner {
@@ -358,6 +369,10 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
 
     function totalEscrowed() external view returns (uint256) {
         return _totalEscrowed;
+    }
+
+    function complianceProofOf(uint256 jobId) external view returns (bytes memory) {
+        return _complianceProofs[jobId];
     }
 
     function unaccounted() public view returns (uint256) {
