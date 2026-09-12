@@ -276,6 +276,24 @@ Severity can be overridden on every rule.
   `alert_resolved` at `info`, with `rule`, `reason` and `age` fields, all on the built-in
   allowlist.
 
+## Waiting between ticks
+
+`waitUnlessAborted(milliseconds, signal)` is the pause a long-running loop takes
+between passes. It resolves when the time is up, resolves when the signal
+aborts, and rejects on nothing, so a shutdown ends the loop rather than throwing
+inside it.
+
+It exists because the obvious hand-written version leaks. A `setTimeout` wrapped
+in a promise with `signal.addEventListener("abort", ..., { once: true })` removes
+its listener only when the abort fires, so every pass that ends normally leaves
+one behind: an indexer polling every three seconds accumulates twenty-eight
+thousand of them a day, each holding a timer and a resolver. This helper hands
+the wait to `node:timers/promises`, which registers its own listener and removes
+it on either outcome, so a signal carries at most one listener no matter how
+long the process runs. The keeper and the indexer both use it, and
+`test/lifecycle.test.ts` counts the listeners with `getEventListeners` after
+thirty passes.
+
 ## Tests
 
 ```bash

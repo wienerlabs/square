@@ -11,6 +11,7 @@ const ALL = [
   "0005_keeper",
   "0006_x402_reason",
   "0007_refund_reason_and_expiry_sweep",
+  "0008_keeper_give_up",
 ];
 
 async function tableNames(db: Database): Promise<string[]> {
@@ -52,7 +53,7 @@ async function schemaSnapshot(db: Database): Promise<unknown> {
 }
 
 describe("migrations", () => {
-  it("applies all seven in order, reverts the last one, and re-applies it", async () => {
+  it("applies all eight in order, reverts the last one, and re-applies it", async () => {
     const db = await pgliteDatabase();
     try {
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(ALL);
@@ -73,11 +74,12 @@ describe("migrations", () => {
         "x402_payments",
       ]);
 
-      expect((await migrate(db, MIGRATIONS_DIR, "down")).applied).toEqual(["0007_refund_reason_and_expiry_sweep"]);
-      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL.slice(0, 6), pending: ["0007_refund_reason_and_expiry_sweep"] });
-      expect(await columnNames(db, "jobs")).not.toContain("refund_reason");
+      expect((await migrate(db, MIGRATIONS_DIR, "down")).applied).toEqual(["0008_keeper_give_up"]);
+      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL.slice(0, 7), pending: ["0008_keeper_give_up"] });
+      expect(await columnNames(db, "keeper_actions")).not.toContain("gave_up");
 
-      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0007_refund_reason_and_expiry_sweep"]);
+      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0008_keeper_give_up"]);
+      expect(await columnNames(db, "keeper_actions")).toContain("gave_up");
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL, pending: [] });
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual([]);
     } finally {
@@ -85,13 +87,13 @@ describe("migrations", () => {
     }
   });
 
-  it("up, down seven steps, up leaves the schema identical", async () => {
+  it("up, down eight steps, up leaves the schema identical", async () => {
     const db = await pgliteDatabase();
     try {
       await migrate(db, MIGRATIONS_DIR, "up");
       const first = await schemaSnapshot(db);
 
-      expect((await migrate(db, MIGRATIONS_DIR, "down", 7)).applied).toEqual([...ALL].reverse());
+      expect((await migrate(db, MIGRATIONS_DIR, "down", 8)).applied).toEqual([...ALL].reverse());
       expect(await tableNames(db)).toEqual(["schema_migrations"]);
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: [], pending: ALL });
 
@@ -130,6 +132,7 @@ describe("migrations", () => {
         "0005_keeper",
         "0006_x402_reason",
         "0007_refund_reason_and_expiry_sweep",
+        "0008_keeper_give_up",
       ]);
 
       await db.query("insert into schema_migrations (name) values ('0003_x402')");
@@ -138,6 +141,7 @@ describe("migrations", () => {
         "0005_keeper",
         "0006_x402_reason",
         "0007_refund_reason_and_expiry_sweep",
+        "0008_keeper_give_up",
       ]);
       expect(await tableNames(db)).toContain("keeper_actions");
     } finally {
