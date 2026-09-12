@@ -109,6 +109,17 @@ puts that back together, and the canonical form both sides see is the colon one,
 `"GET /jobs/:id"`. Whatever dialect you write, that is the key the payment side is
 configured with and the path Hono registers.
 
+One verb needs a second key, because Hono answers it without being asked. A `HEAD`
+request is re-dispatched into the `GET` chain, so Hono runs the `GET` handler and then
+throws the body away, while the payment middleware still reads `HEAD` from
+`c.req.method`. A route table keyed `"GET /quote"` therefore had no entry the middleware
+could match, `requiresPayment()` was false, and the paid handler ran for free: no body,
+but the whole computation, every response header it set, and the status code. So
+`createPaidRoutes` registers a `HEAD` key alongside every `GET` key, pointing at the same
+price, and `HEAD` on a paid `GET` route answers `402` without reaching the handler. Keys
+written with no verb (`"/quote"`) already covered every method and are unchanged, and a
+`HEAD` key you declare yourself is left as you wrote it.
+
 The facilitator key pays gas (native USDC on Arc) and does nothing else; the
 payer's USDC moves straight from the payer to `payTo` inside
 `transferWithAuthorization`. To mount paid routes on an existing Hono app use
@@ -186,7 +197,11 @@ whether the update held, so a second settle, a late failure after a settlement, 
 mark for a row nobody accepted is a `false` the facilitator logs instead of a silent
 no-op. `markFailed`'s reason is stored, in the `reason` column added by migration
 `0006_x402_reason`, so reconciling a failure does not mean grepping logs for a
-`(payer, nonce)` pair.
+`(payer, nonce)` pair. It stores the transaction hash too when the failure has one: a
+transfer that was broadcast and then reverted, or one that was mined without a matching
+`Transfer` event, is named by a hash the operator can follow to a block. A failure with
+no hash leaves the column as it found it, so a hash written by an earlier settlement
+attempt survives.
 
 `has()` is deliberately status-blind: it answers "has this authorization identity ever
 been presented", not "did it settle". That is what replay protection needs, because an
@@ -290,9 +305,20 @@ that sweep, which drops rows 30 days after `validBefore`.
 Independently of the library's checks, `onBeforeVerify` also asserts that
 `payTo`, `asset` and `network` are on the configured allowlist, that the client's
 echoed `accepted` matches the server's requirements, that `authorization.to` is
-the allowlisted payee, and that `authorization.value` covers the required amount.
-Every rejection reason is exported as `REJECTION.*` and travels back to the client
-in the `error` field of `PAYMENT-REQUIRED`.
+the allowlisted payee, that `authorization.value` covers the required amount, and that
+`authorization.validBefore` is no further out than the offer itself declared. Every
+rejection reason is exported as `REJECTION.*` and travels back to the client in the
+`error` field of `PAYMENT-REQUIRED`.
+
+`validBefore` is typed like a timestamp the system produced, and it is not: it comes
+from a signed client payload, and the library bounds it only from below
+(`validBefore < now + 6` is expired). Left unbounded above, a payer could sign an
+otherwise flawless authorization with `validBefore = 2^62`, have it verified, settled and
+charged normally, and leave behind a row that no retention sweep can ever drop and that
+`reconcile` counts as still in flight forever. So the ceiling is
+`now + maxTimeoutSeconds + VALID_BEFORE_SKEW_SECONDS`: the deadline the 402 offered, plus
+five minutes for a payer whose clock runs ahead. Anything past it is refused with
+`invalid_valid_before`.
 
 ## Tests
 
