@@ -178,6 +178,30 @@ export function validateRequest(req) {
       throw new Error('time_restrictions: must be an array');
     }
 
+    // An empty list is not "no window", and it was the one value in this
+    // function that fell open rather than closed.
+    //
+    // buildCircuitInput reads `[0]`, which is undefined for `[]`, so
+    // time_active became 0 and rule 6 -- `1 - time_active + time_active *
+    // compliant` -- was satisfied by anything. Nothing showed it: the
+    // off-circuit evaluator short-circuits on the same field, so rules_agree
+    // stayed true and violated_rules stayed empty, and the chain could not see
+    // it either, because the commitment muxes the time leaf to 0 on both sides
+    // and therefore still matched.
+    //
+    // The empty day list below comes from the same mechanism -- a `.filter()`
+    // that matched nothing, an empty form field -- and is refused because it
+    // fails closed, where every payment is rejected and somebody notices. This
+    // one failed open. square#226 measured it: at 03:00 on a Sunday, under a
+    // policy of 09:00 to 17:00 Monday to Friday, `[]` proved compliant.
+    if (req.time_restrictions.length === 0) {
+      throw new Error(
+        'time_restrictions: must hold exactly one window. An empty list is not a '
+        + 'spelling for "no window"; omit time_restrictions entirely to leave the '
+        + 'window unrestricted.',
+      );
+    }
+
     // One window, or none. Anything past the first used to be validated and
     // then dropped: buildCircuitInput reads `[0]` and nothing else, so a second
     // record was checked field by field, accepted, and never reached the
