@@ -66,13 +66,21 @@ const health = createHealth({
 mountObservability(app, { health, metrics });
 
 // How many proofs may run at once, how many may wait, and how long one may take.
-// The knobs and their reasoning are in concurrency.js; the defaults come from
-// the environment's parallelism and a measured proof of 1 158 ms.
+// The knobs and the measurements behind their defaults are in concurrency.js.
+//
+// `onChange` is what makes saturation visible: the limiter reports every
+// transition and the three gauges follow it, so `/metrics` shows how full the
+// service is rather than leaving it to be inferred from the 503s (square#236).
 const limiter = createProofLimiter({
   limit: process.env.PROVER_MAX_CONCURRENCY,
   queueLimit: process.env.PROVER_MAX_QUEUE,
   timeoutMs: process.env.PROVER_PROOF_TIMEOUT_MS,
+  onChange: (slots) => metrics.setProofSlots(slots),
 });
+// The ceiling never moves, but a gauge nobody has written to is absent from the
+// exposition, and an alert dividing by an absent series is an alert that never
+// fires. Publish it once, before any request arrives.
+metrics.setProofSlots({ active: 0, queued: 0, limit: limiter.limit });
 
 // A slot frees in about the time one proof takes, so a second is the shortest
 // wait worth naming; `packages/hardening` sets the same header on the rate
@@ -138,11 +146,21 @@ app.post('/prove', async (req, res) => {
     }
 
     if (!outcome.ok && outcome.reason === 'timeout') {
-      // A proof that outran its bound is a failed proof: it was attempted, it
-      // consumed a slot, and `classifyProofFailure` files "timed out" under
-      // `timeout`, which is the label an operator already has a dashboard for.
+      // Two requests reach here and only one of them is a failed proof.
+      //
+      // `outcome.started` is false when the deadline passed while the request
+      // was still waiting for a slot: nothing was proved, so nothing failed to
+      // prove, and the proof metrics stay where they are — the line #148 drew
+      // between a request this service refused and a proof it got wrong. That
+      // falls out of `timer` never having been made, and saying so here keeps
+      // it deliberate rather than accidental.
+      //
+      // When a proof did start, it is a failed proof: `classifyProofFailure`
+      // files "timed out" under `timeout`, which is the label an operator
+      // already has a dashboard for. Either way the caller waited the whole
+      // bound, so either way the answer is 504.
       const entry = proofFailedLogEntry(outcome.error);
-      timer?.failure(entry.error);
+      if (outcome.started) timer?.failure(entry.error);
       console.error(JSON.stringify(entry));
       res.status(504).json({ error: entry.error });
       return;

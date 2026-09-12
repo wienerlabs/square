@@ -92,22 +92,77 @@ describe('the waiting room', () => {
 });
 
 describe('the time bound', () => {
-  it('gives up on a proof that outruns it, and frees the slot', async () => {
+  it('answers the caller at the deadline, and holds the slot until the work stops', async () => {
     const limiter = createProofLimiter({ limit: 1, queueLimit: 1, timeoutMs: 60 });
     let settled = false;
-    const forever = () => new Promise((done) => setTimeout(() => { settled = true; done('late'); }, 5_000));
+    const forever = () => new Promise((done) => setTimeout(() => { settled = true; done('late'); }, 300));
 
     const outcome = await limiter.run(forever);
     expect(outcome.ok).toBe(false);
     expect(outcome.reason).toBe('timeout');
     expect(String(outcome.error.message)).toContain('timed out');
 
-    // The slot is back immediately, which is the point: the next caller does
-    // not wait for work nobody is listening to any more.
-    expect(limiter.active).toBe(0);
+    // The caller has been answered and the proof is still running, so the slot
+    // is still taken. snarkjs accepts no abort signal: the work goes on holding
+    // its read of the proving key whatever the caller was told, and a ceiling
+    // that let go here would stop bounding the thing it exists to bound.
     expect(settled).toBe(false);
+    expect(limiter.active).toBe(1);
+
+    await sleep(400);
+    expect(settled).toBe(true);
+    expect(limiter.active).toBe(0);
     const next = await limiter.run(async () => 'proved');
     expect(next).toEqual({ ok: true, value: 'proved' });
+  }, 60_000);
+
+  it('keeps bounding the work when every proof outruns the deadline', async () => {
+    // The failure this exists for, measured in the review of square#236: with
+    // the slot released at the deadline rather than at the work's own end, a
+    // steady arrival of proofs that each outrun the bound admitted a new one on
+    // top of every one still running -- limiter.peak stayed at the ceiling
+    // while the real number of proofs inside snarkjs reached 60 against a
+    // ceiling of 2. Timeouts fire when the machine is already too slow, which
+    // is exactly when the memory bound matters most.
+    const limiter = createProofLimiter({ limit: 2, queueLimit: 1_000, timeoutMs: 40 });
+    const { state, work } = tracker(400);
+
+    const outcomes = await Promise.all(Array.from({ length: 12 }, () => limiter.run(work)));
+
+    expect(outcomes.every((o) => !o.ok && o.reason === 'timeout')).toBe(true);
+    // Not limiter.peak, which counts slots: this counts work bodies actually
+    // running, which is what holds the memory.
+    expect(state.peak).toBe(2);
+
+    // Only the two that were admitted ever started. The other ten were still
+    // in the queue when their own deadline passed, and a deadline that runs
+    // from arrival answers them there rather than starting a proof nobody is
+    // waiting for any more. `started` is the difference between a bound per
+    // request and a bound per slot.
+    expect(state.started).toBe(2);
+    expect(outcomes.filter((o) => o.started === false)).toHaveLength(10);
+    expect(outcomes.filter((o) => o.started === true)).toHaveLength(2);
+
+    // The two that did start are still proving when their callers are answered.
+    await sleep(500);
+    expect(limiter.active).toBe(0);
+    expect(limiter.queued).toBe(0);
+  }, 60_000);
+
+  it('does not read a failure that merely says "timed out" as its own deadline', async () => {
+    // `zkey read timed out` and `ETIMEDOUT` are this service's own failures and
+    // belong in the 500 the caller should not retry, not in the 504 that means
+    // "we ran out of time, try a less loaded service". The deadline is the
+    // limiter's own, so it is recognised by identity rather than by wording.
+    const limiter = createProofLimiter({ limit: 1, queueLimit: 1, timeoutMs: 5_000 });
+
+    const outcome = await limiter
+      .run(async () => { throw new Error('ETIMEDOUT: reading the proving key timed out'); })
+      .then((value) => ({ value }), (error) => ({ error }));
+
+    expect(outcome.error).toBeInstanceOf(Error);
+    expect(String(outcome.error.message)).toContain('ETIMEDOUT');
+    expect(limiter.active).toBe(0);
   }, 60_000);
 
   it('does not take the process down when the abandoned work fails later', async () => {

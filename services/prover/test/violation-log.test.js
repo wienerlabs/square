@@ -17,6 +17,7 @@ import {
   logEntriesForProof,
   violationLogEntry,
   divergenceLogEntry,
+  requestShedLogEntry,
 } from '../src/logging.js';
 import { RULES, RULE_NAMES, evaluateRules } from '../src/rules.js';
 import { buildCircuitInput } from '../src/prover.js';
@@ -207,6 +208,30 @@ describe('divergenceLogEntry', () => {
     ]);
     expect(entry.evaluator_violated_rules).toEqual([RULES.TIME_WINDOW]);
     expectNoLeak([entry]);
+  });
+});
+
+describe('requestShedLogEntry', () => {
+  it('carries the service\'s own three counts and nothing else', () => {
+    const entry = requestShedLogEntry({ active: 4, queued: 4, limit: 4 });
+    expect(Object.keys(entry).sort()).toEqual(['active', 'event', 'limit', 'queued']);
+    expect(entry).toEqual({
+      event: 'request_shed', active: 4, queued: 4, limit: 4,
+    });
+  });
+
+  it('writes null rather than whatever it was handed', () => {
+    // Every other builder in this file is held to "nothing from the request
+    // reaches the line". This one is handed numbers rather than a request, so
+    // the property to hold is that a value which is not a count cannot become
+    // one: a leaked string would otherwise be serialised verbatim.
+    const entry = requestShedLogEntry({
+      active: `leak:${SECRET.maxDaily}`, queued: -1, limit: 2.5,
+    });
+    expect(entry).toEqual({
+      event: 'request_shed', active: null, queued: null, limit: null,
+    });
+    expect(JSON.stringify(entry)).not.toContain(SECRET.maxDaily);
   });
 });
 

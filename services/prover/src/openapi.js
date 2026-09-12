@@ -89,13 +89,16 @@ export const openapiSpec = {
                 schema: { type: 'integer' },
               },
             },
-            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Busy' } } },
           },
           504: {
             description:
-              'The proof outran the time this service will spend on one request ' +
-              '(PROVER_PROOF_TIMEOUT_MS). The slot is freed for the next caller. ' +
-              'Retrying may succeed on a less loaded service.',
+              'The request outran the time this service will spend on one of them ' +
+              '(PROVER_PROOF_TIMEOUT_MS), whether it was proving for all of that or ' +
+              'still waiting for a slot. A proof already started is not stopped — ' +
+              'the proving system takes no abort signal — so it goes on holding its ' +
+              'slot until it finishes, and the ceiling goes on counting it. Retrying ' +
+              'may succeed on a less loaded service.',
             content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
           },
         },
@@ -298,6 +301,16 @@ export const openapiSpec = {
       Error: {
         type: 'object',
         properties: { error: { type: 'string' } },
+      },
+      // A 503 carries one field more than an Error, and a caller that wants to
+      // back off correctly needs it: the same number as the `Retry-After`
+      // header, for clients that read the body rather than the headers.
+      Busy: {
+        type: 'object',
+        properties: {
+          error: { type: 'string', enum: ['busy'] },
+          retryAfterSeconds: { type: 'integer' },
+        },
       },
     },
   },
