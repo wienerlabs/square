@@ -416,6 +416,17 @@ export const policyRegistryAbi = [
   },
   {
     "type": "error",
+    "name": "CommitmentOutsideProofRange",
+    "inputs": [
+      {
+        "name": "commitment",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "LimitExceedsProofRange",
     "inputs": [
       {
