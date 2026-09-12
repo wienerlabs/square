@@ -213,4 +213,72 @@ describe("canonicalJson", () => {
     expect(() => canonicalJson({ big: 1n })).toThrow(TypeError);
     expect(() => canonicalJson(undefined)).toThrow(TypeError);
   });
+
+  it("refuses a Map instead of flattening two different maps to the same empty object", () => {
+    const alice = new Map<string, unknown>([
+      ["amount", 1],
+      ["to", "0xalice"],
+    ]);
+    const mallory = new Map<string, unknown>([
+      ["amount", 1_000_000],
+      ["to", "0xmallory"],
+    ]);
+
+    expect(() => canonicalJson(alice)).toThrow(TypeError);
+    expect(() => canonicalJson(alice)).toThrow(/cannot represent Map/);
+    expect(() => canonicalJson(mallory)).toThrow(TypeError);
+  });
+
+  it("refuses a Set", () => {
+    expect(() => canonicalJson(new Set([1, 2, 3]))).toThrow(/cannot represent Set/);
+  });
+
+  it("refuses an instance whose state hides behind a non-plain prototype", () => {
+    class Payout {
+      readonly #amount: number;
+
+      constructor(amount: number) {
+        this.#amount = amount;
+      }
+
+      amount(): number {
+        return this.#amount;
+      }
+    }
+
+    expect(() => canonicalJson(new Payout(1))).toThrow(/cannot represent Payout/);
+    expect(() => canonicalJson(new Payout(1_000_000))).toThrow(TypeError);
+    expect(() => canonicalJson(Object.create(Object.create(null)) as object)).toThrow(
+      /cannot represent an object with a non-plain prototype/
+    );
+  });
+
+  it("refuses a typed array, which would otherwise collide with the plain object of its indices", () => {
+    expect(() => canonicalJson(new Uint8Array([1, 2]))).toThrow(/cannot represent Uint8Array/);
+    expect(canonicalJson({ 0: 1, 1: 2 })).toBe('{"0":1,"1":2}');
+  });
+
+  it("refuses a Map nested inside an otherwise plain body", () => {
+    expect(() => canonicalJson({ payout: new Map([["amount", 1]]) })).toThrow(/cannot represent Map/);
+    expect(() => canonicalJson({ recipients: [new Set(["0xalice"])] })).toThrow(/cannot represent Set/);
+  });
+
+  it("still serialises plain objects, null-prototype dictionaries and classes that define toJSON", () => {
+    class Money {
+      constructor(private readonly amount: number) {}
+
+      toJSON(): unknown {
+        return { amount: this.amount };
+      }
+    }
+
+    const dictionary = Object.create(null) as Record<string, unknown>;
+    dictionary["b"] = 2;
+    dictionary["a"] = 1;
+
+    expect(canonicalJson(new Money(5))).toBe('{"amount":5}');
+    expect(canonicalJson({ paid: new Money(5) })).toBe('{"paid":{"amount":5}}');
+    expect(canonicalJson(dictionary)).toBe('{"a":1,"b":2}');
+    expect(canonicalJson({ at: new Date(0) })).toBe('{"at":"1970-01-01T00:00:00.000Z"}');
+  });
 });
