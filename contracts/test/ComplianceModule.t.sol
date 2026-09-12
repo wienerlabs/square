@@ -690,6 +690,63 @@ contract ComplianceModuleTest is Test {
         assertEq(kernel.withdrawable(provider), FIXTURE_AMOUNT, "and pays only once");
     }
 
+    /// The report does not survive a hook frame that runs out of gas, and no
+    /// ordering inside `afterAction` can make it.
+    ///
+    /// `SquareHook.afterAction` emits `ReleaseUnconfirmed` before the registry
+    /// writes, and said it did so because that is "the report that must not be
+    /// starved". Logs are journalled with the frame that wrote them: the kernel
+    /// calls the hook with `{gas: _hookGasLimit}` and, when that call fails,
+    /// emits `HookFailed` and keeps going -- the hook's whole frame is gone,
+    /// including anything it emitted earlier in the same call.
+    ///
+    /// So the unconfirmed payment -- the one event that says money left escrow
+    /// with nothing to book it -- is reported as a generic `hookCall` failure
+    /// instead, losing the payee and the amount with it. This holds the
+    /// behaviour as it is; the claim in the comment is what has to go.
+    function test_theUnconfirmedReportIsLostWhenTheHookFrameRunsOut() public {
+        bytes memory proof = compliantProof();
+        uint256 jobId = submittedJob();
+        vm.warp(FIXTURE_TIMESTAMP);
+
+        // The check cannot book, so the kernel has paid and `_reportUnconfirmed`
+        // has something to report. Same injection as the test below.
+        vm.mockCallRevert(
+            address(registry),
+            abi.encodeWithSelector(PolicyRegistry.recordSpend.selector),
+            abi.encodeWithSelector(IPolicyRegistry.NotASpender.selector, address(module))
+        );
+        // And the reputation write, which runs after the report, eats the rest
+        // of the hook's budget.
+        reputation.setGasToBurn(HOOK_GAS_LIMIT);
+
+        vm.recordLogs();
+        vm.prank(address(keeper));
+        kernel.complete(jobId, bytes32(0), abi.encode(FULL_BPS, proof));
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        vm.clearMockedCalls();
+        reputation.setGasToBurn(0);
+
+        // Not `_count(logs, hook, ReleaseUnconfirmed)`. `vm.recordLogs` hooks the
+        // LOG opcode rather than the journal, so it still reports a log emitted
+        // in a frame that went on to revert -- measured here: it counts one
+        // while the trace shows the hook returning OutOfGas. A receipt does not.
+        //
+        // `_writeReputation` sets `_recorded[jobId]` before the call that runs
+        // out, so the getter is a witness the journal actually kept: false means
+        // that write was rolled back, and everything the frame emitted with it.
+        assertFalse(hook.recorded(jobId), "the hook frame committed; this no longer measures a lost report");
+        assertEq(
+            _count(logs, address(kernel), ISquareJob.HookFailed.selector),
+            1,
+            "the kernel reports the whole hook call as failed instead"
+        );
+        // Which is why it matters: the money moved and the receipt does not say
+        // to whom or how much.
+        assertEq(kernel.withdrawable(provider), FIXTURE_AMOUNT, "the preview had already paid");
+        assertEq(registry.spentToday(client), FIXTURE_SPENT_BEFORE, "and nothing booked it");
+    }
+
     /// Acceptance, the literal case: a spend the registry refuses after the
     /// preview has paid still spends the proof, so the next job is refused by
     /// the mark alone with the counter exactly where the proof wants it.

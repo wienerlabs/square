@@ -206,8 +206,22 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
             uint8 outcome = _checkedJob == jobId ? _checkOutcome : CHECK_NOT_RUN;
             _checkedJob = 0;
             _checkOutcome = CHECK_NOT_RUN;
-            // First, before the registry writes: those run arbitrary registry
-            // code under `try`, and this is the report that must not be starved.
+            // First, before the registry writes, because they run arbitrary
+            // registry code and this is the report worth getting out early.
+            //
+            // What the ordering does not do is guarantee it. A log belongs to
+            // the frame that wrote it: the kernel calls this hook with
+            // `{gas: hookGasLimit}` and, if that call fails, emits `HookFailed`
+            // and carries on -- and everything this frame emitted goes with the
+            // frame, whatever order it was emitted in. A registry that eats the
+            // budget rather than reverting takes the report with it, and
+            // `test_theUnconfirmedReportIsLostWhenTheHookFrameRunsOut` holds
+            // that as it is. Moving the emit into a `try this.…{gas: n}` of its
+            // own would not help either: a nested frame's logs are journalled
+            // into its parent and discarded with it.
+            //
+            // So this is best-effort, and the guarantee lives one level up, in
+            // the `HookFailed` the kernel emits from its own frame.
             if (outcome != CHECK_PASSED && address(_complianceModule) != address(0)) _reportUnconfirmed(jobId);
             _writeReputation(jobId, 1, "completed", reason);
             if (outcome == CHECK_PASSED) _writeValidation(jobId, 100);
