@@ -142,6 +142,23 @@ export const roundAt = (unixSeconds) =>
 export const timeOfRound = (round) =>
   DRAND.genesis + (round - 1) * DRAND.period;
 
+// The comparison `verify-chain` makes between the beacon in the key and the
+// signature the public chain published, in one place.
+//
+// square#227's review: the round-trip test wrote this out by hand and called it
+// "verify-chain's, character for character". It was, until it was not -- a
+// change to the real comparison could not turn that test red. There is one of
+// it now, and both ends call it.
+//
+// Case-insensitive because the two sources spell hex differently: snarkjs
+// stores what it was handed, drand's API returns lower case. Length is not
+// checked here on purpose; a 64-character sha256 spelling simply does not equal
+// the 96-character signature, which is the failure #227 is about.
+export const beaconMatchesRound = (beaconHash, signature) =>
+  typeof beaconHash === 'string'
+  && typeof signature === 'string'
+  && beaconHash.toLowerCase() === signature.toLowerCase();
+
 // Echoing the command is worth keeping: a ceremony tool that hides what it runs
 // is hard to audit, and every argument here is meant to be public.
 //
@@ -539,7 +556,7 @@ async function verifyChain() {
       } catch (error) {
         bad(`could not fetch drand round ${announced.round}: ${error.message}`);
       }
-      if (live && beacons[0].beaconHash?.toLowerCase() === live.signature.toLowerCase()) {
+      if (live && beaconMatchesRound(beacons[0].beaconHash, live.signature)) {
         ok(`beacon is drand quicknet round ${announced.round}, matching the public chain`);
       } else if (live) {
         bad(`beacon in the key does not match drand round ${announced.round}`);

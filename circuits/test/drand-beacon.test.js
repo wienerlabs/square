@@ -21,6 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   DRAND, chainHashOf, assertQuicknet, verifyDrandSignature, roundAt, timeOfRound,
+  beaconMatchesRound,
 } from '../scripts/ceremony.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -165,13 +166,29 @@ describe('the beacon value in the key', () => {
   it('is the signature in beacon.md, not a digest of it', () => {
     const doc = fs.readFileSync(path.join(CEREMONY_DOCS, 'beacon.md'), 'utf8');
     expect(doc).toContain('jq -r .signature');
-    expect(doc).not.toMatch(/hashlib\.sha256\(bytes\.fromhex\([^)]*signature/);
+    // `[^\n]*`, not `[^)]*`: the line this forbids is
+    //   hashlib.sha256(bytes.fromhex(json.load(open('…'))['signature']))
+    // and `[^)]*` cannot reach `signature` past the `)` of `open('…')`, so the
+    // guard never matched the one thing it exists to catch. Measured by putting
+    // that line back into both pages: both tests stayed green. `[\s\S]*?` also
+    // matches, but it is unbounded and would pair an opening in one section
+    // with the word `signature` anywhere later in the file; a line is the unit
+    // the mistake comes in.
+    expect(doc).not.toMatch(/hashlib\.sha256\(bytes\.fromhex\([^\n]*signature/);
   });
 
   it('is the signature in verifying.md, not a digest of it', () => {
     const doc = fs.readFileSync(path.join(CEREMONY_DOCS, 'verifying.md'), 'utf8');
     expect(doc).toContain('jq -r .signature');
-    expect(doc).not.toMatch(/hashlib\.sha256\(bytes\.fromhex\([^)]*signature/);
+    // `[^\n]*`, not `[^)]*`: the line this forbids is
+    //   hashlib.sha256(bytes.fromhex(json.load(open('…'))['signature']))
+    // and `[^)]*` cannot reach `signature` past the `)` of `open('…')`, so the
+    // guard never matched the one thing it exists to catch. Measured by putting
+    // that line back into both pages: both tests stayed green. `[\s\S]*?` also
+    // matches, but it is unbounded and would pair an opening in one section
+    // with the word `signature` anywhere later in the file; a line is the unit
+    // the mistake comes in.
+    expect(doc).not.toMatch(/hashlib\.sha256\(bytes\.fromhex\([^\n]*signature/);
   });
 });
 
@@ -201,12 +218,16 @@ describe.skipIf(!HAVE_ZKEY)('what `zkey beacon` writes is what `verify-chain` re
       expect(beacons).toHaveLength(1);
       expect(beacons[0].numIterationsExp).toBe(10);
 
-      // This comparison is verify-chain's, character for character:
-      //   beacons[0].beaconHash?.toLowerCase() === live.signature.toLowerCase()
-      // With the documented sha256 spelling in the key, it reads 64 characters
-      // here and fails.
-      expect(beacons[0].beaconHash.toLowerCase()).toBe(SIGNATURE_96.toLowerCase());
+      // verify-chain's own comparison, called rather than copied. Written out
+      // by hand here, this passed whatever `ceremony.mjs` did with it; now a
+      // change to the real one turns this red.
+      expect(beaconMatchesRound(beacons[0].beaconHash, SIGNATURE_96)).toBe(true);
       expect(beacons[0].beaconHash).toHaveLength(96);
+
+      // And the substitution the whole issue is about: the documented sha256
+      // spelling is 64 characters, so the same comparison refuses it.
+      const digest = crypto.createHash('sha256').update(Buffer.from(SIGNATURE_96, 'hex')).digest('hex');
+      expect(beaconMatchesRound(digest, SIGNATURE_96)).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
