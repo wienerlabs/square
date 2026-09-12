@@ -127,4 +127,13 @@ export interface ResolverOptions {
    * redirect hop. Omit to allow any public host. The IPFS gateway is exempt.
    */
   allowedAgentUriHosts?: string[];
+  /**
+   * Where the detail of a chain read failure goes. The resolution result only
+   * ever says *what* failed ("ownerOf could not be read"), never *where*: viem
+   * puts the RPC endpoint, and with it any API key in its path, into the
+   * message of every transport error, and the result goes back to whoever
+   * asked (#267). The cause is handed here instead, for the operator's log.
+   * Omit to drop it.
+   */
+  onNetworkError?: (context: string, cause: unknown) => void;
 }

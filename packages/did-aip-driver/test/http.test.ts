@@ -114,6 +114,29 @@ describe("driver HTTP", () => {
     server.close();
   });
 
+  it("keeps the RPC endpoint out of a 502 envelope", async () => {
+    // viem writes the endpoint into every transport error, and on Alchemy,
+    // Infura and QuickNode the endpoint carries the operator's API key in its
+    // path. The envelope goes to whoever asked, and any DID on a rate-limited
+    // or briefly down chain used to hand them the key (#267). Port 1 is
+    // closed, so the chain id check fails before any other read, with the
+    // error viem builds for exactly that case; the real resolver is used so
+    // the whole path is what is measured.
+    const secret = "http://127.0.0.1:1/v2/SUPER-SECRET-ALCHEMY-KEY-abc123";
+    const app = createApp({ ...CONFIG, rpc: { 5042002: secret } });
+    const server = createServer(app);
+    await new Promise<void>((res) => server.listen(0, () => res()));
+    const addr = server.address();
+    const url = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
+    const r = await fetch(`${url}/1.0/identifiers/did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:1`);
+    expect(r.status).toBe(502);
+    const text = await r.text();
+    expect(text).not.toContain("SUPER-SECRET");
+    expect(text).not.toContain("127.0.0.1:1");
+    expect(JSON.parse(text).didResolutionMetadata).toMatchObject({ error: "networkError", errorMessage: "chain id check failed" });
+    server.close();
+  });
+
   it("answers a path Express itself cannot decode with a 400 envelope, not an HTML page", async () => {
     // A lone `%` is not valid percent-encoding, so Express's own parameter
     // decoding fails before the route runs. That error carries status 400 and

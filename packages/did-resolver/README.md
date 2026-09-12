@@ -38,6 +38,12 @@ not censorship-resistant. You get the document derived from the chain plus a war
 `didDocumentMetadata.registrationFile` is `"unavailable"`: `service` is empty and
 `deactivated` unset because nothing was read, not because the file said so. Check it before
 treating a missing `deactivated` as "active".
+A JSON array is not a registration file either: nothing in it is `active` or `services`, so it
+counts as not read, the same way. And the same shape holds one level down for the agent
+wallet: `getAgentWallet` is optional in ERC-8004, so a revert is the registry saying "not
+exposed" and the document is whole without it, but a transport failure on that one read
+is `agentWalletUnavailable` in the warnings, because the key may be there and a document
+that silently omits it hands a verifier an `assertionMethod` with the payment key missing.
 
 **An empty `agentURI` resolves.** Registering with the no-argument `register()` is normal —
 `agentId` 1 on Arc Testnet is exactly this. You get a valid document with no services.
@@ -66,6 +72,7 @@ from. The spec allows either choice (§9.2) and requires only that v1 is recogni
 | `timeoutMs` | Default 10s, for the whole fetch including redirects. |
 | `maxAgentUriBytes` | Largest registration file read. Default 1 MiB. |
 | `allowedAgentUriHosts` | Hosts a registration file may be fetched from, checked on every redirect hop. Omit to allow any public host. The gateway is exempt; where it redirects to is not. |
+| `onNetworkError` | Where the cause of a failed chain read goes. The result says what failed and never where; viem puts the endpoint, API key included, into every transport error, and the result is public. Omit to drop the cause. |
 
 The resolver verifies `eth_chainId` against the DID before reading. A misconfigured
 endpoint would otherwise return a valid document for a *different* agent under a
@@ -95,6 +102,10 @@ default fetcher treats it as hostile all the way down, not only at the scheme:
   status, because the resolver relays it to whoever asked as a warning; the status and
   the network stack's own words are on `AgentUriError.status` and `.detail` for a caller
   that owns the URI, such as the CLI checking a card before registering it.
+  The chain reads keep the same rule: `networkError`'s message names the read that failed
+  and nothing else, because viem writes the RPC endpoint into every transport error and on
+  a hosted provider the endpoint carries the API key in its path. The cause goes to
+  `onNetworkError` for the operator's log, or nowhere.
 
 One thing this does not do: resolve hostnames. The module runs in browsers as well as in
 Node, so a name that points at a private address is not caught. A deployment that needs
