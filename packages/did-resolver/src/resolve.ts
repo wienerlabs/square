@@ -41,6 +41,17 @@ export class AipDidResolver {
 
   constructor(private readonly options: ResolverOptions) {}
 
+  /**
+   * A chain read failed. The result that goes back to the caller says which
+   * read; the cause, which names the endpoint, goes to the operator instead.
+   * `fetch.ts` keeps the same rule for the registration file, and for the same
+   * reason: the result is public and the URL is not (#267).
+   */
+  private networkFailure(context: string, cause: unknown): DidResolutionResult {
+    this.options.onNetworkError?.(context, cause);
+    return failure("networkError", context);
+  }
+
   private client(chainId: number): PublicClient | null {
     const cached = this.clients.get(chainId);
     if (cached) return cached;
@@ -84,7 +95,7 @@ export class AipDidResolver {
         result.didDocumentMetadata.deprecated = true;
         return result;
       } catch (err) {
-        return failure("networkError", `v1 resolver threw: ${String(err)}`);
+        return this.networkFailure("v1 resolver threw", err);
       }
     }
 
@@ -118,7 +129,7 @@ export class AipDidResolver {
         );
       }
     } catch (err) {
-      return failure("networkError", `chain id check failed: ${String(err)}`);
+      return this.networkFailure("chain id check failed", err);
     }
 
     // Pin every read to one block. didDocumentMetadata.versionId claims to be
@@ -136,7 +147,7 @@ export class AipDidResolver {
     try {
       blockNumber = await client.getBlockNumber();
     } catch (err) {
-      return failure("networkError", `block number read failed, so the reads could not be pinned: ${String(err)}`);
+      return this.networkFailure("block number read failed, so the reads could not be pinned", err);
     }
 
     const contract = { address: parsed.registry, abi: IDENTITY_REGISTRY_ABI, blockNumber } as const;
@@ -150,15 +161,27 @@ export class AipDidResolver {
       // rate limit is not: the driver maps notFound to a cacheable 404 and
       // networkError to a 502 that says "retry", and a flaky RPC must not
       // turn into an authoritative "this agent does not exist".
-      if (!chainSaidNo(err)) return failure("networkError", `ownerOf could not be read: ${String(err)}`);
+      if (!chainSaidNo(err)) return this.networkFailure("ownerOf could not be read", err);
       return failure("notFound", `agent ${parsed.agentId} does not exist in ${parsed.registry}`);
     }
 
     let agentWallet: string | undefined;
     try {
       agentWallet = (await client.readContract({ ...contract, functionName: "getAgentWallet", args: [parsed.agentId] })) as string;
-    } catch {
-      agentWallet = undefined; // OPTIONAL in ERC-8004; absence is not an error.
+    } catch (err) {
+      // getAgentWallet is OPTIONAL in ERC-8004, so a revert is the registry
+      // saying "not exposed" and the document is complete without it. A
+      // transport failure is not that: the wallet may well be there, and a
+      // document that silently drops it hands a verifier an assertionMethod
+      // with the payment key missing, at a versionId that claims to be whole
+      // (spec §4.4). The same split ownerOf makes above, ending in a warning
+      // rather than a failure because tokenURI's failure ends that way too:
+      // the on-chain identity is still known, one field of it is not (#272).
+      agentWallet = undefined;
+      if (!chainSaidNo(err)) {
+        this.options.onNetworkError?.("getAgentWallet could not be read", err);
+        warnings.push({ code: "agentWalletUnavailable", message: "getAgentWallet could not be read" });
+      }
     }
 
     // Whether what the Registration File would have said is known. It is
@@ -190,7 +213,11 @@ export class AipDidResolver {
             ...(this.options.allowedAgentUriHosts !== undefined ? { allowedHosts: this.options.allowedAgentUriHosts } : {}),
           }));
         const doc = await fetcher(agentUri);
-        if (typeof doc === "object" && doc !== null) {
+        // A JSON array is an object to typeof and a registration file to
+        // nothing else: neither `active` nor `services` can be read from it,
+        // so it is the "could not be parsed" case of spec §6.1, not a read
+        // file (#273).
+        if (typeof doc === "object" && doc !== null && !Array.isArray(doc)) {
           registration = doc as RegistrationFile;
           registrationKnown = true;
         } else {
