@@ -271,6 +271,16 @@ function main(argv) {
   const header = readGroth16Header(buf, sections.get(2));
   const { csHash, contributions } = readContributions(buf, sections.get(10), header.n8q);
 
+  // A beacon is not a contribution, and the count used to be taken from the
+  // unfiltered list — so every beacon-applied key reported one contributor too
+  // many (square#233). That number is not only printed: `ceremony.mjs` writes it
+  // into the published transcript as `phase2_contributions`, so a real
+  // two-party ceremony would have claimed three for good, and CI prints it on
+  // every run under a step that says it is read out of the binary rather than
+  // taken from a claim. `ceremony.mjs`'s own `verify-chain` already filtered by
+  // kind; this is the file that did not, though its header counts the two as
+  // separate facts.
+  const contributes = contributions.filter((c) => c.type === 0);
   const beacons = contributions.filter((c) => c.type === 1);
   const phase1 = identifyPhase1(header);
   const report = {
@@ -285,7 +295,7 @@ function main(argv) {
       alpha1: header.alpha1,
       beta2: header.beta2,
     },
-    phase2ContributionCount: contributions.length,
+    phase2ContributionCount: contributes.length,
     beaconApplied: beacons.length > 0,
     contributions: contributions.map((c) => ({
       index: c.index,
@@ -353,7 +363,11 @@ function main(argv) {
     );
   }
 
-  // Phase 2.
+  // Phase 2. Counted without the beacon (square#233), so the number has to
+  // agree with itself when it is one.
+  const counted = report.phase2ContributionCount === 1
+    ? '1 contribution'
+    : `${report.phase2ContributionCount} contributions`;
   if (report.phase2ContributionCount <= 1 && !report.beaconApplied) {
     lines.push(
       '  phase 2: single contribution, no beacon. Soundness rests entirely on one',
@@ -361,12 +375,12 @@ function main(argv) {
     );
   } else if (!report.beaconApplied) {
     lines.push(
-      `  phase 2: ${report.phase2ContributionCount} contributions, no beacon. Multi-party, but without a public`,
+      `  phase 2: ${counted}, no beacon. Multi-party, but without a public`,
       '           beacon the final randomness is not publicly verifiable.',
     );
   } else {
     lines.push(
-      `  phase 2: ${report.phase2ContributionCount} contributions with a beacon applied. Verify the beacon hash`,
+      `  phase 2: ${counted} with a beacon applied. Verify the beacon hash`,
       '           against the source announced before the ceremony.',
     );
   }

@@ -24,6 +24,37 @@ const ARTIFACTS_DIR = process.env.PROVER_ARTIFACTS_DIR
 const WASM_PATH = path.join(ARTIFACTS_DIR, 'payment.wasm');
 const ZKEY_PATH = path.join(ARTIFACTS_DIR, 'payment.zkey');
 
+/**
+ * The files this module opens, exported so nothing else has to guess them.
+ *
+ * square#235: `/health` derived the same directory a second time and fell back
+ * to `path.resolve('artifacts')`, which is relative to the working directory,
+ * while this fallback is relative to the module. With `PROVER_ARTIFACTS_DIR`
+ * set the two agree; without it they agree only when the process happens to be
+ * started from `services/prover`. Measured, both ways round:
+ *
+ *   artifacts in the working directory, none beside the module
+ *     GET  /health -> 200 healthy
+ *     POST /prove  -> 500 ENOENT .../services/prover/artifacts/payment.wasm
+ *
+ *   artifacts beside the module, none in the working directory
+ *     GET  /health -> 503 unhealthy
+ *     POST /prove  -> 200, a real proof
+ *
+ * The first is a container that passes its probe and fails every request; the
+ * second never satisfies `depends_on: {condition: service_healthy}`. A health
+ * check is only worth the path it inspects, so there is one derivation and the
+ * check reads it from here.
+ *
+ * The fallback stays module-relative: it names the same directory wherever the
+ * service is started from, which a working-directory fallback cannot.
+ */
+export const ARTIFACT_PATHS = Object.freeze({
+  dir: ARTIFACTS_DIR,
+  wasm: WASM_PATH,
+  zkey: ZKEY_PATH,
+});
+
 // Fixed list sizes, matching the circuit's template parameters:
 //   component main = PaymentCompliance(MAX_WHITELIST, MAX_BLOCKED, MAX_CATEGORIES)
 const MAX_WHITELIST = 10;
@@ -145,6 +176,30 @@ export function validateRequest(req) {
   if (req.time_restrictions !== undefined && req.time_restrictions !== null) {
     if (!Array.isArray(req.time_restrictions)) {
       throw new Error('time_restrictions: must be an array');
+    }
+
+    // An empty list is not "no window", and it was the one value in this
+    // function that fell open rather than closed.
+    //
+    // buildCircuitInput reads `[0]`, which is undefined for `[]`, so
+    // time_active became 0 and rule 6 -- `1 - time_active + time_active *
+    // compliant` -- was satisfied by anything. Nothing showed it: the
+    // off-circuit evaluator short-circuits on the same field, so rules_agree
+    // stayed true and violated_rules stayed empty, and the chain could not see
+    // it either, because the commitment muxes the time leaf to 0 on both sides
+    // and therefore still matched.
+    //
+    // The empty day list below comes from the same mechanism -- a `.filter()`
+    // that matched nothing, an empty form field -- and is refused because it
+    // fails closed, where every payment is rejected and somebody notices. This
+    // one failed open. square#226 measured it: at 03:00 on a Sunday, under a
+    // policy of 09:00 to 17:00 Monday to Friday, `[]` proved compliant.
+    if (req.time_restrictions.length === 0) {
+      throw new Error(
+        'time_restrictions: must hold exactly one window. An empty list is not a '
+        + 'spelling for "no window"; omit time_restrictions entirely to leave the '
+        + 'window unrestricted.',
+      );
     }
 
     // One window, or none. Anything past the first used to be validated and

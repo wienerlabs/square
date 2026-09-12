@@ -14,6 +14,31 @@ import {MockUSDC3009} from "../test/mocks/MockUSDC3009.sol";
 import {MockIdentityRegistry, MockReputationRegistry, MockValidationRegistry} from "../test/mocks/MockRegistries.sol";
 
 contract DeployLocal is Script {
+    /// @dev The chain this script may deploy to, and the environment variable
+    ///      that names a different one on purpose.
+    ///
+    ///      It deploys mocks — `MockUSDC3009`, three mock ERC-8004 registries,
+    ///      a whole second kernel and hook — and then writes their addresses to
+    ///      `deployments/<chainid>.json`. For 5042002 that is the file in
+    ///      version control carrying the real Arc Testnet addresses.
+    ///
+    ///      square#232: `docs/deploy/local-stack.md` told an operator to point
+    ///      the stack at Arc with `CHAIN_ID=5042002`, a funded key and a
+    ///      `docker compose up` that starts this container. The mock stack would
+    ///      have been broadcast to the real testnet and the deployment record
+    ///      overwritten with mock addresses, with the indexer and keeper then
+    ///      reporting healthy against it.
+    ///
+    ///      A fork answers with the chain id of the chain it forks, so no check
+    ///      here can tell one from the other. `DEPLOY_LOCAL_ALLOW_CHAIN_ID` is
+    ///      how a caller says which chain it means: `packages/aa` sets it to
+    ///      5042002 for the Arc fork it spawns itself and deletes the artefacts
+    ///      afterwards. Nothing reaches a real network without someone writing
+    ///      that id down first.
+    uint256 internal constant LOCAL_CHAIN_ID = 31337;
+
+    error WrongChain(uint256 chainId, uint256 allowed);
+
     string internal constant ANVIL_MNEMONIC = "test test test test test test test test test test test junk";
     address internal constant ANVIL_1 = 0x70997970C51812dc3A010C7d01b50e0d17dc79C8;
     address internal constant ANVIL_2 = 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC;
@@ -41,6 +66,9 @@ contract DeployLocal is Script {
     }
 
     function run() external {
+        uint256 allowed = vm.envOr("DEPLOY_LOCAL_ALLOW_CHAIN_ID", LOCAL_CHAIN_ID);
+        if (block.chainid != allowed) revert WrongChain(block.chainid, allowed);
+
         uint256 key = vm.envOr("DEPLOYER_PRIVATE_KEY", vm.deriveKey(ANVIL_MNEMONIC, 0));
         address deployer = vm.addr(key);
         vm.startBroadcast(key);

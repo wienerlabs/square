@@ -93,6 +93,14 @@ describe('POST /prove refuses a bad request before proving', () => {
     expect(response.body.error).toContain('only one window can be proved');
   });
 
+  // square#226. The one spelling in this area that turned the rule off instead
+  // of refusing: no 400, and a compliant proof with the window ignored.
+  it('answers 400 for an empty time restriction list', async () => {
+    const response = await post({ ...VALID, time_restrictions: [] });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain('exactly one window');
+  });
+
   it('answers 400 for an empty day list', async () => {
     const response = await post({
       ...VALID,
