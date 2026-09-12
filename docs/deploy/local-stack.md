@@ -32,7 +32,7 @@ account, which controls nothing outside a local chain.
 |---|---|---|
 | anvil | 8545 | The chain, id 31337 |
 | postgres | 5432 | One database, shared by the indexer and the keeper |
-| deployer | — | One shot: `DeployLocal.s.sol`, writes `contracts/deployments/31337.json`. Refuses any chain but 31337 unless `DEPLOY_LOCAL_ALLOW_CHAIN_ID` names another |
+| deployer | — | One shot: `DeployLocal.s.sol`, writes `contracts/deployments/31337.json`. Refuses any chain but 31337 unless `DEPLOY_LOCAL_ALLOW_CHAIN_ID` names another, and on that other chain writes only where `DEPLOYMENT_FILE` says, never to `deployments/<chainid>.json`, the record of that chain's real deployment |
 | migrate | — | One shot: `square-data migrate up` |
 | circuits | — | One shot: copies `payment.wasm` and `payment.zkey` into a volume |
 | prover | 3003 | Groth16 proofs |

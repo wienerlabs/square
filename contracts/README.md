@@ -39,6 +39,11 @@ owns, 1 is the client, 2 the provider (owner of mock agent 1), 3 the buyer,
 4 to 6 the arbiters. `@squaresdk/core`'s anvil test runs the whole lifecycle
 against it.
 
+It runs on 31337 only, unless `DEPLOY_LOCAL_ALLOW_CHAIN_ID` names the chain
+meant (a fork of Arc answers with Arc's id). On that chain `DEPLOYMENT_FILE`
+has to say where the addresses go, and `deployments/<chainid>.json` is refused:
+that is the record of the chain's real deployment, and a mock stack is not it.
+
 ## Arc Testnet
 
 ```bash

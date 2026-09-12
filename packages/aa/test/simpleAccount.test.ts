@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { beforeAll, describe, expect, inject, it } from "vitest";
 import {
   createPublicClient,
@@ -6,17 +6,25 @@ import {
   encodeFunctionData,
   http,
   isErc6492Signature,
+  keccak256,
   recoverMessageAddress,
   size,
+  toHex,
   type Hex,
   type PublicClient,
 } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { entryPoint07Abi, toPackedUserOperation } from "viem/account-abstraction";
-import { deploymentFile, forkChain } from "../scripts/fork.js";
+import { arcDeploymentFile, forkChain, forkDeploymentFile, parseDeployment } from "../scripts/fork.js";
+import { encodeSubmit } from "../scripts/square.js";
 import { simpleAccountAbi, simpleAccountFactoryAbi } from "../src/abi.js";
 import { ENTRY_POINT_V07, SIMPLE_ACCOUNT_FACTORY_V07, SIMPLE_ACCOUNT_IMPLEMENTATION_V07 } from "../src/constants.js";
-import { toSimpleSmartAccount, type SimpleSmartAccount } from "../src/simpleAccount.js";
+import { CallSimulationRevertedError } from "../src/errors.js";
+import {
+  toSimpleSmartAccount,
+  SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT,
+  type SimpleSmartAccount,
+} from "../src/simpleAccount.js";
 import type { UserOperationV07 } from "../src/selfBundler.js";
 
 const rpcUrl = inject("rpcUrl");
@@ -33,9 +41,15 @@ describe("toSimpleSmartAccount against the canonical v0.7 factory on the Arc for
     account = await toSimpleSmartAccount({ client: publicClient, owner, salt });
   });
 
-  it("the local deployment file was removed after the stack was read", () => {
-    expect(existsSync(deploymentFile)).toBe(false);
+  it("the fork's record was removed once read, and the Arc Testnet record was not touched", () => {
+    expect(existsSync(forkDeploymentFile)).toBe(false);
     expect(deployment.chainId).toBe(forkChain.id);
+    // Same bytes as before the deploy, and not the fork's stack under the
+    // real addresses' name: deploying to the fork used to overwrite this file
+    // and the harness then deleted it (#270).
+    const record = readFileSync(arcDeploymentFile, "utf8");
+    expect(record).toBe(inject("arcDeploymentRecord"));
+    expect(parseDeployment(JSON.parse(record)).SquareJob).not.toBe(deployment.SquareJob);
   });
 
   it("the factory on Arc points at the v0.7 implementation bound to the v0.7 EntryPoint", async () => {
@@ -130,6 +144,35 @@ describe("toSimpleSmartAccount against the canonical v0.7 factory on the Arc for
     const signature = await account.signUserOperation({ ...userOperation, chainId: forkChain.id });
     expect(size(signature)).toBe(65);
     expect(await recoverMessageAddress({ message: { raw: onChainHash }, signature })).toBe(owner.address);
+  });
+
+  // The hint is what viem's prepareUserOperation and the self-bundler consult
+  // before estimating anything themselves, and both hand it the fields the
+  // caller already fixed. What is fixed is not estimated, and for callGasLimit
+  // that means not simulated: the simulation is where a reverting call is
+  // refused, and a caller who fixed the limit has chosen to submit it (#274).
+  it("the gas hint estimates only what the request leaves open, and does not simulate a call whose limit is fixed", async () => {
+    const hint = account.userOperation?.estimateGas;
+    expect(hint).toBeDefined();
+    if (!hint) return;
+    const { factory, factoryData } = await account.getFactoryArgs();
+    // submit on a job that does not exist reverts, whatever else is on the fork.
+    const reverting = await account.encodeCalls([
+      { to: deployment.SquareJob, data: encodeSubmit(2n ** 200n, keccak256(toHex("deliverable:none"))) },
+    ]);
+    const undeployed = { sender: account.address, nonce: 0n, factory, factoryData, callData: reverting };
+
+    await expect(hint(undeployed)).rejects.toBeInstanceOf(CallSimulationRevertedError);
+
+    const partly = await hint({ ...undeployed, callGasLimit: 150_000n });
+    expect(partly?.callGasLimit).toBeUndefined();
+    expect(partly?.verificationGasLimit).toBeGreaterThan(SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT);
+
+    expect(await hint({ ...undeployed, callGasLimit: 150_000n, verificationGasLimit: 400_000n })).toEqual({});
+
+    const deployedForm = { sender: account.address, nonce: 0n, callData: reverting };
+    expect(await hint(deployedForm)).toEqual({ verificationGasLimit: SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT });
+    expect(await hint({ ...deployedForm, verificationGasLimit: 400_000n })).toEqual({});
   });
 
   it("signMessage delegates to the owner and viem wraps it in ERC-6492 while undeployed", async () => {

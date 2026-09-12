@@ -200,16 +200,27 @@ export async function toSimpleSmartAccount(
     },
 
     userOperation: {
+      // Only what the request leaves open is estimated. A request that
+      // carries callGasLimit is a caller who has decided to submit the call
+      // whatever a simulation says, and the simulation below is the one that
+      // would refuse it (#274); viem's prepareUserOperation and the
+      // self-bundler both put the caller's fixed fields in the request.
       async estimateGas(request) {
         if (!request.factory) {
-          return { verificationGasLimit: SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT };
+          return request.verificationGasLimit === undefined
+            ? { verificationGasLimit: SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT }
+            : {};
         }
-        const creationGas = await estimateGas(client, { to: factoryAddress, data: factoryData });
-        const callGasLimit = request.callData
-          ? await estimateUndeployedCallGas(request.callData)
-          : undefined;
+        const verificationGasLimit =
+          request.verificationGasLimit === undefined
+            ? (await estimateGas(client, { to: factoryAddress, data: factoryData })) + SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT
+            : undefined;
+        const callGasLimit =
+          request.callData && request.callGasLimit === undefined
+            ? await estimateUndeployedCallGas(request.callData)
+            : undefined;
         return {
-          verificationGasLimit: creationGas + SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT,
+          ...(verificationGasLimit === undefined ? {} : { verificationGasLimit }),
           ...(callGasLimit === undefined ? {} : { callGasLimit }),
         };
       },
