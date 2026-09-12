@@ -205,7 +205,7 @@ One listing per job. A cancelled listing may be replaced; a sold one is final.
 ```
 squareJob, claimMarket, identityRegistry, reputationRegistry, validationRegistry   immutable
 complianceModule   address                       zero until #27 plugs in
-agentOf            mapping(uint256 jobId => uint256 agentId)         bound at submit
+boundAgentPlusOne  mapping(uint256 jobId => uint256)                 bound at submit; the agent id plus one, zero = none (agent 0 exists, #300)
 validationOf       mapping(uint256 jobId => bytes32 requestHash)     bound at submit
 recorded           mapping(uint256 jobId => bool)                    reputation written once
 ```

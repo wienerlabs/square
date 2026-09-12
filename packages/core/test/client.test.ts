@@ -1,6 +1,15 @@
 import { formatDid } from "@squaresdk/did-resolver";
 import { describe, expect, it } from "vitest";
-import { decodeErrorResult, encodeErrorResult, type Abi, type PublicClient, type TransactionReceipt } from "viem";
+import {
+  ContractFunctionExecutionError,
+  ContractFunctionRevertedError,
+  decodeErrorResult,
+  encodeErrorResult,
+  HttpRequestError,
+  type Abi,
+  type PublicClient,
+  type TransactionReceipt,
+} from "viem";
 import {
   AgentIdMismatchError,
   connectSquareClient,
@@ -28,6 +37,8 @@ interface FakeOptions {
   walletChainId?: number | undefined;
   /** What eth_chainId answers. Defaults to the deployment's chain, the honest endpoint. */
   endpointChainId?: number;
+  /** What a read answers, by function. Defaults to 0n for everything. */
+  answer?: (request: SimulatedCall) => unknown;
 }
 
 interface SimulatedCall {
@@ -66,7 +77,7 @@ function fakes(options: FakeOptions = {}) {
     },
     readContract: async (request: SimulatedCall) => {
       reads.push(request);
-      return 0n;
+      return options.answer ? options.answer(request) : 0n;
     },
     waitForTransactionReceipt: async () => receipt,
   } as unknown as PublicClient;
@@ -310,5 +321,65 @@ describe("a revert raised behind the contract being called still decodes", () =>
   it("keeps every function of the contract the call is for and adds no other", () => {
     const fns = (abi: Abi) => abi.filter((i) => i.type === "function").map((i) => (i as { name: string }).name).sort();
     expect(fns(withSquareErrors(squareJobAbi))).toEqual(fns(squareJobAbi));
+  });
+});
+
+describe("agentOf tells no agent from agent 0", () => {
+  // Agent id 0 exists (on Arc's registry it is the first registration), and
+  // the hook used to answer 0 for it and for "nothing bound" alike (#300).
+  const hookWith = (table: Record<string, unknown>) =>
+    square({
+      answer: (request) => {
+        if (request.functionName in table) return table[request.functionName];
+        throw new Error(`unexpected read ${request.functionName}`);
+      },
+    });
+
+  /** What the deployed hook answers to a selector it does not have: a revert carrying nothing. */
+  const unknownSelector = (functionName: string) =>
+    new ContractFunctionExecutionError(
+      new ContractFunctionRevertedError({ abi: squareHookAbi, functionName, message: "execution reverted" }) as never,
+      { abi: squareHookAbi, functionName, args: [1n], contractAddress: deployment.squareHook },
+    );
+
+  it("reads boundAgentOf, and agent 0 comes back as agent 0", async () => {
+    const { client, reads } = hookWith({ boundAgentOf: [true, 0n] });
+    expect(await client.agentOf(1n)).toBe(0n);
+    expect(reads.map((r) => r.functionName)).toEqual(["boundAgentOf"]);
+  });
+
+  it("answers null when nothing is bound", async () => {
+    const { client } = hookWith({ boundAgentOf: [false, 0n] });
+    expect(await client.agentOf(1n)).toBeNull();
+  });
+
+  it("falls back to agentOf on a hook that predates boundAgentOf, once, and reads its 0 as null", async () => {
+    const answers: Record<string, unknown> = { agentOf: 7n };
+    const { client, reads } = square({
+      answer: (request) => {
+        if (request.functionName === "boundAgentOf") throw unknownSelector("boundAgentOf");
+        return answers[request.functionName];
+      },
+    });
+    expect(await client.agentOf(1n)).toBe(7n);
+    answers["agentOf"] = 0n;
+    expect(await client.agentOf(2n)).toBeNull();
+    // The probe is not repeated: the second call goes straight to agentOf.
+    expect(reads.map((r) => r.functionName)).toEqual(["boundAgentOf", "agentOf", "agentOf"]);
+  });
+
+  it("does not take any other failure for an older hook", async () => {
+    const { client, reads } = square({
+      answer: () => {
+        throw new ContractFunctionExecutionError(new HttpRequestError({ url: "http://stub", status: 429 }) as never, {
+          abi: squareHookAbi,
+          functionName: "boundAgentOf",
+          args: [1n],
+          contractAddress: deployment.squareHook,
+        });
+      },
+    });
+    await expect(client.agentOf(1n)).rejects.toBeInstanceOf(ContractFunctionExecutionError);
+    expect(reads.map((r) => r.functionName)).toEqual(["boundAgentOf"]);
   });
 });
