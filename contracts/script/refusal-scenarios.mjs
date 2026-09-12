@@ -244,7 +244,13 @@ function compileVerifierForThisBuild() {
   fs.writeFileSync(
     GENERATED,
     (source.slice(0, first) + constants + '\n' + source.slice(end))
-      .replace('contract Groth16Verifier {', 'contract VerifierForThisBuild {'),
+      .replace('contract Groth16Verifier {', 'contract VerifierForThisBuild {')
+      // The copy lands one directory deeper than the original, so its imports
+      // have to climb one further. square#231 moved SCALAR_FIELD into
+      // IGroth16Verifier.sol, where PolicyRegistry reads the same value, and
+      // this line is what keeps the generated copy compiling. The two sibling
+      // scripts that make the same copy already carry it.
+      .replace(/from "\.\/interfaces\//g, 'from "../interfaces/'),
   );
   execFileSync('forge', ['build'], { cwd: ROOT, stdio: 'ignore', timeout: 600_000 });
 }
@@ -425,7 +431,7 @@ async function finalize(s, { jobId, client, provider, encoded, label }) {
   };
 }
 
-function refusedFor(s, run, jobIdNet, reason) {
+function refusedFor(run, jobIdNet, reason) {
   check(`refused, by name: "${reason}"`, run.reason, reason);
   check('the provider is paid nothing', run.providerPaid, 0n);
   check('the client gets the whole net back', run.clientPaid, jobIdNet);
@@ -636,7 +642,7 @@ async function main() {
     check('because of the daily limit, and only that', p2.result.violated_rules.join(), 'daily_limit');
     check('and the verifier still accepts the proof', await read(s.verifier, 'verifyProof', p2.parts), true);
     const run = await finalize(s, { ...second, encoded: p2.encoded, label: 's2b' });
-    refusedFor(s, run, await net(second.jobId), 'is_compliant is 0');
+    refusedFor(run, await net(second.jobId), 'is_compliant is 0');
     process.stdout.write(`        ${costLine(run.gasUsed, run.price)}  ${link(run.hash)}\n`);
     results.push(['2  refused, daily ceiling', run]);
   }
@@ -649,7 +655,7 @@ async function main() {
     check('the circuit says it is not compliant', p.result.public_signals.is_compliant, '0');
     check('because the recipient is blocked, and only that', p.result.violated_rules.join(), 'blocked_recipient');
     const run = await finalize(s, { ...ctx, encoded: p.encoded, label: 's3' });
-    refusedFor(s, run, await net(ctx.jobId), 'is_compliant is 0');
+    refusedFor(run, await net(ctx.jobId), 'is_compliant is 0');
     process.stdout.write(`        ${costLine(run.gasUsed, run.price)}  ${link(run.hash)}\n`);
     results.push(['3  refused, blocked recipient', run]);
   }
@@ -667,7 +673,7 @@ async function main() {
     check('the client replaced its policy', await read(s.registry, 'epochOf', [clients.s4.address]), epochBefore + 1n);
     check('after it, the gate would not', await preview(s, { ...ctx, amount, encoded: p.encoded }), false);
     const run = await finalize(s, { ...ctx, encoded: p.encoded, label: 's4' });
-    refusedFor(s, run, amount, 'policy commitment');
+    refusedFor(run, amount, 'policy commitment');
     process.stdout.write(`        ${costLine(run.gasUsed, run.price)}  ${link(run.hash)}\n`);
     results.push(['4  refused, commitment replaced', run]);
   }
@@ -685,7 +691,7 @@ async function main() {
     const p = await proofFor(s, { ...ctx, timestamp: claimed });
     check('a proof claiming an allowed hour is compliant', p.result.public_signals.is_compliant, '1');
     const run = await finalize(s, { ...ctx, encoded: p.encoded, label: 's5' });
-    refusedFor(s, run, await net(ctx.jobId), 'timestamp outside window');
+    refusedFor(run, await net(ctx.jobId), 'timestamp outside window');
     process.stdout.write(`        ${costLine(run.gasUsed, run.price)}  ${link(run.hash)}\n`);
     results.push(['5  refused, timestamp outside window', run]);
   }
@@ -700,7 +706,7 @@ async function main() {
     const amountY = await net(y);
     check('the proof is valid for its own job', await preview(s, { ...base, jobId: x, amount: amountX, encoded: p.encoded }), true);
     const other = await finalize(s, { ...base, jobId: y, encoded: p.encoded, label: 's6 y' });
-    refusedFor(s, other, amountY, 'amount');
+    refusedFor(other, amountY, 'amount');
     process.stdout.write(`        ${costLine(other.gasUsed, other.price)}  ${link(other.hash)}\n`);
     const own = await finalize(s, { ...base, jobId: x, encoded: p.encoded, label: 's6 x' });
     check('the same proof then releases its own job', own.verified, true);
@@ -708,7 +714,7 @@ async function main() {
     process.stdout.write(`        ${costLine(own.gasUsed, own.price)}  ${link(own.hash)}\n`);
     check('a job identical to its own has the same amount', await net(z), amountX);
     const again = await finalize(s, { ...base, jobId: z, encoded: p.encoded, label: 's6 z' });
-    refusedFor(s, again, amountX, 'proof already used');
+    refusedFor(again, amountX, 'proof already used');
     process.stdout.write(`        ${costLine(again.gasUsed, again.price)}  ${link(again.hash)}\n`);
     results.push(['6  refused, another job (amount)', other], ['6  refused, identical job (spent)', again]);
   }
@@ -743,7 +749,11 @@ async function main() {
 
   if (failures > 0) {
     process.stdout.write(`\n${failures} check(s) failed.\n`);
-    process.exit(1);
+    // Not `process.exit`, which would skip the `finally` below and leave
+    // src/generated/ on disk -- on exactly the path where the cleanup is most
+    // wanted. The code set here is what the last line of the file exits with.
+    process.exitCode = 1;
+    return;
   }
   process.stdout.write(`\nSix scenarios on chain ${env.profile.chainId} (${env.profile.client}): released when compliant, `
     + 'refused by name in every other case.\n');

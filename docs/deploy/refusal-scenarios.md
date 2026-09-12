@@ -27,6 +27,17 @@ module gave.
 | 5 | Outside the time window | the policy allows one hour; the proof claims that hour while the chain is twelve hours away | an honest proof at the chain's time violates `time_window` alone; the lying one is compliant; refused, `timestamp outside window` |
 | 6 | Another job's valid proof | presents job X's proof against job Y, then against X, then against a job identical to X | Y refused, `amount`; X released; the identical job refused, `proof already used` |
 
+Scenario 6 is about the statement, not about the job number. What
+`ComplianceModule` binds is the payee, the amount, the token, the client, the
+policy commitment, the day's counter and the timestamp — there is no `jobId`
+among them, and the spent mark is keyed on `keccak256` of the eight signals. So
+job Y is refused for `amount`, because it is worth a different amount, and not
+for being a different job; and the job identical to X is refused only because X
+was finalized first and its statement is already marked. Reverse that order and
+the identical job releases on X's proof. The binding is per statement, not per
+job, which is what makes a proof reusable across two jobs that agree on all
+seven bound values.
+
 ## Refused, not reverted
 
 The issue says `complete` reverts in scenarios 2 to 6. It cannot, and the
@@ -238,6 +249,8 @@ repeated. The module was then restored, byte for byte (`cmp`), and rebuilt.
 | the policy-commitment binding | exit 1: **scenario 4 only**, 5 checks, from "after it, the gate would not" onward |
 | the `block.timestamp` window | exit 1: **scenario 5 only**, 4 checks |
 | the spent-statement mark | exit 1: **scenario 6's identical job only**, 1 check. It was still refused, but as `daily_spent_before`, because the counter had moved, and the reason check is what catches that |
+| the `is_compliant` binding | exit 1, 5 checks, and it separates scenarios 2 and 3. **Scenario 3 is not refused at all**: no `ReleaseRefused`, the provider is paid 19,700, the client is refunded nothing and the day is charged for it. **Scenario 2 is still refused, but by the wrong mechanism** — `daily ceiling` instead of `is_compliant is 0` — which the reason check catches. So the two scenarios that share a reason are not one test written twice |
+| the `amount` binding | exit 1: **scenario 6 only**, 6 checks. Job Y, carrying job X's proof, is released — 19,700 to the provider, nothing back to the client. That marks the statement spent, so X's own release is then refused too and the provider is never paid for it. The identical job stays refused, `proof already used` |
 
 Every other scenario stayed green in every control. So each scenario is pinned
 by the mechanism it is named after, not by some other check that happens to
