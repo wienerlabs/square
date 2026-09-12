@@ -15,6 +15,22 @@ is readable by anyone.
 This is a deliberate exception to the rule that the policy stays private, and it
 is worth writing down rather than discovering in a storage dump.
 
+**Both are bounded to what a proof can express**, and `setPolicy` refuses
+anything outside: the ceiling to 64 bits, which is the circuit's `Num2Bits(64)`
+on `daily_spent_before` (`LimitExceedsProofRange`), and the commitment to below
+the BN254 scalar field (`CommitmentOutsideProofRange`). The commitment is
+compared against public signal 1, a Poseidon output, and `Groth16Verifier`
+refuses any signal at or above the field before it reaches a precompile — so a
+commitment above it is one no verifying proof can match. Storing it would refuse
+every release for that institution, permanently, with the same
+`policy commitment` reason a genuine rotation gives; the provider delivers and is
+paid nothing. It is easy to reach by accident, since four in five uniformly
+distributed 32-byte values are at or above the field: an operator handing over a
+keccak digest instead of a Poseidon commitment lands there most of the time, and
+this repository's own test did ([#231][i231]).
+
+[i231]: https://github.com/wienerlabs/square/issues/231
+
 ## Why there has to be one
 
 The circuit already enforces a daily ceiling. Rule 2 is
