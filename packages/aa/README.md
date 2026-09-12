@@ -94,9 +94,12 @@ once; the bundler subtracts them and applies an explicit safety factor to what i
 | `verificationGasLimit` | 150,000, plus the estimated `createAccount` gas when the operation deploys the account. Unused verification gas is not penalized. |
 | `preVerificationGas` | The eth-infinitism bundler formula: 21,000 fixed + 18,300 per operation + calldata bytes at 4/16 gas + 4 per word. It keeps the keeper whole: measured 4,300 to 4,800 gas ahead per operation. |
 
-Every field can be overridden per call. A call that reverts in simulation raises
-`CallSimulationRevertedError` with the revert data instead of being included and paid
-for; pass `callGasLimit` explicitly to submit it anyway.
+Every field can be overridden per call, and a field that is overridden is not estimated.
+A call that reverts in simulation raises `CallSimulationRevertedError` with the revert
+data instead of being included and paid for; pass `callGasLimit` explicitly to submit it
+anyway. That holds for the operation that deploys the account as much as for any later
+one: the account's own gas hint sees the fields the caller fixed and does not simulate a
+call whose limit is given (#274).
 
 ## Signatures
 
@@ -130,13 +133,17 @@ and runs three suites. It needs `anvil`, `forge`, the contracts compiled in
 
 The stack is deployed with `forge script script/DeployLocal.s.sol --broadcast --slow`
 against the fork (`--slow` because anvil left the rest of a broadcast burst queued after
-the first two transactions). That script writes `contracts/deployments/5042002.json`.
-**The harness reads the file and deletes it immediately**, together with
-`contracts/broadcast/DeployLocal.s.sol/5042002`, because that path is where the real Arc
-testnet deployment will live and a fork's addresses must never be mistaken for it. The
-first test asserts the file is gone. Set `AA_DEPLOY_FROM_ARTIFACTS=1` to deploy from the
-compiled artifacts in `contracts/out` through viem instead: no forge process and nothing
-written under `contracts/`, useful when the contracts tree does not compile.
+the first two transactions). The fork answers with Arc's chain id, so the script's default
+output would be `contracts/deployments/5042002.json`, the committed record of the real
+Arc Testnet deployment; the harness names `contracts/deployments/5042002.local.json`
+instead through `DEPLOYMENT_FILE`, which git ignores, and the script refuses the
+record's path on any chain but 31337 (#270). **The harness reads the local file and
+deletes it immediately**, together with `contracts/broadcast/DeployLocal.s.sol/5042002`,
+because a fork's addresses must never be mistaken for the testnet's. The first test
+asserts the local file is gone and the committed record is byte for byte what it was
+before the run. Set `AA_DEPLOY_FROM_ARTIFACTS=1` to deploy from the compiled artifacts in
+`contracts/out` through viem instead: no forge process and nothing written under
+`contracts/`, useful when the contracts tree does not compile.
 
 What is covered:
 
