@@ -1,12 +1,31 @@
 import type { Address, Hex, Log, PublicClient } from "viem";
 import { decodeSquareLogs, type SquareDeployment, type SquareEvent } from "@squaresdk/core";
-import { arbiterSets, checkpoints, claimListings, disputes, jobEvents, jobs, ledgerBalances, type Database, type IndexedContract } from "@squaresdk/data";
+import {
+  arbiterSets,
+  checkpoints,
+  claimListings,
+  disputes,
+  jobEvents,
+  jobs,
+  ledgerBalances,
+  quarantinedEvents,
+  type Database,
+  type IndexedContract,
+} from "@squaresdk/data";
 import { waitUnlessAborted, type Logger, type Metrics } from "@squaresdk/observability";
 import { applyEvent, cloneState, emptyState, ledgerKey, type IndexerState, type ReducerNotice } from "./reducer.js";
 
 const CONTRACTS: IndexedContract[] = ["SquareJob", "KeeperEvaluator", "Arbitration", "ClaimMarket", "SquareHook"];
 
-export const DERIVED_TABLES = ["jobs", "disputes", "claim_listings", "ledger_balances", "arbiter_sets", "job_events"] as const;
+export const DERIVED_TABLES = [
+  "jobs",
+  "disputes",
+  "claim_listings",
+  "ledger_balances",
+  "arbiter_sets",
+  "job_events",
+  "quarantined_events",
+] as const;
 
 interface JournalRow {
   block_number: string;
@@ -46,6 +65,21 @@ export interface QuarantinedEvent {
 
 export const MAX_TRACKED_QUARANTINE = 100;
 
+const RANGE_TOO_LARGE_CODE = -32012;
+const RANGE_TOO_LARGE_TEXT = /range too large|block range|too many blocks|exceeds? the (?:maximum|allowed)/i;
+
+export function rangeTooLarge(error: unknown): boolean {
+  let node: unknown = error;
+  for (let depth = 0; depth < 5 && node !== null && node !== undefined; depth += 1) {
+    const shape = node as { code?: unknown; message?: unknown; details?: unknown; shortMessage?: unknown; cause?: unknown };
+    if (shape.code === RANGE_TOO_LARGE_CODE) return true;
+    const text = [shape.message, shape.details, shape.shortMessage].filter((part) => typeof part === "string").join(" ");
+    if (RANGE_TOO_LARGE_TEXT.test(text)) return true;
+    node = shape.cause;
+  }
+  return false;
+}
+
 export interface IndexerOptions {
   db: Database;
   publicClient: PublicClient;
@@ -81,7 +115,7 @@ export class Indexer {
   private current: IndexerState = emptyState();
   private readonly persistedLedger = new Map<string, bigint>();
   private readonly addresses: Address[];
-  private readonly quarantined: QuarantinedEvent[] = [];
+  private readonly quarantined = new Map<string, QuarantinedEvent>();
   private cursor: bigint | null = null;
   private lastHead: bigint | null = null;
   private syncedAt: number | null = null;
@@ -113,7 +147,7 @@ export class Indexer {
   }
 
   get quarantinedEvents(): readonly QuarantinedEvent[] {
-    return this.quarantined;
+    return [...this.quarantined.values()];
   }
 
   get missingWindowEvents(): number {
@@ -146,6 +180,7 @@ export class Indexer {
       this.options.logger.info("indexer.started", { chainId: this.options.chainId, blockNumber: 0, count: this.current.jobs.size });
       return;
     }
+    await this.loadQuarantine();
     await this.replayJournal();
     const checkpoint = await checkpoints.get(this.options.db, this.options.chainId, "SquareJob");
     this.cursor = checkpoint ? checkpoint.lastBlock : null;
@@ -201,6 +236,7 @@ export class Indexer {
         applyEvent(this.current, event, (notice) => this.observe(notice, false));
       } catch (error) {
         this.quarantine(event, "reduce", error);
+        await this.persistQuarantine(this.options.db, event, "reduce", error);
       }
     }
     for (const [key, amount] of this.current.ledger) this.persistedLedger.set(key, amount);
@@ -234,7 +270,7 @@ export class Indexer {
   }
 
   private quarantine(event: SquareEvent, stage: "journal" | "reduce", error: unknown): void {
-    const entry: QuarantinedEvent = {
+    this.track({
       contract: event.contract,
       eventName: event.eventName,
       blockNumber: (event.blockNumber ?? 0n).toString(),
@@ -242,14 +278,51 @@ export class Indexer {
       txHash: event.transactionHash ?? "0x",
       stage,
       error: error instanceof Error ? error.message : String(error),
-    };
-    this.quarantined.push(entry);
-    if (this.quarantined.length > MAX_TRACKED_QUARANTINE) this.quarantined.shift();
+    });
     this.options.metrics?.recordQuarantinedEvent(event.contract, event.eventName);
     this.options.logger.error("indexer.event_quarantined", {
       blockNumber: Number(event.blockNumber ?? 0n),
-      reason: `${event.contract}.${event.eventName} at log ${entry.logIndex} failed at the ${stage} stage: ${entry.error}`,
+      reason: `${event.contract}.${event.eventName} at log ${event.logIndex ?? 0} failed at the ${stage} stage: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
     });
+  }
+
+  private track(entry: QuarantinedEvent): void {
+    this.quarantined.set(`${entry.blockNumber}:${entry.logIndex}`, entry);
+    while (this.quarantined.size > MAX_TRACKED_QUARANTINE) {
+      const oldest = this.quarantined.keys().next().value;
+      if (oldest === undefined) break;
+      this.quarantined.delete(oldest);
+    }
+  }
+
+  private async persistQuarantine(db: Database, event: SquareEvent, stage: "journal" | "reduce", error: unknown): Promise<void> {
+    await quarantinedEvents.record(db, {
+      chainId: this.options.chainId,
+      blockNumber: event.blockNumber ?? 0n,
+      logIndex: event.logIndex ?? 0,
+      txHash: event.transactionHash ?? (`0x${"00".repeat(32)}` as Hex),
+      contract: event.contract,
+      eventName: event.eventName,
+      stage,
+      error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+    });
+  }
+
+  private async loadQuarantine(): Promise<void> {
+    const stored = await quarantinedEvents.recent(this.options.db, this.options.chainId, MAX_TRACKED_QUARANTINE);
+    for (const row of [...stored].reverse()) {
+      this.track({
+        contract: row.contract,
+        eventName: row.eventName,
+        blockNumber: row.blockNumber.toString(),
+        logIndex: row.logIndex,
+        txHash: row.txHash,
+        stage: row.stage,
+        error: row.error,
+      });
+    }
   }
 
   async syncOnce(): Promise<SyncResult | null> {
@@ -263,7 +336,7 @@ export class Indexer {
       return null;
     }
     const to = from + this.options.batchBlocks - 1n < head ? from + this.options.batchBlocks - 1n : head;
-    const logs = await this.options.publicClient.getLogs({ address: this.addresses, fromBlock: from, toBlock: to });
+    const logs = await this.logsInRange(from, to);
     const events = decodeSquareLogs(logs, this.options.deployment);
     const batch = await this.applyBatch(events, to);
     this.cursor = to;
@@ -271,6 +344,23 @@ export class Indexer {
     this.options.metrics?.setIndexerHead(to);
     this.options.logger.info("indexer.synced", { blockNumber: Number(to), count: events.length, applied: batch.applied });
     return { fromBlock: from, toBlock: to, head, events: events.length, applied: batch.applied, quarantined: batch.quarantined };
+  }
+
+  private async logsInRange(from: bigint, to: bigint): Promise<Log[]> {
+    try {
+      return await this.options.publicClient.getLogs({ address: this.addresses, fromBlock: from, toBlock: to });
+    } catch (error) {
+      if (!rangeTooLarge(error) || from >= to) throw error;
+      const middle = from + (to - from) / 2n;
+      this.options.logger.warn("indexer.batch_split", {
+        blockNumber: Number(from),
+        count: Number(to - from + 1n),
+        reason: `the node refused this block range as too large, halving it; lower BATCH_BLOCKS below ${this.options.batchBlocks} to spend one request per batch instead of several`,
+      });
+      const head = await this.logsInRange(from, middle);
+      const tail = await this.logsInRange(middle + 1n, to);
+      return [...head, ...tail];
+    }
   }
 
   private async applyBatch(events: SquareEvent[], toBlock: bigint): Promise<{ applied: number; quarantined: number }> {
@@ -315,6 +405,9 @@ export class Indexer {
       await this.persist(tx, draft, dirty, toBlock, stagedLedger);
       for (const contract of CONTRACTS) {
         await checkpoints.set(tx, { chainId, contract, address: this.addressOf(contract), lastBlock: toBlock });
+      }
+      for (const failure of failures) {
+        await this.persistQuarantine(tx, failure.event, failure.stage, failure.error);
       }
     });
     this.current = draft;
