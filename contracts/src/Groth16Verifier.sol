@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.28;
 
+import {SCALAR_FIELD} from "./interfaces/IGroth16Verifier.sol";
+
 contract Groth16Verifier {
-    uint256 private constant SCALAR_FIELD =
-        21888242871839275222246405745257275088548364400416034343698204186575808495617;
+    // SCALAR_FIELD is imported rather than declared: PolicyRegistry needs the
+    // same bound, and one value in one place is what keeps the two from drifting
+    // (#231). BASE_FIELD stays here — only the pairing arithmetic uses it.
     uint256 private constant BASE_FIELD =
         21888242871839275222246405745257275088696311157297823662689037894645226208583;
     uint256 private constant PUBLIC_INPUTS = 8;
