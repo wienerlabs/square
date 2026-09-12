@@ -8,6 +8,7 @@ import {
   type Hex,
   isAddressEqual,
   type PublicClient,
+  type ReadContractReturnType,
   type TransactionReceipt,
   type Transport,
   type WalletClient,
@@ -18,6 +19,7 @@ import { deploymentFor, type SquareDeployment } from "./deployments.js";
 import { decodeSquareLogs, eventsNamed, type SquareEvent } from "./events.js";
 import { encodeCompleteOptParams, encodeSubmitOptParams, ZERO_HASH } from "./optParams.js";
 import { type OutcomeValue } from "./reasons.js";
+import { withSquareErrors } from "./revertAbi.js";
 import { specDescription } from "./spec.js";
 
 export const JobStatus = {
@@ -86,12 +88,24 @@ export class TransactionRevertedError extends Error {
   }
 }
 
+/**
+ * The deployment and the chain disagree. `source` says which chain id lost:
+ * `"declared"` is the id the viem client was built with, checked in the
+ * constructor; `"endpoint"` is the id the RPC actually answered, checked on the
+ * first read or write. They can differ, and only the second can catch an
+ * endpoint that points at some other chain (#269).
+ */
 export class DeploymentChainMismatchError extends Error {
   constructor(
     readonly deploymentChainId: number,
     readonly clientChainId: number,
+    readonly source: "declared" | "endpoint" = "declared",
   ) {
-    super(`the deployment is for chain ${deploymentChainId} but the client is connected to chain ${clientChainId}`);
+    super(
+      source === "endpoint"
+        ? `the deployment is for chain ${deploymentChainId} but the RPC endpoint answers eth_chainId with ${clientChainId}`
+        : `the deployment is for chain ${deploymentChainId} but the client declares chain ${clientChainId}`,
+    );
     this.name = "DeploymentChainMismatchError";
   }
 }
@@ -125,6 +139,13 @@ type WriteArgs<TAbi extends Abi, TName extends ContractFunctionName<TAbi, "nonpa
   address: Address;
   functionName: TName;
   args: ContractFunctionArgs<TAbi, "nonpayable" | "payable", TName>;
+};
+
+type ReadArgs<TAbi extends Abi, TName extends ContractFunctionName<TAbi, "pure" | "view">> = {
+  abi: TAbi;
+  address: Address;
+  functionName: TName;
+  args?: ContractFunctionArgs<TAbi, "pure" | "view", TName>;
 };
 
 export class SquareClient {
@@ -168,15 +189,62 @@ export class SquareClient {
     return this.walletClient;
   }
 
+  private endpointChain: Promise<void> | undefined;
+
+  /**
+   * Ask the endpoint which chain it is, once, and refuse to go on if it is not
+   * the deployment's. The constructor compares the deployment to the chain the
+   * clients *declare*, and both sides of that come from the caller, so it
+   * cannot catch an `RPC_URL` that points somewhere else: every read would
+   * answer from the wrong chain at Arc addresses, quietly, and a local-key
+   * wallet would sign without viem ever checking either (#269). This is the
+   * `cast chain-id` step `deploy-arc-testnet.sh` takes before broadcasting,
+   * done for the SDK. Runs before the first read or write; a failure is not
+   * cached, so a transport error on the check is retried on the next call.
+   */
+  async assertChain(): Promise<void> {
+    this.endpointChain ??= this.publicClient.getChainId().then((actual) => {
+      if (actual !== this.deployment.chainId) {
+        throw new DeploymentChainMismatchError(this.deployment.chainId, actual, "endpoint");
+      }
+    });
+    try {
+      await this.endpointChain;
+    } catch (error) {
+      this.endpointChain = undefined;
+      throw error;
+    }
+  }
+
+  /**
+   * Every read goes through here so two things hold for all of them: the
+   * endpoint has been checked against the deployment, and a revert decodes
+   * to a name whichever Square contract raised it (see `revertAbi.ts`).
+   */
+  private async read<TAbi extends Abi, TName extends ContractFunctionName<TAbi, "pure" | "view">>(
+    request: ReadArgs<TAbi, TName>,
+  ): Promise<ReadContractReturnType<TAbi, TName, ContractFunctionArgs<TAbi, "pure" | "view", TName>>> {
+    await this.assertChain();
+    return this.publicClient.readContract({ ...request, abi: withSquareErrors(request.abi) } as never) as never;
+  }
+
   private async write<TAbi extends Abi, TName extends ContractFunctionName<TAbi, "nonpayable" | "payable">>(
     request: WriteArgs<TAbi, TName>,
   ): Promise<TransactionResult> {
+    await this.assertChain();
     const wallet = this.wallet();
+    // The ABI carries every Square error so the simulation can name a revert
+    // raised behind the contract being called. simulateContract hands back a
+    // request whose ABI is cut down to the one function, so the full one is
+    // put back for the send: the write leg carries the same error entries as
+    // the simulation that approved it (#268).
+    const abi = withSquareErrors(request.abi);
     const simulation = await this.publicClient.simulateContract({
       ...request,
+      abi,
       account: wallet.account,
     } as never);
-    const hash = await wallet.writeContract(simulation.request as never);
+    const hash = await wallet.writeContract({ ...simulation.request, abi } as never);
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status !== "success") throw new TransactionRevertedError(hash, receipt);
     return { hash, receipt, events: decodeSquareLogs(receipt.logs, this.deployment) };
@@ -187,7 +255,7 @@ export class SquareClient {
   }
 
   async jobCounter(): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: squareJobAbi,
       address: this.deployment.squareJob,
       functionName: "jobCounter",
@@ -195,7 +263,7 @@ export class SquareClient {
   }
 
   async getJob(jobId: bigint) {
-    return this.publicClient.readContract({
+    return this.read({
       abi: squareJobAbi,
       address: this.deployment.squareJob,
       functionName: "getJob",
@@ -204,7 +272,7 @@ export class SquareClient {
   }
 
   async getJobRecord(jobId: bigint) {
-    return this.publicClient.readContract({
+    return this.read({
       abi: squareJobAbi,
       address: this.deployment.squareJob,
       functionName: "getJobRecord",
@@ -213,7 +281,7 @@ export class SquareClient {
   }
 
   async netPayout(jobId: bigint): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: squareJobAbi,
       address: this.deployment.squareJob,
       functionName: "netPayout",
@@ -222,7 +290,7 @@ export class SquareClient {
   }
 
   async withdrawable(account: Address): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: squareJobAbi,
       address: this.deployment.squareJob,
       functionName: "withdrawable",
@@ -231,7 +299,7 @@ export class SquareClient {
   }
 
   async bondWithdrawable(account: Address): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: arbitrationAbi,
       address: this.deployment.arbitration,
       functionName: "withdrawable",
@@ -240,7 +308,7 @@ export class SquareClient {
   }
 
   async settlementHorizon(): Promise<number> {
-    const horizon = await this.publicClient.readContract({
+    const horizon = await this.read({
       abi: keeperEvaluatorAbi,
       address: this.deployment.keeperEvaluator,
       functionName: "settlementHorizon",
@@ -249,7 +317,7 @@ export class SquareClient {
   }
 
   async challengeEndsAt(jobId: bigint): Promise<number> {
-    const end = await this.publicClient.readContract({
+    const end = await this.read({
       abi: keeperEvaluatorAbi,
       address: this.deployment.keeperEvaluator,
       functionName: "challengeEndsAt",
@@ -259,7 +327,7 @@ export class SquareClient {
   }
 
   async isDisputed(jobId: bigint): Promise<boolean> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: keeperEvaluatorAbi,
       address: this.deployment.keeperEvaluator,
       functionName: "isDisputed",
@@ -268,7 +336,7 @@ export class SquareClient {
   }
 
   async disputeOf(jobId: bigint) {
-    return this.publicClient.readContract({
+    return this.read({
       abi: arbitrationAbi,
       address: this.deployment.arbitration,
       functionName: "disputeOf",
@@ -277,7 +345,7 @@ export class SquareClient {
   }
 
   async bondFor(budget: bigint): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: arbitrationAbi,
       address: this.deployment.arbitration,
       functionName: "bondFor",
@@ -286,7 +354,7 @@ export class SquareClient {
   }
 
   async listing(jobId: bigint) {
-    return this.publicClient.readContract({
+    return this.read({
       abi: claimMarketAbi,
       address: this.deployment.claimMarket,
       functionName: "getListing",
@@ -295,7 +363,7 @@ export class SquareClient {
   }
 
   async payeeOf(jobId: bigint): Promise<Address> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: claimMarketAbi,
       address: this.deployment.claimMarket,
       functionName: "payeeOf",
@@ -304,7 +372,7 @@ export class SquareClient {
   }
 
   async agentOf(jobId: bigint): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: squareHookAbi,
       address: this.deployment.squareHook,
       functionName: "agentOf",
@@ -313,7 +381,7 @@ export class SquareClient {
   }
 
   async usdcBalance(account: Address): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: erc20Abi,
       address: this.deployment.usdc,
       functionName: "balanceOf",
@@ -322,7 +390,7 @@ export class SquareClient {
   }
 
   async usdcAllowance(owner: Address, spender: Address): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: erc20Abi,
       address: this.deployment.usdc,
       functionName: "allowance",
@@ -542,4 +610,16 @@ export class SquareClient {
 
 export function createSquareClient(config: SquareClientConfig): SquareClient {
   return new SquareClient(config);
+}
+
+/**
+ * `createSquareClient`, then the endpoint check, before the client is handed
+ * back. The check runs on first use either way; this is for a caller that
+ * wants a misconfigured `RPC_URL` to fail at startup rather than on the first
+ * request it serves.
+ */
+export async function connectSquareClient(config: SquareClientConfig): Promise<SquareClient> {
+  const client = new SquareClient(config);
+  await client.assertChain();
+  return client;
 }
