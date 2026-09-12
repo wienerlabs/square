@@ -118,7 +118,8 @@ export const openapiSpec = {
         description:
           'Optional window the payment must fall inside. Exactly one entry: the commitment '
           + 'covers a single window, so a second one could not be proved and is refused with '
-          + '400 rather than accepted and dropped. '
+          + '400 rather than accepted and dropped, and an empty array is refused too — it is '
+          + 'not a spelling for "no window", which is the field left out. '
           + 'The three fields below are required when a restriction is given: there are no '
           + 'defaults, because a missing day list means every weekday forbidden and missing '
           + 'hours mean a window of 00:00 to 00:59, and neither is what an omission means. '
@@ -232,11 +233,14 @@ export const openapiSpec = {
           time_restrictions: {
             type: 'array',
             items: { $ref: '#/components/schemas/TimeRestriction' },
+            minItems: 1,
             maxItems: 1,
             description:
-              'maxItems was declared here from the start and enforced nowhere: a second entry '
-              + 'was validated field by field and then dropped by the builder, which reads only '
-              + 'the first. square#181 made the service enforce what this schema says.',
+              'One window, or the field left out entirely. maxItems was declared here from the '
+              + 'start and enforced nowhere: a second entry was validated field by field and '
+              + 'then dropped by the builder, which reads only the first. square#181 made the '
+              + 'service enforce what this schema says. minItems is square#226: an empty array '
+              + 'is not a spelling for "no window", and the schema used to say it was.',
           },
         },
       },

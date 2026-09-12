@@ -33,7 +33,7 @@ PROVER_ARTIFACTS_DIR=/path/to/artifacts npm start
 | Variable | Default | Meaning |
 |---|---|---|
 | `PROVER_SERVICE_PORT` | `3003` | Listen port. |
-| `PROVER_ARTIFACTS_DIR` | `./artifacts` | Directory holding `payment.wasm` and `payment.zkey`. |
+| `PROVER_ARTIFACTS_DIR` | `services/prover/artifacts` | Directory holding `payment.wasm` and `payment.zkey`. The default is relative to this package, not to the working directory, so the service finds the same files wherever it is started from — and `/health` inspects exactly the paths the prover opens. |
 | `CORS_ORIGINS` | — | Comma-separated extra origins; `localhost` on any port is always allowed. |
 | `PROVER_MAX_CONCURRENCY` | `os.availableParallelism()` | Proofs allowed to run at once. Each one in flight holds its own read of the proving key, so this is a memory ceiling as much as a CPU one. |
 | `PROVER_MAX_QUEUE` | the ceiling above | Requests allowed to wait for a slot. Beyond it, `POST /prove` answers `503` with `Retry-After` rather than queueing behind an unbounded backlog. |

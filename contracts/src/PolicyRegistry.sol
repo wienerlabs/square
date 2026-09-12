@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
+import {SCALAR_FIELD} from "./interfaces/IGroth16Verifier.sol";
 
 /// @title PolicyRegistry
 /// @notice What the compliance module reads when it judges a release, and the
@@ -106,6 +107,22 @@ contract PolicyRegistry is IPolicyRegistry, Ownable2Step {
         // accumulate a counter no proof could ever carry, and the release would
         // then fail in a way indistinguishable from a policy mismatch.
         if (dailyLimit > type(uint64).max) revert LimitExceedsProofRange(dailyLimit);
+        // And the commitment, for the same reason the ceiling is bounded above.
+        //
+        // It is compared against public signal 1, which is a Poseidon output and
+        // therefore always below the BN254 scalar field; `Groth16Verifier`
+        // refuses any signal at or above it before it reaches a precompile. A
+        // commitment above the field is a value no verifying proof can carry, so
+        // every gated release for this poster would be refused with
+        // `policy commitment` — the same reason a genuine policy rotation
+        // produces, and permanent rather than transient (#231).
+        //
+        // It is easy to reach by accident: four in five uniformly distributed
+        // 32-byte values are at or above the field, so an operator who hands
+        // over a keccak digest rather than a Poseidon commitment lands here
+        // most of the time. This repository's own test did
+        // (`keccak256("some other policy")` is above the field).
+        if (uint256(commitment) >= SCALAR_FIELD) revert CommitmentOutsideProofRange(commitment);
 
         Policy storage policy = _policies[msg.sender];
         policy.commitment = commitment;

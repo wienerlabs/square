@@ -32,7 +32,7 @@ account, which controls nothing outside a local chain.
 |---|---|---|
 | anvil | 8545 | The chain, id 31337 |
 | postgres | 5432 | One database, shared by the indexer and the keeper |
-| deployer | — | One shot: `DeployLocal.s.sol`, writes `contracts/deployments/31337.json` |
+| deployer | — | One shot: `DeployLocal.s.sol`, writes `contracts/deployments/31337.json`. Refuses any chain but 31337 unless `DEPLOY_LOCAL_ALLOW_CHAIN_ID` names another |
 | migrate | — | One shot: `square-data migrate up` |
 | circuits | — | One shot: copies `payment.wasm` and `payment.zkey` into a volume |
 | prover | 3003 | Groth16 proofs |
@@ -157,10 +157,26 @@ Set `CHAIN_ID=5042002` and `RPC_URL` to the Arc endpoint, supply a funded
 `KEEPER_PRIVATE_KEY`, and start without the local chain and the deployer:
 
 ```
-docker compose up --wait prover indexer keeper app
+docker compose up --wait --no-deps postgres migrate circuits prover indexer keeper app
 ```
 
-The addresses then come from `packages/core`, which already knows chain
-5042002, or from a deployment file if you set `SQUARE_DEPLOYMENT_FILE`. A run
-of exactly this shape against the real chain is recorded in
+**`--no-deps` and the full list are both load-bearing** (#232). Without it,
+`docker compose up prover indexer keeper app` starts every `depends_on` as
+well — the indexer and the keeper each declare `anvil`, `deployer` and
+`migrate` — so the command that says "without the local chain and the deployer"
+started both, broadcast the mock stack to the real testnet, and overwrote
+`contracts/deployments/5042002.json` with mock addresses. With `--no-deps`,
+compose starts only what is named, and it still orders what is named: `migrate`
+runs to completion before the indexer and the keeper, and `circuits` before the
+prover, which is why `postgres`, `migrate` and `circuits` are on the line.
+
+The deployer refuses to run anywhere but the local chain now, so a hand-typed
+`docker compose up` cannot reach the testnet either.
+
+The addresses come from `contracts/deployments/5042002.json`, which compose
+mounts read-only at `/deployments` and passes as `SQUARE_DEPLOYMENT_FILE` to the
+indexer and the keeper on every run — the variable is set unconditionally in
+`compose.yaml`, not only when you ask for it. That file is the deployment record
+in version control; the services read it and nothing in this command writes to
+it. A run of exactly this shape against the real chain is recorded in
 [services-5042002.md](services-5042002.md).

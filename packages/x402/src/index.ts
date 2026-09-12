@@ -42,6 +42,7 @@ export type {
   UnsettledPayment,
 } from "./replay-store.js";
 export {
+  DEFAULT_RECEIPT_GRACE_SECONDS,
   RECONCILE_REASON,
   blockTimestampFromClient,
   receiptStatusFromClient,
@@ -60,6 +61,7 @@ export {
   createGatewayApp,
   createPaidRoutes,
   parseRoutePattern,
+  routeCollisionMessage,
   routePatternKey,
 } from "./server.js";
 export type {
