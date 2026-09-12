@@ -329,6 +329,7 @@ What the normative set does not carry and the indexer needs.
 | `DecisionReached(uint256 indexed jobId, uint8 outcome, uint16 providerBps, bytes32 resolutionHash)` | threshold met |
 | `DisputeExpired(uint256 indexed jobId)` | no decision by `resolveBy`; degrades to the optimistic outcome |
 | `BondSettled(uint256 indexed jobId, address indexed to, uint64 amount)` | bond credited to whoever won it |
+| `RejectionNotApplied(uint256 indexed jobId, bytes reason)` | the panel decided Reject and the kernel refused to apply it, because the job turned terminal between the vote and the decision; the decision is still recorded |
 | `BondWithdrawn(address indexed account, address indexed to, uint256 amount)` | bond ledger debit; keyed by account, not by job |
 
 ### ClaimMarket
