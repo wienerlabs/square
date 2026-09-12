@@ -108,6 +108,27 @@ export function requestRejectedLogEntry(error) {
   };
 }
 
+// A request refused because the service is already at its ceiling.
+//
+// Its own event for the same reason `request_rejected` is not `proof_failed`
+// (square#148): this service did not try to produce a proof and did not fail to
+// produce one, so it has no business in the proof failure rate an operator
+// pages on. What it is evidence of is load, which is a capacity question, and
+// the numbers an operator needs to answer it are how many were running and how
+// many were waiting when the request arrived.
+//
+// No request field appears here; the three values are the service's own counts
+// (square#236).
+export function requestShedLogEntry({ active, queued, limit }) {
+  const count = (value) => (Number.isInteger(value) && value >= 0 ? value : null);
+  return {
+    event: 'request_shed',
+    active: count(active),
+    queued: count(queued),
+    limit: count(limit),
+  };
+}
+
 // Every log entry a single successful /prove call produces, in order.
 //
 // The whole logging decision lives here rather than inline in the route so it

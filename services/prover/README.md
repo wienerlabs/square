@@ -35,6 +35,9 @@ PROVER_ARTIFACTS_DIR=/path/to/artifacts npm start
 | `PROVER_SERVICE_PORT` | `3003` | Listen port. |
 | `PROVER_ARTIFACTS_DIR` | `./artifacts` | Directory holding `payment.wasm` and `payment.zkey`. |
 | `CORS_ORIGINS` | — | Comma-separated extra origins; `localhost` on any port is always allowed. |
+| `PROVER_MAX_CONCURRENCY` | `os.availableParallelism()` | Proofs allowed to run at once. Each one in flight holds its own read of the proving key, so this is a memory ceiling as much as a CPU one. |
+| `PROVER_MAX_QUEUE` | the ceiling above | Requests allowed to wait for a slot. Beyond it, `POST /prove` answers `503` with `Retry-After` rather than queueing behind an unbounded backlog. |
+| `PROVER_PROOF_TIMEOUT_MS` | `30000` | How long one proof may take before the request is answered `504` and its slot released. One proof measured 1 158 ms on this circuit, so the default is generous; a slower machine or a larger circuit is what it is there for. |
 
 ## Circuit artifacts
 

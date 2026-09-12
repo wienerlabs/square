@@ -76,6 +76,28 @@ export const openapiSpec = {
               'but never its value, so it is safe to surface and to log.',
             content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
           },
+          503: {
+            description:
+              'The service is already proving as many payments as it will run at once ' +
+              'and its waiting room is full, so this request was refused rather than ' +
+              'queued behind an unbounded backlog. `Retry-After` carries the number of ' +
+              'seconds to wait, and the same request will be accepted once there is ' +
+              'room. See PROVER_MAX_CONCURRENCY and PROVER_MAX_QUEUE.',
+            headers: {
+              'Retry-After': {
+                description: 'Seconds to wait before retrying.',
+                schema: { type: 'integer' },
+              },
+            },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          504: {
+            description:
+              'The proof outran the time this service will spend on one request ' +
+              '(PROVER_PROOF_TIMEOUT_MS). The slot is freed for the next caller. ' +
+              'Retrying may succeed on a less loaded service.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
         },
       },
     },

@@ -2,7 +2,10 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { generateProof, validateRequest } from './prover.js';
-import { logEntriesForProof, proofFailedLogEntry, requestRejectedLogEntry } from './logging.js';
+import {
+  logEntriesForProof, proofFailedLogEntry, requestRejectedLogEntry, requestShedLogEntry,
+} from './logging.js';
+import { createProofLimiter } from './concurrency.js';
 import { openapiSpec } from './openapi.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -48,6 +51,20 @@ const health = createHealth({
 });
 mountObservability(app, { health, metrics });
 
+// How many proofs may run at once, how many may wait, and how long one may take.
+// The knobs and their reasoning are in concurrency.js; the defaults come from
+// the environment's parallelism and a measured proof of 1 158 ms.
+const limiter = createProofLimiter({
+  limit: process.env.PROVER_MAX_CONCURRENCY,
+  queueLimit: process.env.PROVER_MAX_QUEUE,
+  timeoutMs: process.env.PROVER_PROOF_TIMEOUT_MS,
+});
+
+// A slot frees in about the time one proof takes, so a second is the shortest
+// wait worth naming; `packages/hardening` sets the same header on the rate
+// limiter's 429.
+const RETRY_AFTER_SECONDS = 1;
+
 app.post('/prove', async (req, res) => {
   // The request is checked before anything else happens, and a request the
   // caller got wrong is answered 400 rather than 500.
@@ -72,10 +89,52 @@ app.post('/prove', async (req, res) => {
     return;
   }
 
-  const start = Date.now();
-  const timer = metrics.startProof();
+  // Under the ceiling, or not at all.
+  //
+  // square#236: every request started a proof, so 250 of them started 243 at
+  // once. Each holds its own read of the proving key, so the ceiling is a
+  // memory bound before it is a CPU one, and the failure it prevents is the
+  // container being killed with every proof in flight.
+  let start;
+  let timer;
   try {
-    const result = await generateProof(req.body);
+    const outcome = await limiter.run(() => {
+      // Started here rather than before the queue: the duration histogram is
+      // about how long a proof takes, and waiting for a slot is not proving.
+      start = Date.now();
+      timer = metrics.startProof();
+      return generateProof(req.body);
+    });
+
+    if (!outcome.ok && outcome.reason === 'shed') {
+    // Not a proof failure. This service did not try and did not fail; it
+    // refused, which is a capacity fact and belongs in its own event rather
+    // than in the rate an operator pages on (the same line square#148 drew
+    // between a refused request and a failed proof).
+      const entry = requestShedLogEntry({
+        active: limiter.active,
+        queued: limiter.queued,
+        limit: limiter.limit,
+      });
+      console.error(JSON.stringify(entry));
+      res.status(503)
+        .set('Retry-After', String(RETRY_AFTER_SECONDS))
+        .json({ error: 'busy', retryAfterSeconds: RETRY_AFTER_SECONDS });
+      return;
+    }
+
+    if (!outcome.ok && outcome.reason === 'timeout') {
+      // A proof that outran its bound is a failed proof: it was attempted, it
+      // consumed a slot, and `classifyProofFailure` files "timed out" under
+      // `timeout`, which is the label an operator already has a dashboard for.
+      const entry = proofFailedLogEntry(outcome.error);
+      timer?.failure(entry.error);
+      console.error(JSON.stringify(entry));
+      res.status(504).json({ error: entry.error });
+      return;
+    }
+
+    const result = outcome.value;
     const elapsedMs = Date.now() - start;
     timer.success();
 
@@ -108,8 +167,11 @@ app.post('/prove', async (req, res) => {
       proving_time_ms: elapsedMs,
     });
   } catch (error) {
+    // A proof that threw is still a proof this service attempted, so the
+    // failure counter moves — but a request shed before any proof started
+    // never made a timer, which is why this is optional now (square#236).
     const entry = proofFailedLogEntry(error);
-    timer.failure(entry.error);
+    timer?.failure(entry.error);
     console.error(JSON.stringify(entry));
     res.status(500).json({ error: entry.error });
   }
