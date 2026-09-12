@@ -24,6 +24,37 @@ const ARTIFACTS_DIR = process.env.PROVER_ARTIFACTS_DIR
 const WASM_PATH = path.join(ARTIFACTS_DIR, 'payment.wasm');
 const ZKEY_PATH = path.join(ARTIFACTS_DIR, 'payment.zkey');
 
+/**
+ * The files this module opens, exported so nothing else has to guess them.
+ *
+ * square#235: `/health` derived the same directory a second time and fell back
+ * to `path.resolve('artifacts')`, which is relative to the working directory,
+ * while this fallback is relative to the module. With `PROVER_ARTIFACTS_DIR`
+ * set the two agree; without it they agree only when the process happens to be
+ * started from `services/prover`. Measured, both ways round:
+ *
+ *   artifacts in the working directory, none beside the module
+ *     GET  /health -> 200 healthy
+ *     POST /prove  -> 500 ENOENT .../services/prover/artifacts/payment.wasm
+ *
+ *   artifacts beside the module, none in the working directory
+ *     GET  /health -> 503 unhealthy
+ *     POST /prove  -> 200, a real proof
+ *
+ * The first is a container that passes its probe and fails every request; the
+ * second never satisfies `depends_on: {condition: service_healthy}`. A health
+ * check is only worth the path it inspects, so there is one derivation and the
+ * check reads it from here.
+ *
+ * The fallback stays module-relative: it names the same directory wherever the
+ * service is started from, which a working-directory fallback cannot.
+ */
+export const ARTIFACT_PATHS = Object.freeze({
+  dir: ARTIFACTS_DIR,
+  wasm: WASM_PATH,
+  zkey: ZKEY_PATH,
+});
+
 // Fixed list sizes, matching the circuit's template parameters:
 //   component main = PaymentCompliance(MAX_WHITELIST, MAX_BLOCKED, MAX_CATEGORIES)
 const MAX_WHITELIST = 10;
