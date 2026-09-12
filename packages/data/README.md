@@ -32,7 +32,22 @@ const testDb = await pgliteDatabase();
 ```
 
 `pgDatabase` wraps a `pg.Pool`. `pgliteDatabase` opens an in-memory PGlite, or a persistent
-one when given `{ dataDir }`. Inside `transaction`, issue every query through `tx`; nested
+one when given `{ dataDir }`.
+
+The pool always carries an `error` listener, because `pg` re-emits the failure of an idle
+connection on the pool itself and an `error` event with no listener is an
+`uncaughtException`: a healthy keeper sitting between ticks would die of a database
+restart without reaching its own fatal log line. The listener swallows the event so the
+next query takes a fresh connection, which is what the pool already does on its own, and
+`onPoolError` is where a service says what to write:
+
+```ts
+const db = pgDatabase(process.env.DATABASE_URL, {
+  onPoolError: (error) => logger.error("keeper.pool_error", { error: error.message }),
+});
+```
+
+`pgDatabaseFromPool(pool, options)` is the same thing over a pool the caller built. Inside `transaction`, issue every query through `tx`; nested
 `tx.transaction` calls become savepoints. A `Database` handed to a transaction callback
 cannot be closed.
 
@@ -133,6 +148,7 @@ beyond the database.
 | `0006_x402_reason` | `x402_payments.reason` |
 | `0007_refund_reason_and_expiry_sweep` | `jobs.refund_reason` |
 | `0008_keeper_give_up` | `keeper_actions.gave_up` |
+| `0009_x402_last_checked` | `x402_payments.last_checked_at` |
 
 Migrations never run at service boot against a configured database. They are an explicit
 deploy step, run before the new service version starts, with the connection string in

@@ -1,5 +1,5 @@
 export type { Database, QueryResult } from "./database.js";
-export { pgDatabase, type PgDatabaseOptions } from "./pg.js";
+export { pgDatabase, pgDatabaseFromPool, type PgDatabaseOptions } from "./pg.js";
 export { pgliteDatabase, type PgliteDatabaseOptions } from "./pglite.js";
 export {
   migrate,

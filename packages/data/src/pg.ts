@@ -3,6 +3,7 @@ import { closeInsideTransaction, withSavepoint, type Database, type QueryResult 
 
 export interface PgDatabaseOptions {
   max?: number;
+  onPoolError?: (error: Error) => void;
 }
 
 interface PgExecutor {
@@ -15,7 +16,13 @@ interface PgResultShape<T> {
 }
 
 export function pgDatabase(connectionString: string, options: PgDatabaseOptions = {}): Database {
-  const pool = new Pool({ connectionString, max: options.max });
+  return pgDatabaseFromPool(new Pool({ connectionString, max: options.max }), options);
+}
+
+export function pgDatabaseFromPool(pool: Pool, options: PgDatabaseOptions = {}): Database {
+  pool.on("error", (error: unknown) => {
+    options.onPoolError?.(error instanceof Error ? error : new Error(String(error)));
+  });
   return {
     query: (text, params) => runQuery(pool, text, params),
     transaction: async (fn) => {
