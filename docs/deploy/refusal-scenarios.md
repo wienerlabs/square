@@ -102,7 +102,36 @@ passed**, the same 46 as on anvil, and the run closed with:
 
     Six scenarios on chain 5042002 (arc/v1): released when compliant, refused by name in every other case.
 
+### After [#245][i245]: the proof bound to the job
+
+The run on the change that binds the proof, in CI (`six refusal scenarios
+(Arc Testnet, funded key)`), with the same funder. **All 46 checks passed.** A
+gated release is **864,840 gas, 0.019026 USDC** from the receipt of scenario 1,
+which is 22 gwei, and the gate's own share is the 619,639 gas above the ungated
+baseline, 0.013632 USDC.
+
+| # | Finalize | Gas | Over the baseline | USDC | Transaction |
+|---|---|---|---|---|---|
+| 0 | released, no module installed | 245,201 | — | 0.005394 | [`0x112a75f1…`](https://testnet.arcscan.app/tx/0x112a75f18cb359a33576f95b0e48752d6912292a4f08144bd181589634dbe41d) |
+| 1 | released, proof verified | 864,840 | +619,639 | 0.019026 | [`0x13d2aa78…`](https://testnet.arcscan.app/tx/0x13d2aa78ffad5bb390763dacee121df015157ebbc187ab8d96191ed3eaa07069) |
+| 2 | refused: `is_compliant is 0` (`daily_limit`) | 816,243 | +571,042 | 0.017957 | [`0x7da3e6d8…`](https://testnet.arcscan.app/tx/0x7da3e6d832778cbb035dc2f0a4e49ecf58482d5473b8c916955ee4b7762655bf) |
+| 3 | refused: `is_compliant is 0` (`blocked_recipient`) | 816,219 | +571,018 | 0.017956 | [`0x1a2b5047…`](https://testnet.arcscan.app/tx/0x1a2b50475c71af7124816e73299282ccc011fd92292b82f60559c7b5cae70412) |
+| 4 | refused: `policy commitment` | 822,761 | +577,560 | 0.018100 | [`0xe2d07df0…`](https://testnet.arcscan.app/tx/0xe2d07df07db3911ecc3fd7bda0bf9aff835ca556e608b706d0c5af45c3e87a58) |
+| 5 | refused: `timestamp outside window` | 828,067 | +582,866 | 0.018217 | [`0x0f2306b1…`](https://testnet.arcscan.app/tx/0x0f2306b1d33d0946471ce28977f92fa0d5d3b0621908b8042c1648016e2f6999) |
+| 6 | refused: `amount` (job Y, carrying job X's proof) | 822,865 | +577,664 | 0.018103 | [`0x1fe23977…`](https://testnet.arcscan.app/tx/0x1fe239773d110d9cd899cb16d46462d99d99fffe9df275059949345ecfd09d6b) |
+| 6 | released (job X, its own proof) | 864,828 | +619,627 | 0.019026 | [`0x7a9efb7e…`](https://testnet.arcscan.app/tx/0x7a9efb7e946b7c6c981b1c4ed9e6dc36c857e57f55734fb5f114487b50dafff1) |
+| 6 | refused: `proof already used` (job Z, identical to X) | 794,079 | +548,878 | 0.017469 | [`0xf6752629…`](https://testnet.arcscan.app/tx/0xf67526292f1cd4fde966a1c255d74bdd96ebac2adcfb8e61f3c9f225b6ee91aa) |
+
+Scenario 2's first payment, released before its refusal, is not in the run's
+printed output and is not listed. The run as a whole was 106 transactions and
+30,971,350 gas, 13,502,868 of it the seven deployments, and it cost the funder
+0.692311 USDC, budgets included, after the sweep.
+
 ### The cost of a gated release
+
+This subsection and the three after it record the earlier run, before
+[#245][i245] moved the proof onto the job; the receipts they cite are that
+run's.
 
 **815,728 gas, 0.017946 USDC**, from the receipt of scenario 1 at the 22 gwei
 every transaction in the run paid. That replaces the report's ~360–420k gas
@@ -222,29 +251,35 @@ The full output, every check included, is on the run summary of the CI job.
 
 ### Measured on anvil
 
+From the CI run on the change that binds the proof to the job
+(`six refusal scenarios (policy → proof → anvil)`, anvil/v1.8.1):
+
 | Finalize | Gas | Over the baseline |
 |---|---|---|
-| 0 released, no module | 245,274 | — |
-| 1 released, proof verified | 808,347 | +563,073 |
-| 2 refused, daily ceiling | 759,702 | +514,428 |
-| 3 refused, blocked recipient | 759,690 | +514,416 |
-| 4 refused, commitment replaced | 766,232 | +520,958 |
-| 5 refused, timestamp outside window | 771,550 | +526,276 |
-| 6 refused, another job (`amount`) | 766,372 | +521,098 |
-| 6 refused, identical job (spent) | 742,386 | +497,112 |
+| 0 released, no module | 254,656 | — |
+| 1 released, proof verified | 857,411 | +602,755 |
+| 2 refused, daily ceiling | 808,838 | +554,182 |
+| 3 refused, blocked recipient | 808,802 | +554,146 |
+| 4 refused, commitment replaced | 815,344 | +560,688 |
+| 5 refused, timestamp outside window | 820,626 | +565,970 |
+| 6 refused, another job (`amount`) | 815,460 | +560,804 |
+| 6 refused, identical job (spent) | 786,674 | +532,018 |
 
-The whole run is 107 transactions and 29,404,176 gas, of which 16,138,438 is
-its 11 deployments. Two consecutive runs agreed to within a few dozen gas:
-scenario 2's refusal was 759,738 in one and 759,702 in the other. Salts, keys
-and proofs are drawn per run, and calldata costs follow them.
+The whole run is 116 transactions and 34,152,237 gas, of which 17,015,717 is
+its 11 deployments. Two runs of this version agreed to within a few dozen gas:
+scenario 2's refusal was 808,838 in CI and 808,814 locally. Salts, keys and
+proofs are drawn per run, and calldata costs follow them.
 
-A gated release is 808,347 gas, the same figure [#76][i76] measured on a
-different stack. That is roughly twice the ~360–420k the report estimated,
-because the pairing check runs twice: once in `previewRelease`, where the
-verdict becomes the split, and once in `checkRelease`, which writes the
-counter and the mark ([compliance-gate.md](../design/compliance-gate.md)). A
-refusal costs nearly as much as a release, since every refusal the run shows
-is decided after the pairing.
+A gated release is 857,411 gas. Before [#245][i245] it was 808,347, the figure
+[#76][i76] measured on a different stack, with an ungated baseline of 245,274.
+Both rose, so not all of the difference is the gate; the gate's own share went
+from +563,073 to +602,755. Either way a gated release is roughly twice the
+~360–420k the report estimated, because the pairing check runs twice: once in
+`previewRelease`, where the verdict becomes the split, and once in
+`checkRelease`, which writes the counter and the mark
+([compliance-gate.md](../design/compliance-gate.md)). A refusal costs nearly as
+much as a release, since every refusal the run shows is decided after the
+pairing.
 
 ## Negative controls
 
