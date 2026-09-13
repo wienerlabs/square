@@ -113,9 +113,9 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
     ///      one immutable limit. A limit between the two passes the preview,
     ///      pays, and then cannot book what it paid. Measured with every slot
     ///      cold, through `SquareHook.beforeAction`, on a job carrying the
-    ///      longest description the kernel accepts: 385 896 gas, and 16 892 more
+    ///      longest description the kernel accepts: 432 142 gas, and 14 904 more
     ///      for a poster's first-ever spend, which writes a slot that was zero.
-    ///      402 788 in all, rounded up to the next 50 000.
+    ///      447 046 in all, rounded up to the next 50 000.
     ///      `test_theFloorCoversTheCheck` searches for the figure on every run
     ///      and fails once it passes this one.
     ///

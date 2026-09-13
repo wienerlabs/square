@@ -595,6 +595,11 @@ contract ComplianceModuleTest is Test, BuyerLists {
     /// would be refused and the client paid — a silent, expensive failure. This
     /// measures the two calls separately and asserts the margin.
     function test_gas_eachCappedCallHasHeadroom() public {
+        // The margin is the deployed bytecode's. `forge coverage` builds without
+        // the optimiser, and there the preview alone measures 502 083, so the
+        // margin is asserted by `forge test`, as the floor is.
+        if (vm.isContext(VmSafe.ForgeContext.Coverage)) return;
+
         uint256 jobId = submittedJob();
         vm.warp(FIXTURE_TIMESTAMP);
         bytes memory proof = compliantProof();

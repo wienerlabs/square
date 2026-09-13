@@ -67,11 +67,11 @@ The cost of computing the verdict twice is one extra pairing check. Measured:
 
 | Call | Gas | Cap |
 |---|---|---|
-| `resolvePayout`, preview included | 319 298 | 1 000 000 |
-| `checkRelease`, verify plus writes | 310 799 | 1 000 000 |
-| a gated `complete`, end to end | 977 473 | — |
+| `resolvePayout`, preview included | 383 661 | 1 000 000 |
+| `checkRelease`, verify plus writes | 383 166 | 1 000 000 |
+| a gated `complete`, end to end | 1 091 607 | — |
 
-Each capped call uses under a third of its cap. That margin is the criterion,
+Each capped call uses under half of its cap. That margin is the criterion,
 not the total: a preview that ran out of gas inside the cap would be caught and
 read as "not verified", so a valid proof would be refused and the client paid —
 a silent and expensive failure. `test_gas_eachCappedCallHasHeadroom` asserts it.
@@ -109,16 +109,16 @@ kernel and not of the release. `ComplianceModule.MIN_HOOK_GAS_LIMIT` is 450 000,
 and the kernel's limit is immutable, so one check in the constructor holds for
 the module's whole life. The figure is measured on every run by
 `test_theFloorCoversTheCheck`, cold, on a job carrying the longest description
-the kernel accepts: 385 896 for the check to book, 16 892 more for a poster's
-first-ever spend, 402 788 in all, rounded up. The same test asserts the gap it
-guards is still there — the check needs 385 896 where the preview needs 362 270.
+the kernel accepts: 432 142 for the check to book, 14 904 more for a poster's
+first-ever spend, 447 046 in all, rounded up. The same test asserts the gap it
+guards is still there — the check needs 432 142 where the preview needs 410 830.
 
 A caller cannot squeeze the check under the limit instead, which matters because
 `KeeperEvaluator.finalize` is permissionless and the caller picks the gas. When
 a hook call runs out, the kernel keeps one 64th of what it had, and that does
 not pay for the credits and events still to come, so the transaction reverts
 whole rather than settling. `test_noCallerGasPaysWithoutBooking` sweeps 236 gas
-limits from 250 000 to 2 600 000: 76 reverted, 160 paid and booked, none paid
+limits from 250 000 to 2 600 000: 83 reverted, 153 paid and booked, none paid
 unbooked.
 
 **Behind that line.** The mark is written before the counter is advanced and
