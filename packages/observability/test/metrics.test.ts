@@ -263,11 +263,13 @@ describe("progress and failure signals the alerting reads", () => {
     const metrics = createMetrics({ service: "indexer", defaultMetrics: false });
     metrics.recordHookWriteFailure("reputation");
     metrics.recordHookWriteFailure("validation");
+    metrics.recordHookWriteFailure("complianceCheck");
     metrics.recordAlertDispatchFailure("indexerLagging", "notify");
     metrics.recordQuarantinedEvent("SquareJob", "JobDescribed");
-    expect(metrics.snapshot()).toMatchObject({ hookWriteFailures: 2, alertDispatchFailures: 1, quarantinedEvents: 1 });
+    expect(metrics.snapshot()).toMatchObject({ hookWriteFailures: 3, alertDispatchFailures: 1, quarantinedEvents: 1 });
     const { registry, names } = metrics;
     expect(await valueOf(registry, names.hookWriteFailures, { kind: "reputation" })).toBe(1);
+    expect(await valueOf(registry, names.hookWriteFailures, { kind: "complianceCheck" })).toBe(1);
     expect(await valueOf(registry, names.alertDispatchFailures, { rule: "indexerLagging", stage: "notify" })).toBe(1);
     expect(await valueOf(registry, names.quarantinedEvents, { contract: "SquareJob", event: "JobDescribed" })).toBe(1);
   });

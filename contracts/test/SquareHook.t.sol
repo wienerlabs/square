@@ -408,6 +408,10 @@ contract SquareHookTest is BaseTest {
         uint256 gasBefore = gasleft();
         vm.expectEmit(true, false, false, false);
         emit SquareHook.ComplianceCheckFailed(jobId, "");
+        // The preview passed and the check never finished, so what the kernel
+        // paid is reported as unconfirmed rather than as one more refusal (#225).
+        vm.expectEmit(true, true, false, true, address(hook));
+        emit SquareHook.ReleaseUnconfirmed(jobId, provider, netOf(BUDGET));
         keeper.finalize{gas: 5_000_000}(jobId, "");
         assertLt(gasBefore - gasleft(), 2_500_000, "the runaway check is cut at the cap");
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));

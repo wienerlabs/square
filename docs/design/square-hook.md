@@ -156,7 +156,7 @@ what the money is eventually spent on.
 | `setBudget` | – | no-op | state | – |
 | `fund` | – | no-op | pulls USDC | – |
 | `submit` | – | decode `agentId`, verify ownership, store `agentOf[jobId]`, `validationOf[jobId]`; emit `AgentBound` | Submitted | – |
-| `complete` | `payee = ClaimMarket.payeeOf(jobId)`; `providerBps` from `optParams`, then **zeroed by `complianceModule.previewRelease` when a module is installed and refuses** (#27) | recompute `payee` and `providerShare`; `complianceModule.checkRelease(jobId, payee, providerShare, token, client, proof)` if a module is installed; emit `ComplianceChecked` | credit ledger, emit normative events | `giveFeedback(agentOf[jobId], +1, "square", "completed", …, reason)`; `validationResponse(requestHash, 100, …)` when a proof was verified; emit `ReputationRecorded` / `ValidationRecorded` |
+| `complete` | `payee = ClaimMarket.payeeOf(jobId)`; `providerBps` from `optParams`, then **zeroed by `complianceModule.previewRelease` when a module is installed and refuses** (#27) | recompute `payee` and `providerShare`; `complianceModule.checkRelease(jobId, payee, providerShare, token, client, proof)` if a module is installed; emit `ComplianceChecked` | credit ledger, emit normative events | `giveFeedback(agentOf[jobId], +1, "square", "completed", …, reason)`; `validationResponse(requestHash, 100, …)` when a proof was verified; emit `ReputationRecorded` / `ValidationRecorded`; emit `ReleaseUnconfirmed(jobId, payee, amount)` when a module is installed, the kernel paid a non-zero split and the check did not pass (#225) |
 | `reject` | – | no-op | refund credit | if the job was Submitted: `giveFeedback(agentOf[jobId], −1, …, "rejected")`, `validationResponse(requestHash, 0, …)`; otherwise nothing |
 | `claimRefund` | not hookable | | refund credit, Expired | not hookable; `SquareHook.recordExpiry(jobId)` is permissionless and writes the neutral feedback once the kernel reports `Expired` |
 
@@ -175,8 +175,10 @@ The order inside `complete` is the whole point of the unified hook:
    proof to `provider` would reject every sold receivable, or would bind to an
    address that never receives the money.
 2. **Compliance second**, in `beforeAction`, against the routed `payee` and the
-   routed `providerShare` (net × bps). A revert here blocks the release and
-   nothing has changed.
+   routed `providerShare` (net × bps). This is the bookkeeping, not the gate:
+   since #100 the kernel calls it tolerantly, after the split has already been
+   taken from `resolvePayout`, so a revert here blocks nothing. That is why the
+   module's preview has to refuse everything its check could revert on (#225).
 3. **Kernel third.** Status, ledger, events.
 4. **Reputation last**, in `afterAction`, credited to `agentOf[jobId]`: the
    agent that did the work. The payee is irrelevant here. Money is transferable;
@@ -184,7 +186,7 @@ The order inside `complete` is the whole point of the unified hook:
 
 `beforeAction(complete)` and `resolvePayout` compute the same `(payee,
 providerShare)` from the same inputs. They are two calls because one is a view
-the kernel needs a return value from and the other is where a revert belongs.
+the kernel needs a return value from and the other is where the writes are.
 
 ## Nothing in the hook blocks settlement
 
@@ -203,7 +205,10 @@ tolerantly: a hook that reverts or exhausts its gas cap yields
 `HookFailed(jobId, hook, selector, reason)` and the settlement finishes. The
 compliance module is wrapped the same way inside `_checkRelease`; a reverting
 module reads as "not verified", emits `ComplianceCheckFailed`, and the job
-completes with a `0` validation response. Only `resolvePayout` stays strict,
+completes with a `0` validation response. If the preview had passed, the kernel
+has paid by then, and `afterAction` reports that payment as
+`ReleaseUnconfirmed(jobId, payee, amount)`: since #225 the one event that says
+money left escrow without the check that books it. Only `resolvePayout` stays strict,
 because its answer is the payee; when it cannot answer, `claimRefund` reopens
 after `expiredAt` and emits `PayoutUnresolvable`. The pre-settlement actions
 keep the strict call, so a wrong agent binding still reverts the submit.
@@ -224,7 +229,8 @@ That trade is only defensible while something reads the event, so the reader is
 named here. **`services/indexer`** decodes both events as it applies a batch,
 logs `indexer.hook_write_failed` at `error` and counts them into
 `square_hook_write_failures_total{kind}` with `kind` set to `reputation` or
-`validation`. The indexer's alerting carries the `hookWriteFailures` rule from
+`validation`; `ReleaseUnconfirmed` is read the same way, with `kind` set to
+`complianceCheck` (#225). The indexer's alerting carries the `hookWriteFailures` rule from
 `packages/observability`, which fires on the first one rather than on a rate,
 because a registry that starts refusing writes is not a rate problem. The raw
 event stays queryable in `job_events` either way.
@@ -283,6 +289,12 @@ that gets more expensive both fit without a redeploy, while a hook that loops
 still cannot burn the caller's whole block. The acceptance test in #25 measures
 the real `complete` gas with the hook attached and fails if the measured hook
 share exceeds half the limit, so the margin cannot silently erode.
+
+A compliance module puts a floor under it. Its check costs more than its
+preview and both run under this one limit, so a limit between the two lets the
+preview pay what the check then cannot book. `ComplianceModule` refuses at
+construction a kernel whose `hookGasLimit` is under `MIN_HOOK_GAS_LIMIT`,
+450 000 (#225; the measurement is in [compliance-gate.md](compliance-gate.md#when-the-preview-said-yes-and-the-check-could-not)).
 
 ## `claimRefund` and the receivable
 
