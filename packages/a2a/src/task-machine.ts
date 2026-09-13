@@ -31,6 +31,8 @@ export interface TaskRecord {
   state: TaskState;
   /** Set on DELIVERED: a reference to the work, sized for ERC-8183's bytes32. */
   deliverable?: string;
+  /** Set on DELIVERED when a settlement produced it: the transaction that carried the submit. */
+  reference?: string;
   /** Set on FAILED. */
   reason?: string;
   createdAt: string;
@@ -145,10 +147,11 @@ export class TaskMachine {
    * ready to call `submit`, and nothing more: the escrow is untouched, and it
    * stays untouched until the evaluator acts or the challenge window closes.
    */
-  deliver(taskId: string, deliverable: string): TaskRecord {
+  deliver(taskId: string, deliverable: string, reference?: string): TaskRecord {
     if (!deliverable) throw new TaskTransitionError(taskId, TaskState.Working, "deliver (empty deliverable)");
     return this.transition(taskId, [TaskState.Working], TaskState.Delivered, "deliver", (task) => {
       task.deliverable = deliverable;
+      if (reference !== undefined) task.reference = reference;
     });
   }
 
