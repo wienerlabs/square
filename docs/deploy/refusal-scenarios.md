@@ -9,6 +9,7 @@ and `SCENARIO_FUNDER_PRIVATE_KEY` for Arc.
 [i28]: https://github.com/wienerlabs/square/issues/28
 [i76]: https://github.com/wienerlabs/square/issues/76
 [i100]: https://github.com/wienerlabs/square/issues/100
+[i245]: https://github.com/wienerlabs/square/issues/245
 
 ## What is being claimed
 
@@ -20,12 +21,12 @@ module gave.
 
 | # | Scenario | What the run does | Asserted |
 |---|---|---|---|
-| 1 | Compliant payment | builds a proof from the chain's own values and finalizes with it | `ReleaseVerified`; the provider is paid the net; the day's counter moves by exactly that |
+| 1 | Compliant payment | builds a proof from the chain's own values, binds it to the job and finalizes | `ReleaseVerified`; the provider is paid the net; the day's counter moves by exactly that |
 | 2 | Over the daily cap | releases a first payment, then proves a second that takes the day over its ceiling | the circuit emits `is_compliant = 0` with `daily_limit` alone violated; the verifier still accepts the proof; refused, `is_compliant is 0` |
 | 3 | Blocked recipient | proves a payment to an address the policy blocks | `is_compliant = 0` with `blocked_recipient` alone violated; refused, `is_compliant is 0` |
 | 4 | Policy replaced, old proof | builds a proof, then the client commits a new policy | `previewRelease` true before the change and false after; refused, `policy commitment` |
 | 5 | Outside the time window | the policy allows one hour; the proof claims that hour while the chain is twelve hours away | an honest proof at the chain's time violates `time_window` alone; the lying one is compliant; refused, `timestamp outside window` |
-| 6 | Another job's valid proof | presents job X's proof against job Y, then against X, then against a job identical to X | Y refused, `amount`; X released; the identical job refused, `proof already used` |
+| 6 | Another job's valid proof | binds job X's proof to job Y, then to X, then to a job identical to X | Y refused, `amount`; X released; the identical job refused, `proof already used` |
 
 Scenario 6 is about the statement, not about the job number. What
 `ComplianceModule` binds is the payee, the amount, the token, the client, the
@@ -72,6 +73,12 @@ fails the run, which is what the negative controls below rely on.
   job's net payout, the counter is what the registry holds, and the timestamp
   is the chain's own, except in scenario 5, whose point is claiming another
   one.
+- **The proof is bound to the job, not handed to the crank.** Since
+  [#245][i245] the module reads the proof the client wrote with
+  `setComplianceProof`, and the bytes a keeper passes to `finalize` decide
+  nothing. So each client binds its proof before the job is finalized, which is
+  one transaction per proof-carrying finalize. The baseline carries no proof
+  and binds nothing.
 - **The clock is never moved.** The run waits out the real challenge window,
   on anvil as on Arc.
 - **Scenario 2 keeps to one day.** Its two releases have to fall on the same

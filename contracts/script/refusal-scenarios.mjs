@@ -408,6 +408,12 @@ function preview(s, { jobId, client, provider, amount, encoded }) {
 // Finalizes as the funder, who cranks, and reports who was paid, what the
 // counter did, and which of the module's events it emitted, with the reason.
 async function finalize(s, { jobId, client, provider, encoded, label }) {
+  // square#245 moved the proof onto the job: the module reads what the client
+  // bound with `setComplianceProof`, and the bytes a crank passes to `finalize`
+  // decide nothing. So the client binds it first, as refuse-and-replay-on-anvil
+  // does, and the same bytes still go to the crank. The baseline carries no
+  // proof and runs with no module installed, so it has nothing to bind.
+  if (encoded !== '0x') await send(client, s.kernel, 'setComplianceProof', [jobId, encoded], `bind ${label}`);
   const before = {
     provider: await read(s.kernel, 'withdrawable', [provider.address]),
     client: await read(s.kernel, 'withdrawable', [client.address]),
