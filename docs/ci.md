@@ -25,6 +25,7 @@ pull request.
 | `packages/x402 (anvil)`, `services/indexer (anvil)`, `services/keeper (anvil)` | Against a local chain the job starts itself: anvil plus `DeployLocal.s.sol`, asserted before the suites run. |
 | `app (static export)`, `site (static export)` | The reference application and the site still build. |
 | `a2a` | `@squaresdk/a2a` typechecks and builds, and an agent still cannot pay itself. |
+| `agent (anvil)` | `@squaresdk/agent`: the card against the schema, admission and delivery against a stub chain, and the whole loop on anvil with `DeployLocal.s.sol`: a funded job, `task/create`, `DELIVERED` by the on-chain `submit`, the crank's `finalize`, the provider's withdrawal. **Not required** until it has run without flaking. |
 | `cli` | The resolver and the CLI build; the CLI's exit codes are unchanged. Hermetic. |
 | `did-aip-driver (unit)` | The driver's config parsing and envelope construction. |
 | `did-aip-driver image` | The container answers, and a malformed DID is still a 400 rather than a 500. On `main` it then publishes `:<version>` and `:sha-<commit>` to GHCR; the version tag is written once and never overwritten, so a version that already exists is left as it is and only the sha tag is pushed. |
