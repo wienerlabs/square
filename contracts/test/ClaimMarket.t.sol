@@ -144,7 +144,7 @@ contract ClaimMarketTest is BaseTest {
         uint256 jobId = _sold();
         pastWindow(jobId);
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(kernel.withdrawable(buyer), netOf(BUDGET), "face value to the buyer");
         assertEq(kernel.withdrawable(provider), 0);
         assertEq(record(jobId).payee, buyer);
@@ -154,7 +154,7 @@ contract ClaimMarketTest is BaseTest {
     function test_settlement_unsoldClaimPaysTheProvider() public {
         uint256 jobId = _listed();
         pastWindow(jobId);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(kernel.withdrawable(provider), netOf(BUDGET));
         assertEq(kernel.withdrawable(buyer), 0);
     }
@@ -164,14 +164,14 @@ contract ClaimMarketTest is BaseTest {
         vm.prank(provider);
         market.cancel(jobId);
         pastWindow(jobId);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(kernel.withdrawable(provider), netOf(BUDGET));
     }
 
     function test_reputation_staysWithTheProviderWhenTheClaimIsSold() public {
         uint256 jobId = _sold();
         pastWindow(jobId);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(reputation.feedbackCount(AGENT_ID), 1);
         MockReputationRegistry.Feedback memory f = reputation.feedbackAt(AGENT_ID, 0);
         assertEq(f.value, 1);
@@ -201,7 +201,7 @@ contract ClaimMarketTest is BaseTest {
         vote(arb1, jobId, IArbitration.Outcome.Complete, FULL_BPS);
         vote(arb2, jobId, IArbitration.Outcome.Complete, FULL_BPS);
         vm.prank(cranker);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
         assertEq(kernel.withdrawable(buyer), netOf(BUDGET));
         assertEq(arbitration.withdrawable(buyer), bond, "the bond follows the party that carried the risk");
     }
@@ -212,7 +212,7 @@ contract ClaimMarketTest is BaseTest {
         vm.expectRevert(ISquareJob.SettledByEvaluator.selector);
         kernel.claimRefund(jobId);
         vm.prank(buyer);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(kernel.withdrawable(buyer), netOf(BUDGET), "the buyer cranks it and is paid");
         assertEq(kernel.withdrawable(client), 0);
     }
@@ -259,7 +259,7 @@ contract ClaimMarketTest is BaseTest {
         vm.prank(provider);
         market.list(jobId, PRICE);
         pastWindow(jobId);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(kernel.withdrawable(provider), netOf(BUDGET), "the provider is paid exactly once");
         assertEq(usdc.balanceOf(buyer), buyerBefore, "nobody could buy a claim the kernel would not honour");
         assertEq(usdc.balanceOf(provider), 0);

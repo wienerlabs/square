@@ -567,21 +567,21 @@ export class SquareClient {
     });
   }
 
-  async finalize(jobId: bigint, complianceProof: Hex = "0x"): Promise<TransactionResult> {
+  async finalize(jobId: bigint): Promise<TransactionResult> {
     return this.write({
       abi: keeperEvaluatorAbi,
       address: this.deployment.keeperEvaluator,
       functionName: "finalize",
-      args: [jobId, complianceProof],
+      args: [jobId],
     });
   }
 
-  async finalizeDecided(jobId: bigint, complianceProof: Hex = "0x"): Promise<TransactionResult> {
+  async finalizeDecided(jobId: bigint): Promise<TransactionResult> {
     return this.write({
       abi: keeperEvaluatorAbi,
       address: this.deployment.keeperEvaluator,
       functionName: "finalizeDecided",
-      args: [jobId, complianceProof],
+      args: [jobId],
     });
   }
 
@@ -610,6 +610,10 @@ export class SquareClient {
 
   async lapse(jobId: bigint): Promise<TransactionResult> {
     return this.write({ abi: arbitrationAbi, address: this.deployment.arbitration, functionName: "lapse", args: [jobId] });
+  }
+
+  async settleBond(jobId: bigint): Promise<TransactionResult> {
+    return this.write({ abi: arbitrationAbi, address: this.deployment.arbitration, functionName: "settleBond", args: [jobId] });
   }
 
   async withdrawBond(): Promise<TransactionResult> {

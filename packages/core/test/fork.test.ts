@@ -188,7 +188,7 @@ describe.skipIf(!forkUrl)("lifecycle on an Arc Testnet fork with the real ERC-80
     await testClient.increaseTime({ seconds: Number(BigInt(end) - now + 1n) });
     await testClient.mine({ blocks: 1 });
 
-    const finalized = await cranker.finalize(jobId, "0x");
+    const finalized = await cranker.finalize(jobId);
     const names = finalized.events.map((e) => `${e.contract}.${e.eventName}`);
     expect(names).toContain("SquareJob.JobCompleted");
     expect(names).toContain("SquareHook.ReputationRecorded");

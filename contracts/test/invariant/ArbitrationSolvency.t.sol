@@ -161,7 +161,7 @@ contract ArbitrationHandler is Test {
         if (outcome != IArbitration.Outcome.Complete && outcome != IArbitration.Outcome.Lapsed) return;
         if (keeper.disputeOf(jobId).resolved) return;
         vm.prank(cranker);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
         finalized++;
     }
 
