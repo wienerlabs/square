@@ -717,6 +717,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
         vm.prank(owner);
         registry.setSpender(address(module), false);
         uint256 jobId = submittedJob();
+        bindProof(jobId, compliantProof());
         vm.warp(FIXTURE_TIMESTAMP);
 
         vm.recordLogs();
@@ -780,6 +781,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
     function test_theUnconfirmedReportIsLostWhenTheHookFrameRunsOut() public {
         bytes memory proof = compliantProof();
         uint256 jobId = submittedJob();
+        bindProof(jobId, proof);
         vm.warp(FIXTURE_TIMESTAMP);
 
         // The check cannot book, so the kernel has paid and `_reportUnconfirmed`
@@ -832,6 +834,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
     function test_aSpendTheRegistryRefusesStillSpendsTheProof() public {
         bytes memory proof = compliantProof();
         uint256 first = submittedJob();
+        bindProof(first, proof);
         vm.warp(FIXTURE_TIMESTAMP);
 
         vm.mockCallRevert(
@@ -852,6 +855,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
         assertTrue(module.isConsumed(statementOf(proof)), "the mark went back with the failed spend");
 
         uint256 second = submittedJob();
+        bindProof(second, proof);
         vm.warp(FIXTURE_TIMESTAMP);
         vm.expectEmit(true, false, false, true, address(module));
         emit ComplianceModule.ReleaseRefused(second, "proof already used");
@@ -877,6 +881,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
         bytes memory proof = compliantProof();
         for (uint256 i = 0; i < 3; i++) {
             uint256 jobId = _submittedJobOn(address(next), "spec:0xabc");
+            bindProof(jobId, proof);
             vm.warp(FIXTURE_TIMESTAMP);
             assertFalse(
                 module.previewRelease(jobId, provider, FIXTURE_AMOUNT, address(usdc), client, proof),
@@ -893,6 +898,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
         vm.prank(owner);
         module.setHook(address(next));
         uint256 rotated = _submittedJobOn(address(next), "spec:0xabc");
+        bindProof(rotated, proof);
         vm.warp(FIXTURE_TIMESTAMP);
         vm.prank(address(keeper));
         kernel.complete(rotated, bytes32(0), abi.encode(FULL_BPS, proof));
@@ -1035,6 +1041,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
             description[i] = "x";
         }
         uint256 jobId = _submittedJobOn(address(hook), string(description));
+        bindProof(jobId, compliantProof());
         vm.warp(FIXTURE_TIMESTAMP);
         bytes memory data = abi.encode(bytes32(0), abi.encode(FULL_BPS, compliantProof()));
 
@@ -1072,6 +1079,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
     /// enough to settle on 1/64 of it, and no pick pays a release unbooked.
     function test_noCallerGasPaysWithoutBooking() public {
         uint256 jobId = submittedJob();
+        bindProof(jobId, compliantProof());
         vm.warp(FIXTURE_TIMESTAMP);
         bytes memory optParams = abi.encode(FULL_BPS, compliantProof());
         uint256[4] memory count;
