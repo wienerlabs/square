@@ -26,6 +26,7 @@ pull request.
 | `app (static export)`, `site (static export)` | The reference application and the site still build. |
 | `a2a` | `@squaresdk/a2a` typechecks and builds, and an agent still cannot pay itself. |
 | `agent (anvil)` | `@squaresdk/agent`: the card against the schema, admission and delivery against a stub chain, and the whole loop on anvil with `DeployLocal.s.sol`: a funded job, `task/create`, `DELIVERED` by the on-chain `submit`, the crank's `finalize`, the provider's withdrawal. **Not required** until it has run without flaking. |
+| `mcp (anvil)` | `@squaresdk/mcp`: the tool pool against a real MCP server over Streamable HTTP, the Square MCP server through an in-memory MCP client, and on anvil both directions at once: an agent whose capability is a bridged MCP tool, hired through `square-mcp` spawned over stdio. **Not required** until it has run without flaking. |
 | `cli` | The resolver and the CLI build; the CLI's exit codes are unchanged. Hermetic. |
 | `did-aip-driver (unit)` | The driver's config parsing and envelope construction. |
 | `did-aip-driver image` | The container answers, and a malformed DID is still a 400 rather than a 500. On `main` it then publishes `:<version>` and `:sha-<commit>` to GHCR; the version tag is written once and never overwritten, so a version that already exists is left as it is and only the sha tag is pushed. |
