@@ -70,6 +70,10 @@ interface JobRow {
 const COLUMNS =
   "chain_id, job_id, client, provider, evaluator, hook, description, budget, status, expired_at, created_at, funded_at, submitted_at, challenge_end, platform_fee_bp, evaluator_fee_bp, deliverable, payee, provider_bps, reason, disputed, agent_id, updated_block, refund_reason";
 
+const QUALIFIED_COLUMNS = COLUMNS.split(", ")
+  .map((column) => `jobs.${column}`)
+  .join(", ");
+
 const OPEN_FILTER = `chain_id = $1 and status in (${JOB_STATUS.open}, ${JOB_STATUS.funded})`;
 const IN_CHALLENGE_WINDOW_FILTER = `chain_id = $1 and status = ${JOB_STATUS.submitted} and not disputed and challenge_end > $2`;
 const FINALIZABLE_FILTER = `chain_id = $1 and status = ${JOB_STATUS.submitted} and not disputed and challenge_end is not null and challenge_end <= $2`;
@@ -236,8 +240,14 @@ export async function listDisputedSubmitted(db: Database, chainId: number, evalu
   return rows.map(rowToJob);
 }
 
-export async function listExpiredWithAgent(db: Database, chainId: number, evaluator?: Hex, limit?: number): Promise<JobRecord[]> {
-  const params: unknown[] = [chainId];
+export async function listExpiredWithAgent(
+  db: Database,
+  chainId: number,
+  evaluator?: Hex,
+  limit?: number,
+  now: bigint = BigInt(Math.floor(Date.now() / 1000)),
+): Promise<JobRecord[]> {
+  const params: unknown[] = [chainId, now.toString()];
   let filter = "";
   if (evaluator !== undefined) {
     params.push(hexToBytes(evaluator));
@@ -249,16 +259,13 @@ export async function listExpiredWithAgent(db: Database, chainId: number, evalua
     bound = ` limit $${params.length}`;
   }
   const { rows } = await db.query<JobRow>(
-    `select ${COLUMNS} from jobs
+    `select ${QUALIFIED_COLUMNS} from jobs
+     left join keeper_job_state state on state.chain_id = jobs.chain_id and state.job_id = jobs.job_id
      where jobs.chain_id = $1 and jobs.status = ${JOB_STATUS.expired} and jobs.agent_id is not null${filter}
-       and not exists (
-         select 1 from keeper_actions
-         where keeper_actions.chain_id = jobs.chain_id
-           and keeper_actions.job_id = jobs.job_id
-           and keeper_actions.action = 'recordExpiry'
-           and keeper_actions.reason is null
-       )
-     order by jobs.job_id${bound}`,
+       and state.expiry_recorded_at is null
+       and coalesce(state.expiry_gave_up, false) = false
+       and (state.expiry_next_at is null or state.expiry_next_at <= $2)
+     order by coalesce(state.expiry_next_at, 0), jobs.job_id${bound}`,
     params,
   );
   return rows.map(rowToJob);

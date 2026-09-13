@@ -122,7 +122,9 @@ describe.skipIf(!reachable)("keeper against anvil", () => {
     await syncAll();
     const again = await keeper.tick((await publicClient.getBlock()).timestamp);
     expect(again.finalized).toEqual([]);
-    expect(again.pending).toBeGreaterThanOrEqual(1);
-    expect(again.oldestPendingAgeSeconds).toBeGreaterThan(0);
+    expect(again.skipped.find((s) => s.jobId === poor)?.reason).toBe("unprofitable");
+    expect(again.unprofitable).toBe(1);
+    expect(again.pending).toBe(0);
+    expect(again.oldestPendingAgeSeconds).toBe(0);
   }, 120_000);
 });

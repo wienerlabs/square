@@ -11,7 +11,7 @@ import {
 } from "@squaresdk/core";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { zeroAddress, type Address } from "viem";
+import { zeroAddress, type Address, type Hex } from "viem";
 import { useWalletClient } from "wagmi";
 import { keeperEvaluates } from "./actions";
 import { chainClockOffset, chainNow } from "./clock";
@@ -121,6 +121,12 @@ export interface JobDetail {
   keeperDispute: KeeperDispute;
   dispute: ArbitrationDispute;
   listing: Listing;
+  /**
+   * The client's buyer list root (square#30); zero when it approved nobody. Null
+   * when the market could not answer, which is what a market deployed before
+   * square#30 does, since it has no registry to read.
+   */
+  buyerRoot: Hex | null;
   netPayout: bigint;
   payee: Address;
   /** The ERC-8004 agent the submit bound, or null when none was. Agent 0 is an agent (#300). */
@@ -142,7 +148,7 @@ export function useJob(id: bigint | null) {
       if (id < 1n || id > counter) return null;
       const record = await readOnlyClient.getJobRecord(id);
       const keeperHoldsTheWindow = keeperEvaluates(record, deployment.keeperEvaluator);
-      const [challengeEnd, disputed, keeperDispute, dispute, listing, netPayout, payee, agentId, expiryRecorded, bond] =
+      const [challengeEnd, disputed, keeperDispute, dispute, listing, buyerRoot, netPayout, payee, agentId, expiryRecorded, bond] =
         await Promise.all([
           keeperHoldsTheWindow ? readOnlyClient.challengeEndsAt(id) : Promise.resolve(0),
           readOnlyClient.isDisputed(id),
@@ -154,6 +160,7 @@ export function useJob(id: bigint | null) {
           }),
           readOnlyClient.disputeOf(id),
           readOnlyClient.listing(id),
+          readOnlyClient.buyerRootOf(record.client).catch((): null => null),
           readOnlyClient.netPayout(id),
           readOnlyClient.payeeOf(id),
           readOnlyClient.agentOf(id),
@@ -189,6 +196,7 @@ export function useJob(id: bigint | null) {
         },
         dispute,
         listing,
+        buyerRoot,
         netPayout,
         payee,
         agentId,

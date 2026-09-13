@@ -1,0 +1,91 @@
+name: agent
+
+# @squaresdk/agent: an agent in a few lines. The unit suite holds the card to
+# docs/agent-card/schema.json and drives admission, delivery and the HTTP
+# surface against a stub chain; the anvil suite runs the whole loop against
+# DeployLocal.s.sol, the way packages/core's does.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/agent/**"
+      - "packages/a2a/**"
+      - "packages/core/**"
+      - "packages/x402/**"
+      - "docs/agent-card/schema.json"
+      - "contracts/**"
+      - ".github/workflows/agent.yml"
+  # No path filter on pull_request, deliberately. A required status check that a
+  # filter skips never reports, and GitHub blocks the merge waiting for a run
+  # that will not happen. The push filter above still keeps main's runs narrow.
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: agent (anvil)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09  # v1.9.1
+        with:
+          version: stable
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Build contracts
+        working-directory: contracts
+        run: forge build
+
+      - name: Build path dependencies
+        run: |
+          for dep in packages/did-resolver packages/core packages/observability packages/data packages/a2a packages/x402; do
+            (cd "$dep" && npm install --install-links && npm run build)
+          done
+
+      - name: Install, typecheck, unit tests, build
+        working-directory: packages/agent
+        run: |
+          npm install --install-links
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Start anvil and deploy the local stack
+        working-directory: contracts
+        run: |
+          anvil --port 8545 --chain-id 31337 --silent &
+          for _ in $(seq 1 30); do cast chain-id --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1 && break; sleep 1; done
+          forge script script/DeployLocal.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
+
+      # The anvil suite is `describe.skipIf(!reachable)`, so without a node it
+      # would skip and the job would pass having proved nothing; the same
+      # guard packages.yml uses, for the same reason.
+      - name: The chain the suite refuses to run without
+        run: |
+          set -uo pipefail
+          fail=0
+          if cast chain-id --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1
+          then echo "  ok      anvil answering on 127.0.0.1:8545, chain $(cast chain-id --rpc-url http://127.0.0.1:8545)"
+          else echo "  MISSING anvil is not answering on 127.0.0.1:8545"; fail=1; fi
+          if [ -f contracts/deployments/31337.json ]
+          then echo "  ok      contracts/deployments/31337.json"
+          else echo "  MISSING contracts/deployments/31337.json"; fail=1; fi
+          exit $fail
+
+      - name: The whole loop on anvil
+        working-directory: packages/agent
+        run: npm run test:anvil -- --reporter=default --reporter=json --outputFile.json=/tmp/agent.json
+
+      - name: How many tests ran
+        if: always()
+        run: node .github/scripts/vitest-summary.mjs /tmp/agent.json "@squaresdk/agent"
