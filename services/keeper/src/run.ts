@@ -1,6 +1,6 @@
 import type { Hex } from "viem";
 import { JobStatus, squareHookAbi, type SquareClient } from "@squaresdk/core";
-import { disputes, jobs, keeperActions, type Database } from "@squaresdk/data";
+import { disputes, jobs, keeperActions, keeperJobState, type Database } from "@squaresdk/data";
 import { waitUnlessAborted, type Logger, type Metrics } from "@squaresdk/observability";
 import {
   decide,
@@ -9,6 +9,7 @@ import {
   gasCostInUsdc,
   keeperFee,
   oldestPendingAge,
+  profitable,
   type KeeperCandidate,
   type KeeperEconomics,
 } from "./decide.js";
@@ -63,6 +64,7 @@ export interface TickReport {
   skipped: Array<{ jobId: bigint; reason: string }>;
   nearExpiry: bigint[];
   pending: number;
+  unprofitable: number;
   oldestPendingAgeSeconds: number;
 }
 
@@ -71,6 +73,7 @@ export interface ExpirySweepReport {
   recorded: bigint[];
   alreadyRecorded: bigint[];
   failed: bigint[];
+  gaveUp: bigint[];
 }
 
 function usdc(amount: bigint): number {
@@ -123,6 +126,7 @@ export class Keeper {
       const reason = state.gaveUp ? `gave up after ${state.attempts} attempts: ${message}`.slice(0, 200) : message.slice(0, 200);
       await keeperActions.append(db, { chainId, jobId, action, reason, gaveUp: state.gaveUp });
     }
+    if (state.gaveUp) await keeperJobState.markFinalizeGaveUp(db, chainId, jobId);
     metrics?.recordKeeperAction(action, "failure");
     if (state.gaveUp) {
       logger.error("keeper.gave_up", { jobId: key, attempts: state.attempts, error: message });
@@ -134,7 +138,7 @@ export class Keeper {
 
   async restoreGiveUps(): Promise<bigint[]> {
     const { db, chainId, logger } = this.options;
-    const restored = await keeperActions.listGaveUp(db, chainId);
+    const restored = await keeperJobState.listFinalizeGaveUp(db, chainId);
     for (const jobId of restored) {
       const key = jobId.toString();
       if (this.retries.has(key)) continue;
@@ -148,7 +152,7 @@ export class Keeper {
     if (restored.length > 0) {
       logger.info("keeper.give_ups_restored", {
         count: restored.length,
-        reason: "these jobs were given up on before this process started and stay skipped until an operator clears the journal flag",
+        reason: "these jobs were given up on before this process started and stay skipped until an operator clears keeper_job_state.finalize_gave_up",
       });
     }
     return restored;
@@ -192,20 +196,41 @@ export class Keeper {
 
   async tick(now = BigInt(Math.floor(Date.now() / 1000))): Promise<TickReport> {
     const { db, chainId, client, logger, metrics } = this.options;
-    const report: TickReport = { finalized: [], applied: [], lapsed: [], skipped: [], nearExpiry: [], pending: 0, oldestPendingAgeSeconds: 0 };
+    const report: TickReport = {
+      finalized: [],
+      applied: [],
+      lapsed: [],
+      skipped: [],
+      nearExpiry: [],
+      pending: 0,
+      unprofitable: 0,
+      oldestPendingAgeSeconds: 0,
+    };
     const economics = await this.economics();
     const evaluator = client.deployment.keeperEvaluator;
-    const mirrored = [
-      ...(await jobs.listFinalizable(db, chainId, now, evaluator)),
-      ...(await jobs.listDisputedSubmitted(db, chainId, evaluator)),
-    ];
-    if (this.options.ephemeralMirror === true && mirrored.length === 0) {
+    const finalizable = await jobs.listFinalizable(db, chainId, now, evaluator);
+    const underDispute = await jobs.listDisputedSubmitted(db, chainId, evaluator);
+    if (this.options.ephemeralMirror === true && finalizable.length === 0 && underDispute.length === 0) {
       logger.warn("keeper.empty_mirror", {
         reason: "DATABASE_URL is not set, so this keeper reads a private in-memory mirror that no indexer writes to and it will never find a candidate",
       });
     }
+    const worthAsking: jobs.JobRecord[] = [...underDispute];
+    for (const row of finalizable) {
+      if (this.profitableInMirror(row, economics)) {
+        worthAsking.push(row);
+        continue;
+      }
+      report.skipped.push({ jobId: row.jobId, reason: "unprofitable" });
+      report.unprofitable += 1;
+      if (expiryIsNear({ expiredAt: row.expiredAt }, now)) {
+        report.nearExpiry.push(row.jobId);
+        this.warnOnceOnNearExpiry({ jobId: row.jobId, expiredAt: row.expiredAt }, now);
+      }
+      await this.journalUnprofitableOnce(row.jobId, row.budget, row.evaluatorFeeBp ?? 0, economics.finalizeGas, economics);
+    }
     const confirmed: KeeperCandidate[] = [];
-    for (const row of mirrored) {
+    for (const row of worthAsking) {
       const candidate = await this.candidateFromChain(row.jobId);
       if (candidate) confirmed.push(candidate);
     }
@@ -214,7 +239,7 @@ export class Keeper {
     metrics?.setFinalizePending(report.pending);
     metrics?.setOldestPendingAgeSeconds(report.oldestPendingAgeSeconds);
     metrics?.setDisputesOpen(await disputes.countOpen(db, chainId));
-    this.forgetJobsThatLeft(confirmed);
+    this.forgetJobsThatLeft([...finalizable, ...underDispute].map((row) => row.jobId));
 
     for (const candidate of confirmed) {
       if (expiryIsNear(candidate, now)) {
@@ -248,16 +273,15 @@ export class Keeper {
       }
       if (action.kind === "skip") {
         report.skipped.push({ jobId: candidate.jobId, reason: action.reason });
-        if (action.reason === "unprofitable" && !this.journaledSkips.has(candidate.jobId.toString())) {
-          this.journaledSkips.add(candidate.jobId.toString());
-          await keeperActions.append(db, { chainId, jobId: candidate.jobId, action: "skipped", reason: action.reason });
-          metrics?.recordKeeperAction("finalize", "skipped");
-          logger.info("keeper.skipped", {
-            jobId: candidate.jobId.toString(),
-            reason: action.reason,
-            fee: usdc(keeperFee(candidate.budget, candidate.evaluatorFeeBP ?? 0)),
-            gasUsed: Number(gasCostInUsdc(economics.gasPriceWei, economics.finalizeGas)),
-          });
+        if (action.reason === "unprofitable") {
+          report.unprofitable += 1;
+          await this.journalUnprofitableOnce(
+            candidate.jobId,
+            candidate.budget,
+            candidate.evaluatorFeeBP ?? 0,
+            candidate.disputed ? economics.finalizeDecidedGas : economics.finalizeGas,
+            economics,
+          );
         }
         continue;
       }
@@ -286,14 +310,35 @@ export class Keeper {
     return report;
   }
 
-  private forgetJobsThatLeft(confirmed: KeeperCandidate[]): void {
-    const present = new Set(confirmed.map((candidate) => candidate.jobId.toString()));
+  private profitableInMirror(row: jobs.JobRecord, economics: KeeperEconomics): boolean {
+    const fee = keeperFee(row.budget, row.evaluatorFeeBp ?? 0);
+    const gasCost = gasCostInUsdc(economics.gasPriceWei, economics.finalizeGas);
+    return profitable(fee, gasCost, economics.minimumMarginBps);
+  }
+
+  private async journalUnprofitableOnce(jobId: bigint, budget: bigint, evaluatorFeeBP: number, gas: bigint, economics: KeeperEconomics): Promise<void> {
+    const { db, chainId, logger, metrics } = this.options;
+    const key = jobId.toString();
+    if (this.journaledSkips.has(key)) return;
+    this.journaledSkips.add(key);
+    await keeperActions.append(db, { chainId, jobId, action: "skipped", reason: "unprofitable" });
+    metrics?.recordKeeperAction("finalize", "skipped");
+    logger.info("keeper.skipped", {
+      jobId: key,
+      reason: "unprofitable",
+      fee: usdc(keeperFee(budget, evaluatorFeeBP)),
+      gasUsed: Number(gasCostInUsdc(economics.gasPriceWei, gas)),
+    });
+  }
+
+  private forgetJobsThatLeft(mirrored: bigint[]): void {
+    const present = new Set(mirrored.map((jobId) => jobId.toString()));
     for (const key of this.warnedNearExpiry) {
       if (!present.has(key)) this.warnedNearExpiry.delete(key);
     }
   }
 
-  private warnOnceOnNearExpiry(candidate: KeeperCandidate, now: bigint): void {
+  private warnOnceOnNearExpiry(candidate: Pick<KeeperCandidate, "jobId" | "expiredAt">, now: bigint): void {
     const key = candidate.jobId.toString();
     if (this.warnedNearExpiry.has(key)) return;
     this.warnedNearExpiry.add(key);
@@ -304,10 +349,10 @@ export class Keeper {
     });
   }
 
-  async sweepExpiries(): Promise<ExpirySweepReport> {
+  async sweepExpiries(now = BigInt(Math.floor(Date.now() / 1000))): Promise<ExpirySweepReport> {
     const { db, chainId, client, logger, metrics } = this.options;
-    const report: ExpirySweepReport = { scanned: 0, recorded: [], alreadyRecorded: [], failed: [] };
-    const rows = await jobs.listExpiredWithAgent(db, chainId, client.deployment.keeperEvaluator, this.expiryBatchSize);
+    const report: ExpirySweepReport = { scanned: 0, recorded: [], alreadyRecorded: [], failed: [], gaveUp: [] };
+    const rows = await jobs.listExpiredWithAgent(db, chainId, client.deployment.keeperEvaluator, this.expiryBatchSize, now);
     report.scanned = rows.length;
     for (const row of rows) {
       const recorded = await client.publicClient.readContract({
@@ -317,26 +362,48 @@ export class Keeper {
         args: [row.jobId],
       });
       if (recorded) {
+        await keeperJobState.markExpiryRecorded(db, chainId, row.jobId);
         await keeperActions.append(db, { chainId, jobId: row.jobId, action: "recordExpiry" });
         report.alreadyRecorded.push(row.jobId);
         logger.info("keeper.expiry_already_recorded", {
           jobId: row.jobId.toString(),
-          reason: "the hook already carries this expiry, journaled so the sweep stops asking the chain about it",
+          reason: "the hook already carries this expiry, marked so the sweep stops asking the chain about it",
         });
         continue;
       }
       try {
         const result = await client.recordExpiry(row.jobId);
+        await keeperJobState.markExpiryRecorded(db, chainId, row.jobId);
         await keeperActions.append(db, { chainId, jobId: row.jobId, action: "recordExpiry", txHash: result.hash, gasUsed: result.receipt.gasUsed });
         metrics?.recordKeeperAction("recordExpiry", "success");
         report.recorded.push(row.jobId);
       } catch (error) {
-        report.failed.push(row.jobId);
-        metrics?.recordKeeperAction("recordExpiry", "failure");
-        logger.warn("keeper.record_expiry_failed", { jobId: row.jobId.toString(), error: error instanceof Error ? error.message : String(error) });
+        await this.noteExpiryFailure(row.jobId, error instanceof Error ? error.message : String(error), now, report);
       }
     }
     return report;
+  }
+
+  private async noteExpiryFailure(jobId: bigint, message: string, now: bigint, report: ExpirySweepReport): Promise<void> {
+    const { db, chainId, logger, metrics } = this.options;
+    const policy = this.retryPolicy;
+    const key = jobId.toString();
+    const attempts = await keeperJobState.bumpExpiryAttempts(db, chainId, jobId);
+    const gaveUp = attempts >= policy.giveUpAfter;
+    const delay = this.backoffSeconds(attempts);
+    await keeperJobState.scheduleExpiryRetry(db, chainId, jobId, now + delay, gaveUp);
+    if (gaveUp || attempts <= policy.maxJournalRowsPerJob) {
+      const reason = gaveUp ? `gave up after ${attempts} attempts: ${message}`.slice(0, 200) : message.slice(0, 200);
+      await keeperActions.append(db, { chainId, jobId, action: "recordExpiry", reason, gaveUp });
+    }
+    metrics?.recordKeeperAction("recordExpiry", "failure");
+    if (gaveUp) {
+      report.gaveUp.push(jobId);
+      logger.error("keeper.record_expiry_gave_up", { jobId: key, attempts, error: message });
+      return;
+    }
+    report.failed.push(jobId);
+    logger.warn("keeper.record_expiry_failed", { jobId: key, attempts, retryInSeconds: Number(delay), error: message });
   }
 
   async run(pollIntervalMs: number, signal: AbortSignal): Promise<void> {
