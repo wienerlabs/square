@@ -42,7 +42,7 @@ Paid to payees is the provider share of the net that each completed job settled 
 |---|---|---|
 | `NEXT_PUBLIC_CHAIN_ID` | `5042002` | `5042002` for Arc Testnet or `31337` for a local anvil. Anything else falls back to Arc Testnet. |
 | `NEXT_PUBLIC_RPC_URL` | chain default | Overrides the RPC endpoint (`https://rpc.testnet.arc.io` or `http://127.0.0.1:8545`). |
-| `NEXT_PUBLIC_INDEXER_URL` | unset | Base URL of the indexer read API. When set, the dashboard counts open and in-window jobs from `/jobs/open` and `/jobs/in-window`, and the network page shows `/status`. When unset, everything is read directly from the chain. |
+| `NEXT_PUBLIC_INDEXER_URL` | unset | Base URL of the indexer read API. When set, the dashboard reads the open and in-window counts from `/overview`, which counts them in the database rather than listing the rows, and the network page shows `/status`. When unset, everything is read directly from the chain. |
 
 The variables are inlined at build time. Copy `.env.example` to `.env.local` and rebuild after changing them.
 
