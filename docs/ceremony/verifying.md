@@ -144,17 +144,21 @@ well-formed.
 node scripts/inspect-zkey-setup.mjs payment_final.zkey
 ```
 
-Read off the beacon hash and iteration count, then confirm the value against
+Read off the beacon value and iteration count, then confirm the value against
 drand independently:
 
 ```bash
 curl -s https://api.drand.sh/v2/beacons/quicknet/rounds/<ROUND> | tee round.json
-python3 -c "import json,hashlib;print(hashlib.sha256(bytes.fromhex(json.load(open('round.json'))['signature'])).hexdigest())"
+jq -r .signature round.json
 ```
+
+The value in the key is the round's BLS signature itself — 96 hex characters,
+stored verbatim by `snarkjs zkey beacon` — not a digest of it. Compare the two
+strings directly.
 
 Three things must hold, and the third is the one people forget:
 
-- the printed hash matches the beacon in the key;
+- the signature drand publishes for the round matches the beacon in the key;
 - the round is the one announced in [beacon.md](./beacon.md) **before** the
   ceremony opened;
 - the round's timestamp, `1692803367 + (round - 1) * 3`, is later than the last
