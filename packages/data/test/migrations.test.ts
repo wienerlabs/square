@@ -15,9 +15,11 @@ const ALL = [
   "0009_x402_last_checked",
   "0010_quarantined_events",
   "0011_x402_valid_before_repair",
+  "0012_keeper_job_state",
 ];
 
-const LAST = "0011_x402_valid_before_repair";
+const LAST = "0012_keeper_job_state";
+const REPAIR = "0011_x402_valid_before_repair";
 
 async function tableNames(db: Database): Promise<string[]> {
   const { rows } = await db.query<{ table_name: string }>(
@@ -66,7 +68,7 @@ async function schemaSnapshot(db: Database): Promise<unknown> {
 }
 
 describe("migrations", () => {
-  it("applies all eleven in order, reverts the last one, and re-applies it", async () => {
+  it("applies all twelve in order, reverts the last one, and re-applies it", async () => {
     const db = await pgliteDatabase();
     try {
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(ALL);
@@ -81,6 +83,7 @@ describe("migrations", () => {
         "job_events",
         "jobs",
         "keeper_actions",
+        "keeper_job_state",
         "ledger_balances",
         "quarantined_events",
         "rate_limits",
@@ -89,13 +92,14 @@ describe("migrations", () => {
       ]);
 
       expect(await tableNames(db)).toContain("quarantined_events");
+      expect(await indexNames(db, "x402_payments")).toContain("x402_payments_expiry");
 
       expect((await migrate(db, MIGRATIONS_DIR, "down")).applied).toEqual([LAST]);
-      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL.slice(0, 10), pending: [LAST] });
-      expect(await indexNames(db, "x402_payments")).not.toContain("x402_payments_expiry");
+      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL.slice(0, 11), pending: [LAST] });
+      expect(await tableNames(db)).not.toContain("keeper_job_state");
 
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual([LAST]);
-      expect(await indexNames(db, "x402_payments")).toContain("x402_payments_expiry");
+      expect(await tableNames(db)).toContain("keeper_job_state");
       expect(await columnNames(db, "x402_payments")).toContain("last_checked_at");
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL, pending: [] });
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual([]);
@@ -104,13 +108,13 @@ describe("migrations", () => {
     }
   });
 
-  it("up, down eleven steps, up leaves the schema identical", async () => {
+  it("up, down twelve steps, up leaves the schema identical", async () => {
     const db = await pgliteDatabase();
     try {
       await migrate(db, MIGRATIONS_DIR, "up");
       const first = await schemaSnapshot(db);
 
-      expect((await migrate(db, MIGRATIONS_DIR, "down", 11)).applied).toEqual([...ALL].reverse());
+      expect((await migrate(db, MIGRATIONS_DIR, "down", 12)).applied).toEqual([...ALL].reverse());
       expect(await tableNames(db)).toEqual(["schema_migrations"]);
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: [], pending: ALL });
 
@@ -152,6 +156,7 @@ describe("migrations", () => {
         "0008_keeper_give_up",
         "0009_x402_last_checked",
         "0010_quarantined_events",
+        REPAIR,
         LAST,
       ]);
 
@@ -164,6 +169,7 @@ describe("migrations", () => {
         "0008_keeper_give_up",
         "0009_x402_last_checked",
         "0010_quarantined_events",
+        REPAIR,
         LAST,
       ]);
       expect(await tableNames(db)).toContain("keeper_actions");
@@ -217,7 +223,7 @@ describe("migrations", () => {
       await db.query(insert, [bytes(0xa0), bytes(0xb1), bytes(0x03), bytes(0xc2), "9224315423999"]);
       await db.query(insert, [bytes(0xa0), bytes(0xb1), bytes(0x04), bytes(0xc2), "1800000000"]);
 
-      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0010_quarantined_events", LAST]);
+      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0010_quarantined_events", REPAIR, LAST]);
 
       const { rows } = await db.query<{ valid_before: string }>(
         "select valid_before from x402_payments order by valid_before",
