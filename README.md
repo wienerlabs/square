@@ -21,11 +21,18 @@ against it. The hook that releases escrow carries a compliance slot: with a modu
 installed, a release must first prove, in zero knowledge, that it fits the mandate.
 The receivable created during the challenge window is discountable.
 
-The slot is empty on the deployed hook, so no release is proof gated on Arc Testnet
-today: `SquareHook.complianceModule()` returns the zero address, and the app's
-[network page](https://square-wienerlabs.vercel.app/network) reads it live. The
-circuit, the prover and the on-chain verifier are live (#14, #18, #17); wiring the
-check into settlement is [#27](https://github.com/wienerlabs/square/issues/27).
+The slot is empty on the shared deployed hook, so no release on that stack is proof
+gated: `SquareHook.complianceModule()` returns the zero address, and the app's
+[network page](https://square-wienerlabs.vercel.app/network) reads it live. The gate
+itself has run on Arc Testnet, on a stack deployed with the module installed
+([#28](https://github.com/wienerlabs/square/issues/28)): a compliant payment released
+for 815,728 gas (0.017946 USDC), and a payment over its daily cap, to a blocked
+recipient, against a replaced policy, outside its time window or carrying another
+job's proof refused by name
+([refusal-scenarios.md](docs/deploy/refusal-scenarios.md)). The circuit, the prover
+and the on-chain verifier are live (#14, #18, #17), and the check is wired into
+settlement by [#27](https://github.com/wienerlabs/square/issues/27)'s
+`ComplianceModule`.
 
 ---
 
