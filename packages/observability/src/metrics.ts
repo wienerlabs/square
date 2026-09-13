@@ -55,6 +55,9 @@ export interface MetricsSnapshot {
   hookWriteFailures: number;
   alertDispatchFailures: number;
   quarantinedEvents: number;
+  proofSlotsActive: number;
+  proofSlotsQueued: number;
+  proofSlotsLimit: number;
 }
 
 export interface MetricNames {
@@ -77,6 +80,9 @@ export interface MetricNames {
   hookWriteFailures: string;
   alertDispatchFailures: string;
   quarantinedEvents: string;
+  proofSlotsActive: string;
+  proofSlotsQueued: string;
+  proofSlotsLimit: string;
 }
 
 export interface Metrics {
@@ -102,6 +108,7 @@ export interface Metrics {
   recordHookWriteFailure(kind: HookWriteKind): void;
   recordAlertDispatchFailure(rule: string, stage: AlertDispatchStage): void;
   recordQuarantinedEvent(contract: string, event: string): void;
+  setProofSlots(slots: { active: number; queued: number; limit: number }): void;
   snapshot(): MetricsSnapshot;
 }
 
@@ -132,6 +139,9 @@ export function metricNames(prefix: string = DEFAULT_PREFIX): MetricNames {
     hookWriteFailures: `${prefix}_hook_write_failures_total`,
     alertDispatchFailures: `${prefix}_alert_dispatch_failures_total`,
     quarantinedEvents: `${prefix}_indexer_quarantined_events_total`,
+    proofSlotsActive: `${prefix}_proof_slots_active`,
+    proofSlotsQueued: `${prefix}_proof_slots_queued`,
+    proofSlotsLimit: `${prefix}_proof_slots_limit`,
   };
 }
 
@@ -296,6 +306,21 @@ export function createMetrics(options: MetricsOptions): Metrics {
     labelNames: ["contract", "event"] as const,
     registers,
   });
+  const proofSlotsActive = new Gauge({
+    name: names.proofSlotsActive,
+    help: "Proofs running right now. Read against the limit below it is the prover's saturation, and each one in flight holds its own read of the proving key, so it is a memory figure as much as a load one.",
+    registers,
+  });
+  const proofSlotsQueued = new Gauge({
+    name: names.proofSlotsQueued,
+    help: "Requests waiting for a proof slot. Sustained above zero means callers are paying queue time; at the queue bound the service answers 503 instead.",
+    registers,
+  });
+  const proofSlotsLimit = new Gauge({
+    name: names.proofSlotsLimit,
+    help: "Proofs the service will run at once. Exported so saturation can be written as a ratio without an alert hardcoding the deployment's configuration.",
+    registers,
+  });
 
   const state: MetricsSnapshot = {
     finalizePending: 0,
@@ -316,6 +341,9 @@ export function createMetrics(options: MetricsOptions): Metrics {
     hookWriteFailures: 0,
     alertDispatchFailures: 0,
     quarantinedEvents: 0,
+    proofSlotsActive: 0,
+    proofSlotsQueued: 0,
+    proofSlotsLimit: 0,
   };
   let indexerHeadKnown = false;
   let chainHeadKnown = false;
@@ -444,6 +472,26 @@ export function createMetrics(options: MetricsOptions): Metrics {
     recordQuarantinedEvent(contract, event) {
       state.quarantinedEvents += 1;
       quarantinedEvents.inc({ contract: label(contract), event: label(event) });
+    },
+    // All three from one reading of the limiter, so a scrape cannot catch them
+    // disagreeing with each other.
+    //
+    // The limiter also has a `peak`, deliberately not exported: it only ever
+    // rises, so it reports what once happened rather than what is happening,
+    // and an alert built on it would latch for the life of the process.
+    setProofSlots({ active, queued, limit }) {
+      if (finite(active)) {
+        state.proofSlotsActive = active;
+        proofSlotsActive.set(active);
+      }
+      if (finite(queued)) {
+        state.proofSlotsQueued = queued;
+        proofSlotsQueued.set(queued);
+      }
+      if (finite(limit)) {
+        state.proofSlotsLimit = limit;
+        proofSlotsLimit.set(limit);
+      }
     },
     snapshot() {
       return { ...state };

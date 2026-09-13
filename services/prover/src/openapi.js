@@ -76,6 +76,31 @@ export const openapiSpec = {
               'but never its value, so it is safe to surface and to log.',
             content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
           },
+          503: {
+            description:
+              'The service is already proving as many payments as it will run at once ' +
+              'and its waiting room is full, so this request was refused rather than ' +
+              'queued behind an unbounded backlog. `Retry-After` carries the number of ' +
+              'seconds to wait, and the same request will be accepted once there is ' +
+              'room. See PROVER_MAX_CONCURRENCY and PROVER_MAX_QUEUE.',
+            headers: {
+              'Retry-After': {
+                description: 'Seconds to wait before retrying.',
+                schema: { type: 'integer' },
+              },
+            },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Busy' } } },
+          },
+          504: {
+            description:
+              'The request outran the time this service will spend on one of them ' +
+              '(PROVER_PROOF_TIMEOUT_MS), whether it was proving for all of that or ' +
+              'still waiting for a slot. A proof already started is not stopped — ' +
+              'the proving system takes no abort signal — so it goes on holding its ' +
+              'slot until it finishes, and the ceiling goes on counting it. Retrying ' +
+              'may succeed on a less loaded service.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
         },
       },
     },
@@ -276,6 +301,16 @@ export const openapiSpec = {
       Error: {
         type: 'object',
         properties: { error: { type: 'string' } },
+      },
+      // A 503 carries one field more than an Error, and a caller that wants to
+      // back off correctly needs it: the same number as the `Retry-After`
+      // header, for clients that read the body rather than the headers.
+      Busy: {
+        type: 'object',
+        properties: {
+          error: { type: 'string', enum: ['busy'] },
+          retryAfterSeconds: { type: 'integer' },
+        },
       },
     },
   },
