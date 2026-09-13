@@ -350,6 +350,30 @@ contract ClaimMarketTest is BaseTest {
         assertEq(market.payeeOf(jobId), provider);
     }
 
+    /// The list outlives a policy change. `setPolicy` starts a new epoch on every
+    /// call, including one that moves only the daily limit, and leaves the buyer
+    /// root as it was; only `setBuyerRoot` replaces it. Asked in the review of
+    /// #30 and documented under Semantics in buyer-eligibility.md.
+    function test_eligibility_theListOutlivesAPolicyChange() public {
+        uint256 jobId = _listed();
+        (bytes32 salt, bytes32[] memory path) = eligibility(client, buyer);
+        bytes32 root = registry.buyerRootOf(client);
+        uint64 epochBefore = registry.epochOf(client);
+
+        // A commitment, then the same commitment with only the limit moved.
+        vm.prank(client);
+        registry.setPolicy(bytes32(uint256(1)), 100_000_000);
+        vm.prank(client);
+        registry.setPolicy(bytes32(uint256(1)), 50_000_000);
+
+        assertEq(registry.epochOf(client), epochBefore + 2, "each policy write is a new epoch");
+        assertEq(registry.buyerRootOf(client), root, "and neither touched the list");
+
+        vm.prank(buyer);
+        market.buy(jobId, PRICE, salt, path);
+        assertEq(market.payeeOf(jobId), buyer, "the buyer approved before the change still buys");
+    }
+
     /// Eligibility is judged against the poster of the job being bought. A
     /// poster who never wrote a list approves nobody; a place on one poster's
     /// list is no answer for another's.

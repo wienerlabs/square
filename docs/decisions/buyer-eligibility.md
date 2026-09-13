@@ -93,6 +93,16 @@ Both rows are measured, not argued:
 - **Judged at the purchase.** Replacing the list later does not undo a sale.
   From then on, what matters is the proof at release, bound to the payee by
   [#27][i27].
+- **The list outlives a policy change.** It sits beside the poster's policy
+  but has its own lifetime: `setPolicy` leaves it as it was, and only
+  `setBuyerRoot` replaces it. Every `setPolicy` call starts a new epoch,
+  including one that moves nothing but the daily limit, so clearing the list
+  there would drop every approved buyer whenever a limit changes. An approval
+  still does not outrank the policy that governs the money: a sale is paid only
+  through a proof at release against the poster's commitment at that moment
+  ([#27][i27]), so a buyer the new policy blocks can still buy the receivable
+  and is not paid by it. A poster who wants its buyers reconsidered under a new
+  policy issues a new list.
 - **A path belongs to the address it was issued to.** A buyer's salt and path
   are public once its transaction is broadcast. The leaf is rebuilt from
   `msg.sender`, so they prove nothing for anyone who copies them.
