@@ -2,18 +2,20 @@
 pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {BuyerLists} from "./BuyerLists.sol";
 import {SquareJob} from "../src/SquareJob.sol";
 import {KeeperEvaluator} from "../src/KeeperEvaluator.sol";
 import {Arbitration} from "../src/Arbitration.sol";
 import {ClaimMarket} from "../src/ClaimMarket.sol";
 import {SquareHook} from "../src/SquareHook.sol";
+import {PolicyRegistry} from "../src/PolicyRegistry.sol";
 import {ISquareJob} from "../src/interfaces/ISquareJob.sol";
 import {IArbitration} from "../src/interfaces/IArbitration.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {MockIdentityRegistry, MockReputationRegistry, MockValidationRegistry} from "./mocks/MockRegistries.sol";
 import {MockComplianceModule} from "./mocks/MockComplianceModule.sol";
 
-abstract contract BaseTest is Test {
+abstract contract BaseTest is Test, BuyerLists {
     uint256 internal constant USDC = 1e6;
     uint16 internal constant FULL_BPS = 10_000;
     uint16 internal constant PLATFORM_FEE_BP = 100;
@@ -37,12 +39,15 @@ abstract contract BaseTest is Test {
     Arbitration internal arbitration;
     ClaimMarket internal market;
     SquareHook internal hook;
+    PolicyRegistry internal registry;
 
     address internal owner = makeAddr("owner");
     address internal treasury = makeAddr("treasury");
     address internal client = makeAddr("client");
     address internal provider = makeAddr("provider");
     address internal buyer = makeAddr("buyer");
+    address internal buyerB = makeAddr("buyerB");
+    address internal buyerC = makeAddr("buyerC");
     address internal cranker = makeAddr("cranker");
     address internal stranger = makeAddr("stranger");
     address internal arb1 = makeAddr("arb1");
@@ -64,7 +69,8 @@ abstract contract BaseTest is Test {
         kernel = new SquareJob(address(usdc), treasury, PLATFORM_FEE_BP, EVALUATOR_FEE_BP, HOOK_GAS_LIMIT, owner);
         keeper = new KeeperEvaluator(address(kernel), owner, CHALLENGE_WINDOW, DISPUTE_WINDOW, FINALIZE_GRACE);
         arbitration = new Arbitration(address(keeper), owner, BOND_BPS, MIN_BOND);
-        market = new ClaimMarket(address(kernel), address(keeper));
+        registry = new PolicyRegistry(owner);
+        market = new ClaimMarket(address(kernel), address(keeper), address(registry));
         hook = new SquareHook(
             address(kernel),
             address(market),
@@ -98,6 +104,19 @@ abstract contract BaseTest is Test {
         usdc.approve(address(arbitration), type(uint256).max);
         vm.prank(buyer);
         usdc.approve(address(market), type(uint256).max);
+
+        // square#30: a receivable sells only to a buyer the client's policy
+        // approved. Three, so a path has a sibling and an unpaired node in it.
+        address[] memory approved = new address[](3);
+        approved[0] = buyer;
+        approved[1] = buyerB;
+        approved[2] = buyerC;
+        approveBuyers(registry, client, approved);
+    }
+
+    /// `who` buys `jobId` with its own place on the client's list.
+    function buyAs(address who, uint256 jobId, uint64 price) internal {
+        buyFrom(market, client, who, jobId, price);
     }
 
     function expiry() internal view returns (uint256) {
