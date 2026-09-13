@@ -67,7 +67,7 @@ The cost of computing the verdict twice is one extra pairing check. Measured:
 
 | Call | Gas | Cap |
 |---|---|---|
-| `resolvePayout`, preview included | 383 661 | 1 000 000 |
+| `resolvePayout`, preview included | 383 662 | 1 000 000 |
 | `checkRelease`, verify plus writes | 383 166 | 1 000 000 |
 | a gated `complete`, end to end | 1 091 607 | — |
 
