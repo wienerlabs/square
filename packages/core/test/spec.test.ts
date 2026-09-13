@@ -25,6 +25,51 @@ describe("canonicalSpec", () => {
     expect(() => canonicalSpec(undefined)).toThrow(SpecError);
     expect(() => canonicalSpec(() => 1)).toThrow(SpecError);
   });
+
+  // The hash is a commitment, so the canonical text must be JSON a parser can
+  // read back to a value that canonicalises to the same text. Before #298 a
+  // nested function came out as {"f":undefined} and was hashed, and a bigint
+  // threw a TypeError where SpecError was promised.
+  describe("refuses what is not JSON data at any depth, as SpecError, and says where", () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic["self"] = cyclic;
+    for (const [label, value, where] of [
+      ["a nested function", { f: () => 1 }, "spec.f is a function"],
+      ["undefined in an array", [1, undefined, 2], "spec[1] is undefined"],
+      ["a function in an array", { a: [1, () => 1] }, "spec.a[1] is a function"],
+      ["a bigint", { amount: 5n }, "spec.amount is a bigint"],
+      ["NaN", { x: NaN }, "spec.x is NaN"],
+      ["Infinity", { x: -Infinity }, "spec.x is -Infinity"],
+      ["a symbol", { s: Symbol("x") }, "spec.s is a symbol"],
+      ["a cycle", cyclic, "spec.self refers back to itself"],
+      ["a Date", { when: new Date(0) }, "spec.when is a Date, not a plain object"],
+      ["a Map", { m: new Map() }, "spec.m is a Map, not a plain object"],
+    ] as const) {
+      it(label, () => {
+        expect(() => canonicalSpec(value)).toThrow(SpecError);
+        expect(() => canonicalSpec(value)).toThrow(where);
+        expect(() => specHash(value)).toThrow(SpecError);
+      });
+    }
+
+    it("keeps JSON.stringify's own rules: an undefined value drops its key, -0 is 0", () => {
+      expect(canonicalSpec({ a: undefined, b: 1 })).toBe('{"b":1}');
+      expect(specHash({ a: undefined, b: 1 })).toBe(specHash({ b: 1 }));
+      expect(canonicalSpec({ n: -0 })).toBe('{"n":0}');
+    });
+
+    it("accepts null-prototype objects and nested plain data", () => {
+      const bare = Object.assign(Object.create(null) as Record<string, unknown>, { z: [null, true, "s", 1.5, { k: [] }] });
+      expect(canonicalSpec(bare)).toBe('{"z":[null,true,"s",1.5,{"k":[]}]}');
+    });
+  });
+
+  it("every canonical text parses back to a value that canonicalises to itself", () => {
+    for (const value of [null, true, "x", 0, 1e21, [], {}, { b: [1, { a: null }], a: "é" }, [[[]]]]) {
+      const text = canonicalSpec(value);
+      expect(canonicalSpec(JSON.parse(text))).toBe(text);
+    }
+  });
 });
 
 describe("specHash", () => {

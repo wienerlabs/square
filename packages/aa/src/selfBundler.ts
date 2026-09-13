@@ -185,7 +185,24 @@ export function createSelfBundler(parameters: CreateSelfBundlerParameters): Self
       maxFeePerGas: options.maxFeePerGas,
       maxPriorityFeePerGas: options.maxPriorityFeePerGas,
     };
-    const hinted = (await account.userOperation?.estimateGas?.(request)) ?? {};
+    // The account's hint sees the fields the caller fixed, the way viem's
+    // prepareUserOperation hands them over, and is not asked at all when
+    // nothing is left open. toSimpleSmartAccount reads a fixed callGasLimit as
+    // "do not simulate the call", which is what makes the documented way past
+    // a simulated revert, pass callGasLimit explicitly, hold on the operation
+    // that deploys the account and not only after it (#274): before, the hint
+    // ran first and unconditionally, and on an undeployed account it threw on
+    // the very revert the override was there to get past.
+    const fixed = {
+      ...(options.callGasLimit === undefined ? {} : { callGasLimit: options.callGasLimit }),
+      ...(options.verificationGasLimit === undefined ? {} : { verificationGasLimit: options.verificationGasLimit }),
+      ...(options.preVerificationGas === undefined ? {} : { preVerificationGas: options.preVerificationGas }),
+    };
+    const open =
+      options.callGasLimit === undefined ||
+      options.verificationGasLimit === undefined ||
+      options.preVerificationGas === undefined;
+    const hinted = open ? ((await account.userOperation?.estimateGas?.({ ...request, ...fixed })) ?? {}) : {};
     const callGasLimit =
       options.callGasLimit ??
       hinted.callGasLimit ??
