@@ -81,7 +81,7 @@ Both rows are measured, not argued:
 - `test_privacy_publishingAListWritesTheRootAndNothingElse` records every write
   and every log of `setBuyerRoot`: one slot, holding the root, and one event
   carrying the poster and the root.
-- `test_privacy_aPurchaseRevealsNoOtherMember` checks that the other members
+- `test_privacy_theEligibilityPathRevealsNoOtherMember` checks that the other members
   are present in the path under their salts, and absent under every guess
   available without them.
 

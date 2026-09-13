@@ -547,9 +547,15 @@ contract ComplianceModuleTest is Test, BuyerLists {
         assertEq(usdc.balanceOf(seller), price, "and the seller was paid at the sale");
 
         bytes memory proof = compliantProof();
+        // Bound first, then expected. `completeWith` writes the proof to the job
+        // before it completes, and an expectation set ahead of it attaches to
+        // that write -- which emits `ComplianceProofSet`, not `ReleaseVerified`.
+        bindProof(jobId, proof);
+        vm.warp(FIXTURE_TIMESTAMP);
         vm.expectEmit(true, true, false, true, address(module));
         emit ComplianceModule.ReleaseVerified(jobId, FIXTURE_RECIPIENT, FIXTURE_AMOUNT, statementOf(proof));
-        completeWith(jobId, proof);
+        vm.prank(address(keeper));
+        kernel.complete(jobId, bytes32(0), abi.encode(FULL_BPS, proof));
         assertEq(kernel.withdrawable(FIXTURE_RECIPIENT), FIXTURE_AMOUNT, "the buyer the proof names is paid");
         assertEq(kernel.withdrawable(seller), 0);
         assertEq(kernel.withdrawable(client), 0, "nothing went back to the client");

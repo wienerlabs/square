@@ -142,14 +142,14 @@ contract PolicyRegistry is IPolicyRegistry, Ownable2Step {
     ///      `recordSpend` is unreachable without a registered spender, so
     ///      renouncing would freeze that set permanently and with it every
     ///      compliance-gated release.
+    function renounceOwnership() public view override onlyOwner {
+        revert RenounceDisabled();
+    }
+
     /// @inheritdoc IPolicyRegistry
     function setBuyerRoot(bytes32 root) external {
         _buyerRoots[msg.sender] = root;
         emit BuyerRootCommitted(msg.sender, root);
-    }
-
-    function renounceOwnership() public view override onlyOwner {
-        revert RenounceDisabled();
     }
 
     // -------------------------------------------------------- the counter

@@ -418,7 +418,7 @@ contract ClaimMarketTest is BaseTest {
     /// observer who suspects an address is on the list has nothing to test the
     /// suspicion against. The first two assertions are the control: the
     /// members really are in the path, recognisable only with their salts.
-    function test_privacy_aPurchaseRevealsNoOtherMember() public view {
+    function test_privacy_theEligibilityPathRevealsNoOtherMember() public view {
         (, bytes32[] memory path) = eligibility(client, buyer);
         assertEq(path.length, 2, "a sibling, then the unpaired node");
         assertEq(path[0], BuyerTree.leaf(buyerB, saltOf[client][buyerB]));
