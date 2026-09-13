@@ -98,7 +98,10 @@ registry's address, so a testnet screening cannot clear a mainnet party. It is
 submitted to `ScreeningRegistry`: by the screener service itself, or by anyone
 who holds the signature. The registry keeps the latest record per address and
 refuses a record older than the one it holds. Otherwise a stale "cleared" that
-someone kept back could overwrite a newer "sanctioned". `isCleared(subject)` is
+someone kept back could overwrite a newer "sanctioned". In a batch
+(`submitMany`) a record no newer than the one held is skipped rather than
+refused, so an address screened twice in one second of chain time does not cost
+the other addresses in the batch their records. `isCleared(subject)` is
 true only for a record that exists, is not sanctioned, and is younger than
 `maxAge`.
 
@@ -154,9 +157,10 @@ point locks:
   screened when it funded.
 
 What fail-closed at release does cost is a provider whose payee screening is
-stale when someone finalizes. Honest keepers do not do that. Before every
-`finalize` on a hook that screens, `services/keeper` asks the screener to
-screen the payee and then reads the registry:
+stale when someone finalizes. Honest keepers do not do that. Before it
+finalizes jobs on a hook that screens, `services/keeper` asks the screener to
+screen their payees, once a tick and each payee once, and then reads the
+registry for each job:
 
 - **Cleared:** it finalizes, and the payee is paid.
 - **A fresh record says the payee is designated:** it finalizes as well, and
@@ -165,6 +169,10 @@ screen the payee and then reads the registry:
 - **Neither:** the screener could not be reached, and the record is stale or
   missing. The keeper holds the job and asks again on the next tick. The job
   waits; it is not refused.
+
+A job whose screening cannot be read at all, because the RPC failed, is not
+read as a hook that screens nobody, which would finalize it into the refusal.
+It is a failed attempt at that job, backed off like a failed send.
 
 `finalize` is still permissionless, though, so someone else can finalize while
 the screening is stale and trigger the refusal. That is the same exposure a
@@ -229,11 +237,12 @@ design here addresses both:
 
 | What | Where | Result |
 |---|---|---|
-| The registry's rules: empty clears nobody, only a registered screener counts, revoking it revokes its records, the domain binds chain and registry, an older record cannot overwrite a newer one, records age out at `maxAge` | `contracts/test/ScreeningRegistry.t.sol` | 17 tests |
+| The registry's rules: empty clears nobody, only a registered screener counts, revoking it revokes its records, the domain binds chain and registry, an older record cannot overwrite a newer one, a batch skips a repeat from the same second and records the rest, records age out at `maxAge` | `contracts/test/ScreeningRegistry.t.sol` | 18 tests |
 | The hook on both points, through the real kernel and keeper: an empty registry stops funding; a designated client or provider stops funding; a payee designated during the job is not paid, and the job settles; a sold receivable screens its buyer; refunds are not screened; a registry that reverts is a refusal, not a lock | `contracts/test/SanctionsScreening.t.sol` | 16 tests, three of them asserting the exact ERC-8004 `validationResponse` call: 100 or 0, and the commitment to the screening record |
-| The screener: malformed requests are refused before the source is asked, its EIP-712 digest equals the contract's `digestOf`, the registry records what it signs and refuses a key it does not know | `services/screener/test` | 11 tests (8 hermetic, 3 on anvil) |
+| The screener: malformed requests are refused before the source is asked, an answer past the byte cap is refused, a base URL that is not public is never sent a request, its EIP-712 digest equals the contract's `digestOf`, the registry records what it signs, refuses a key it does not know, and records the rest of a batch that repeats an address from the same second | `services/screener/test` | 17 tests (13 hermetic, 4 on anvil) |
 | TRM itself: an SDN-listed address is flagged, an unused one is not; with a canary TRM does not flag, nothing is signed | `services/screener/test/live.test.ts` | 2 tests, real requests |
-| The keeper holds an unscreened payee, finalizes a cleared one, and lets a designated one be refused | `services/keeper/test/screening.test.ts` | on anvil |
+| The keeper holds an unscreened payee, finalizes a cleared one, and lets a designated one be refused; only a hook without `screening()` is read as screening nobody | `services/keeper/test/screening.test.ts` | 2 tests, on anvil |
+| The keeper: an RPC failure is not read as "no screening"; one job's failed screening is journaled and the next job is still finalized; a tick's payees go to the screener once each, 16 to a request; a screener URL is never link-local; `/health` fails when the screener's does | `services/keeper/test/payee-screening.test.ts`, `screener-check.test.ts` | 10 tests, hermetic |
 | End to end: the real screener process, TRM's answers and the real hook. An SDN-listed provider cannot be funded (`NotCleared` naming it), an SDN-listed buyer is not paid (its record reads sanctioned), the honest release is paid, and a screener with a canary TRM does not flag records nothing | `contracts/script/screening-on-anvil.mjs` | 26 checks, including the ERC-8004 record reading 0 for the refused release and 100 for the paid one |
 | What a release-time screening costs in time, with the real screener against a real chain; every answer read back from the chain | `contracts/script/screening-latency.mjs` | 3 rounds on Arc Testnet, 3 on anvil (§ Latency) |
 
@@ -280,7 +289,7 @@ TRM's keyless tier allows one request a second; with a key it allows 1,000.
 - **It does not screen refunds** (§2), and it does not replace Arc's blocklist
   (§5).
 - **It is not installed by default on a development chain**, for the same
-  reason the compliance module is not (compliance-gate.md). Once installed,
+  reason the compliance module is not ([compliance-gate.md](../design/compliance-gate.md)). Once installed,
   every funding needs screened parties, and nothing on a local chain produces
   screenings unless the screener runs.
 - **It is not installed in the shared Arc stack.** The hook deployed there

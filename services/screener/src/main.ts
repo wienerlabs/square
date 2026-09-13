@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { createPublicClient, createWalletClient, defineChain, getAddress, http, isAddress, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { ARC_TESTNET_CHAIN_ID, networks } from "@squaresdk/core";
+import { assertPublicUrl } from "@squaresdk/hardening";
 import { createHealth, createLogger, createMetrics } from "@squaresdk/observability";
 import { screenerApp } from "./app.js";
 import { screenerChecks } from "./checks.js";
@@ -53,8 +54,13 @@ async function main(): Promise<void> {
   const pollingInterval = integer("RECEIPT_POLL_MS", 250);
   const publicClient = createPublicClient({ chain, transport: http(rpcUrl), pollingInterval });
   const walletClient = createWalletClient({ chain, transport: http(rpcUrl), account, pollingInterval });
-  const source = new TrmSanctionsSource(process.env["TRM_BASE_URL"] ?? TRM_DEFAULT_BASE_URL);
-  const logger = createLogger({ service: "square-screener", version, allowlist: ["registry", "canary", "screener", "sourceMs", "submitMs"] });
+  const trmBaseUrl = process.env["TRM_BASE_URL"] ?? TRM_DEFAULT_BASE_URL;
+  // Refused at boot rather than on the first request: a base URL that resolves
+  // to a private or link-local address, such as a cloud metadata endpoint, is
+  // not a sanctions source. safeFetch checks it again on every request.
+  await assertPublicUrl(`${trmBaseUrl}/public/v1/sanctions/screening`);
+  const source = new TrmSanctionsSource(trmBaseUrl);
+  const logger = createLogger({ service: "square-screener", version, allowlist: ["registry", "canary", "screener", "sourceMs", "submitMs", "skipped"] });
   const metrics = createMetrics({ service: "square-screener" });
   const health = createHealth({
     service: "square-screener",
@@ -73,10 +79,10 @@ async function main(): Promise<void> {
           subjects,
         );
         const submitted = performance.now();
-        const transactionHash = await submitScreenings(walletClient, publicClient, registry, screenings);
+        const { transactionHash, recorded } = await submitScreenings(walletClient, publicClient, registry, screenings);
         const submitMs = Math.round(performance.now() - submitted);
-        logger.info("screener.recorded", { count: screenings.length, txHash: transactionHash, sourceMs, submitMs });
-        return { screenings, transactionHash, timings: { sourceMs, submitMs } };
+        logger.info("screener.recorded", { count: recorded.size, skipped: screenings.length - recorded.size, txHash: transactionHash, sourceMs, submitMs });
+        return { screenings, recorded, transactionHash, timings: { sourceMs, submitMs } };
       },
     },
   });

@@ -22,7 +22,7 @@
 //   (cd ../services/screener && npm run build)
 //   node script/screening-on-anvil.mjs
 //
-// Five requests to TRM, of the 100 a day its keyless tier allows.
+// Seven requests to TRM, of the 100 a day its keyless tier allows.
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';

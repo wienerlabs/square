@@ -160,6 +160,9 @@ export RETRY_MAX_JOURNAL_ROWS=3
 export MAX_PENDING_AGE_SECONDS=600
 export MAX_TICK_AGE_SECONDS=300
 export ALERT_WEBHOOK_URL=https://...  # optional
+export SCREENER_URL=http://screener:3012  # optional, square#35: screen payees before finalizing (services/screener/README.md)
+export SCREENER_ALLOW_PRIVATE=true    # the screener above is on a private network; link-local is refused regardless
+export SCREENER_TIMEOUT_MS=30000      # per request to the screener, not per job
 npm install --install-links && npm run build && npm start
 ```
 

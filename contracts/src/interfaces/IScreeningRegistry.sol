@@ -68,7 +68,12 @@ interface IScreeningRegistry {
     ///         submit it; the signature is what is trusted, not the sender.
     function submit(Screening calldata screening, bytes calldata signature) external;
 
-    /// @notice `submit`, for several at once. All or nothing.
+    /// @notice `submit`, for several at once. A screening no newer than the
+    ///         record held for its subject is skipped, not refused, and emits
+    ///         nothing: the record held is at least as recent, and an address
+    ///         screened twice in one second of chain time must not cost the
+    ///         other subjects in the batch their records. Every other refusal
+    ///         refuses the whole batch.
     function submitMany(Screening[] calldata screenings, bytes[] calldata signatures) external;
 
     /// @notice Register or revoke a screener. Revoking it also revokes every

@@ -220,6 +220,38 @@ contract ScreeningRegistryTest is Test {
         registry.submitMany(list, new bytes[](1));
     }
 
+    /// An address screened twice in one second of chain time used to revert
+    /// the whole batch with NotNewerThanRecorded, and the new subject beside it
+    /// was left with no record. The held record is as recent as the repeat, so
+    /// the repeat is skipped and the rest is recorded.
+    function test_submitManySkipsASubjectItAlreadyHoldsAsRecently() public {
+        _submit(subject, true, _now());
+        address second = makeAddr("second");
+        IScreeningRegistry.Screening[] memory list = new IScreeningRegistry.Screening[](3);
+        bytes[] memory signatures = new bytes[](3);
+        list[0] = _screening(subject, false, _now());
+        list[1] = _screening(second, false, _now());
+        list[2] = _screening(subject, false, _now() - 1);
+        for (uint256 i = 0; i < list.length; i++) {
+            signatures[i] = _sign(screenerKey, list[i]);
+        }
+
+        vm.recordLogs();
+        registry.submitMany(list, signatures);
+        assertEq(vm.getRecordedLogs().length, 1, "only the new subject emits Screened");
+        assertTrue(registry.isCleared(second), "the new subject is recorded");
+        assertTrue(registry.screeningOf(subject).sanctioned, "a same-second clean answer does not replace the held one");
+        assertFalse(registry.isCleared(subject));
+
+        // Skipping comes after the signature is checked: a repeat nobody
+        // registered signed still refuses the batch.
+        list[1] = _screening(makeAddr("third"), false, _now());
+        signatures[1] = _sign(screenerKey, list[1]);
+        signatures[2] = _sign(strangerKey, list[2]);
+        vm.expectRevert(abi.encodeWithSelector(IScreeningRegistry.NotAScreener.selector, stranger));
+        registry.submitMany(list, signatures);
+    }
+
     function test_theZeroAddressIsNotASubject() public {
         IScreeningRegistry.Screening memory s = _screening(address(0), false, _now());
         bytes memory signature = _sign(screenerKey, s);

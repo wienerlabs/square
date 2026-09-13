@@ -26,7 +26,14 @@ export const SCREENING_TYPES = {
  * the future. On Arc the two clocks agree and the choice does not matter.
  */
 export const CLOCK_SKEW_SECONDS = 5n;
-export const MAX_SUBJECTS = 20;
+/**
+ * Subjects per request. Every request to TRM carries the canary as well, and
+ * TRM answers 413 Request Entity Too Large past a size: measured, 17 entries
+ * (970 bytes) were answered and 18 (1,027 bytes) were refused. So a request
+ * holds the canary and 16 subjects. A checksummed and a lowercase address are
+ * the same length, so the bound does not depend on how they are written.
+ */
+export const MAX_SUBJECTS = 16;
 
 export interface Screening {
   subject: Address;

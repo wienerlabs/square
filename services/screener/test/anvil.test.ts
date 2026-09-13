@@ -76,10 +76,30 @@ describe.skipIf(!reachable)("ScreeningRegistry accepts what the screener signs",
       { screening: clean, signature: await signScreening(screener, domain, clean) },
       { screening: sanctioned, signature: await signScreening(screener, domain, sanctioned) },
     ];
-    await submitScreenings(wallet, publicClient, registry, signed);
+    const { recorded } = await submitScreenings(wallet, publicClient, registry, signed);
+    expect([...recorded].sort()).toEqual([clean.subject, sanctioned.subject].sort());
     const cleared = (subject: Address) => publicClient.readContract({ address: registry, abi: screeningRegistryAbi, functionName: "isCleared", args: [subject] });
     expect(await cleared(clean.subject)).toBe(true);
     expect(await cleared(sanctioned.subject)).toBe(false);
+  });
+
+  // The batch that used to revert whole: a subject the registry already holds
+  // from this second, beside a new one. The new one was left with no record,
+  // the caller got 502, and a request of TRM's daily hundred was spent.
+  it("records the new subject beside one it already holds from the same second", async () => {
+    const domain = { chainId: foundry.id, registry };
+    const held = await screeningOf(true);
+    await submitScreenings(wallet, publicClient, registry, [{ screening: held, signature: await signScreening(screener, domain, held) }]);
+    const repeat = { ...held, sanctioned: false, evidence: keccak256(stringToHex("a second answer in the same second")) };
+    const beside = await screeningOf(false);
+    const { recorded } = await submitScreenings(wallet, publicClient, registry, [
+      { screening: repeat, signature: await signScreening(screener, domain, repeat) },
+      { screening: beside, signature: await signScreening(screener, domain, beside) },
+    ]);
+    expect([...recorded]).toEqual([beside.subject]);
+    const record = (subject: Address) => publicClient.readContract({ address: registry, abi: screeningRegistryAbi, functionName: "screeningOf", args: [subject] });
+    expect((await record(beside.subject)).screenedAt).toBe(beside.screenedAt);
+    expect((await record(held.subject)).sanctioned).toBe(true);
   });
 
   it("records nothing a key it does not recognise signed", async () => {

@@ -77,7 +77,7 @@ jobs:
       - name: Build the packages the screener depends on
         run: |
           set -euo pipefail
-          for dep in packages/did-resolver packages/core packages/observability; do
+          for dep in packages/did-resolver packages/core packages/data packages/observability packages/hardening; do
             (cd "$dep" && npm install --install-links && npm run build)
           done
 

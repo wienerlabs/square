@@ -136,7 +136,7 @@ describe.skipIf(!reachable)("keeper and sanctions screening against anvil", () =
       defaultFinalizeGas: 450_000n,
       defaultFinalizeDecidedGas: 500_000n,
       recordExpiries: false,
-      screenPayee: payeeScreening({ client: cranker, publicClient, screenerUrl }),
+      screenPayees: payeeScreening({ client: cranker, publicClient, screener: { url: screenerUrl, allowPrivate: true } }),
     });
   }
 
@@ -165,7 +165,10 @@ describe.skipIf(!reachable)("keeper and sanctions screening against anvil", () =
       await mined(await owner.sendTransaction({ to: account, value: 10n ** 18n }));
     }
     await mined(await owner.writeContract({ address: deployment.usdc, abi: usdc.abi, functionName: "mint", args: [client.account, parseUnits("1000", 6)] }));
-  });
+    // A PGlite boot and about ten sequential transactions: under vitest's 10 s
+    // default a slow runner timed the hook out, and the test it guards was then
+    // reported as skipped rather than failed.
+  }, 120_000);
 
   afterAll(async () => {
     await db.close();
@@ -219,5 +222,19 @@ describe.skipIf(!reachable)("keeper and sanctions screening against anvil", () =
     expect(refused.finalized).toContain(second);
     expect(await otherProvider.withdrawable(otherProvider.account)).toBe(0n);
     expect((await client.withdrawable(client.account)) - clientBefore).toBe(await cranker.netPayout(second));
+  }, 120_000);
+
+  // Only a hook that has no screening() is read as screening nobody. Both ways
+  // such a hook answers are asked of the chain: an address with no code returns
+  // no data, and a contract without the function reverts.
+  it("reads a hook without screening() as screening nobody", async () => {
+    const withHook = (hookAddress: Address) =>
+      payeeScreening({
+        client: { getJobRecord: async () => ({ hook: hookAddress }) } as unknown as Parameters<typeof payeeScreening>[0]["client"],
+        publicClient,
+        screener: { url: deadScreener, allowPrivate: true },
+      })([1n]);
+    expect((await withHook(privateKeyToAccount(generatePrivateKey()).address)).get(1n)).toEqual({ proceed: true, state: "no-screening" });
+    expect((await withHook(registry)).get(1n)).toEqual({ proceed: true, state: "no-screening" });
   }, 120_000);
 });

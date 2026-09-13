@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
 import type { createHealth, createLogger, createMetrics } from "@squaresdk/observability";
 import { observabilityRoutes } from "@squaresdk/observability/hono";
 import { ScreeningRefused, type SignedScreening } from "./screen.js";
@@ -11,7 +11,9 @@ export interface ScreeningTimings {
 }
 
 export interface ScreenerService {
-  screen(subjects: readonly unknown[]): Promise<{ screenings: SignedScreening[]; transactionHash: Hex; timings: ScreeningTimings }>;
+  screen(
+    subjects: readonly unknown[],
+  ): Promise<{ screenings: SignedScreening[]; recorded: ReadonlySet<Address>; transactionHash: Hex; timings: ScreeningTimings }>;
 }
 
 export interface ScreenerAppOptions {
@@ -23,9 +25,11 @@ export interface ScreenerAppOptions {
 
 /**
  * `POST /screen` with `{"addresses": ["0x…", …]}`: screen, sign, record, and
- * answer with what was recorded. Every refusal is an answer with nothing
- * attested; there is no response that says "cleared" without a transaction
- * behind it.
+ * answer with what was signed and, for each, whether this transaction recorded
+ * it. One it did not record was skipped because the registry already held a
+ * record for that address from the same second, and that record is what the
+ * registry answers with. Every refusal is an answer with nothing attested;
+ * there is no response that says "cleared" without a transaction behind it.
  */
 export function screenerApp(options: ScreenerAppOptions): Hono {
   const app = new Hono();
@@ -40,7 +44,7 @@ export function screenerApp(options: ScreenerAppOptions): Hono {
     const addresses = typeof body === "object" && body !== null ? (body as Record<string, unknown>)["addresses"] : undefined;
     if (!Array.isArray(addresses)) return c.json({ error: 'expected {"addresses": ["0x…", …]}' }, 400);
     try {
-      const { screenings, transactionHash, timings } = await options.service.screen(addresses);
+      const { screenings, recorded, transactionHash, timings } = await options.service.screen(addresses);
       return c.json({
         transactionHash,
         timings,
@@ -48,6 +52,7 @@ export function screenerApp(options: ScreenerAppOptions): Hono {
           ...screening,
           screenedAt: screening.screenedAt.toString(),
           signature,
+          recorded: recorded.has(screening.subject),
         })),
       });
     } catch (error) {

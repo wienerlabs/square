@@ -9,7 +9,7 @@ import { createAlerting, createHealth, createLogger, createMetrics, keeperStalle
 import { observabilityRoutes } from "@squaresdk/observability/hono";
 import { keeperChecks } from "./checks.js";
 import { Keeper, KEEPER_LOG_FIELDS } from "./run.js";
-import { payeeScreening } from "./screening.js";
+import { assertScreenerUrl, DEFAULT_SCREENER_TIMEOUT_MS, payeeScreening } from "./screening.js";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -56,6 +56,17 @@ async function main(): Promise<void> {
     });
   }
 
+  // square#35. The screener URL is checked at boot, and again on every request:
+  // it may resolve to a private or loopback address only when
+  // SCREENER_ALLOW_PRIVATE says so, and never to a link-local one.
+  const screenerUrl = process.env["SCREENER_URL"];
+  const screenerTimeoutMs = integer("SCREENER_TIMEOUT_MS", DEFAULT_SCREENER_TIMEOUT_MS);
+  if (screenerTimeoutMs === 0) throw new Error("SCREENER_TIMEOUT_MS must be positive");
+  const screener = screenerUrl
+    ? { url: screenerUrl, allowPrivate: process.env["SCREENER_ALLOW_PRIVATE"] === "true", timeoutMs: screenerTimeoutMs }
+    : undefined;
+  if (screener) await assertScreenerUrl(`${screener.url}/screen`, screener.allowPrivate);
+
   const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
   const client = createSquareClient({ publicClient, deployment, walletClient: createWalletClient({ chain, transport: http(rpcUrl), account }) });
   const keeper = new Keeper({
@@ -73,7 +84,7 @@ async function main(): Promise<void> {
     ephemeralMirror,
     // square#35: with a screener to ask, a release on a hook that screens is
     // finalized only once its payee is freshly screened.
-    ...(process.env["SCREENER_URL"] ? { screenPayee: payeeScreening({ client, publicClient, screenerUrl: process.env["SCREENER_URL"] }) } : {}),
+    ...(screener ? { screenPayees: payeeScreening({ client, publicClient, screener }) } : {}),
     retryPolicy: {
       baseDelaySeconds: BigInt(integer("RETRY_BASE_SECONDS", 60)),
       maxDelaySeconds: BigInt(integer("RETRY_MAX_SECONDS", 3_600)),
@@ -103,6 +114,7 @@ async function main(): Promise<void> {
       finalizeGas,
       minActionsFunded: integer("MIN_ACTIONS_FUNDED", 3),
       ephemeralMirror,
+      ...(screener ? { screener } : {}),
     }),
   });
 

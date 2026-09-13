@@ -35,18 +35,21 @@ contract ScreeningRegistry is IScreeningRegistry, EIP712, Ownable2Step {
 
     /// @inheritdoc IScreeningRegistry
     function submit(Screening calldata screening, bytes calldata signature) external {
-        _submit(screening, signature);
+        _submit(screening, signature, false);
     }
 
     /// @inheritdoc IScreeningRegistry
     function submitMany(Screening[] calldata screenings, bytes[] calldata signatures) external {
         if (screenings.length != signatures.length) revert LengthMismatch();
         for (uint256 i = 0; i < screenings.length; i++) {
-            _submit(screenings[i], signatures[i]);
+            _submit(screenings[i], signatures[i], true);
         }
     }
 
-    function _submit(Screening calldata screening, bytes calldata signature) private {
+    /// `skipIfNotNewer` is for a batch. A screening no newer than the record
+    /// held is dropped only after it passed every other check, so a batch with
+    /// a bad signature or a stale time in it is still refused whole.
+    function _submit(Screening calldata screening, bytes calldata signature, bool skipIfNotNewer) private {
         if (screening.subject == address(0)) revert ZeroAddress();
         address signer = ECDSA.recoverCalldata(_digest(screening), signature);
         if (!_screeners[signer]) revert NotAScreener(signer);
@@ -57,6 +60,7 @@ contract ScreeningRegistry is IScreeningRegistry, EIP712, Ownable2Step {
 
         Record storage record = _records[screening.subject];
         if (screening.screenedAt <= record.screenedAt) {
+            if (skipIfNotNewer) return;
             revert NotNewerThanRecorded(screening.subject, screening.screenedAt, record.screenedAt);
         }
         record.screener = signer;

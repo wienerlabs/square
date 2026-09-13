@@ -1,3 +1,4 @@
+import { safeFetch, type SafeFetchOptions } from "@squaresdk/hardening";
 import { getAddress, isAddress, type Address } from "viem";
 
 /** One source's answer for a batch: what it said about each address, and the exact bytes it said it in. */
@@ -23,6 +24,15 @@ export const TRM_SOURCE_ID = "trm-sanctions-v1";
 export const TRM_DEFAULT_BASE_URL = "https://api.trmlabs.com";
 
 /**
+ * The most of an answer that is read. TRM answered the largest request the
+ * screener sends, the canary and MAX_SUBJECTS subjects, in 1,326 bytes. The cap
+ * is about fifty times that, room for fields TRM may add, and far short of what
+ * an endpoint that is not TRM could otherwise make this process buffer and hash
+ * before anything is checked.
+ */
+export const TRM_MAX_RESPONSE_BYTES = 64 * 1024;
+
+/**
  * TRM Labs' sanctions screening API (docs.sanctions.trmlabs.com), called without
  * a key: one request a second, 100 a day. TRM's public documentation names the
  * key's security scheme but not how the key is sent, so no key is sent until TRM
@@ -31,6 +41,11 @@ export const TRM_DEFAULT_BASE_URL = "https://api.trmlabs.com";
  * Anything short of a well-formed answer about every address asked is an error,
  * never a partial result: a source that stayed silent about an address has not
  * cleared it.
+ *
+ * The request goes through `@squaresdk/hardening`'s `safeFetch`: the base URL
+ * must resolve to a public address, the address it resolved to is the one
+ * connected to, and the answer is read to `TRM_MAX_RESPONSE_BYTES` and no
+ * further. `network` loosens the first check for a test's local endpoint only.
  */
 export class TrmSanctionsSource implements ScreeningSource {
   readonly id = TRM_SOURCE_ID;
@@ -38,21 +53,30 @@ export class TrmSanctionsSource implements ScreeningSource {
   constructor(
     private readonly baseUrl: string = TRM_DEFAULT_BASE_URL,
     private readonly timeoutMs: number = 10_000,
+    private readonly network: Pick<SafeFetchOptions, "allowPrivate" | "allowedPorts" | "maxResponseBytes"> = {},
   ) {}
 
   async screen(addresses: readonly Address[]): Promise<SourceAnswer> {
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}/public/v1/sanctions/screening`, {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify(addresses.map((address) => ({ address }))),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
+      response = await safeFetch(
+        `${this.baseUrl}/public/v1/sanctions/screening`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify(addresses.map((address) => ({ address }))),
+        },
+        { timeoutMs: this.timeoutMs, maxResponseBytes: TRM_MAX_RESPONSE_BYTES, ...this.network },
+      );
     } catch (error) {
       throw new SourceError(`TRM did not answer: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const rawBody = await response.text();
+    let rawBody: string;
+    try {
+      rawBody = await response.text();
+    } catch (error) {
+      throw new SourceError(`TRM's answer could not be read: ${error instanceof Error ? error.message : String(error)}`);
+    }
     if (response.status !== 200 && response.status !== 201) {
       throw new SourceError(`TRM answered ${response.status}: ${rawBody.slice(0, 200)}`);
     }
