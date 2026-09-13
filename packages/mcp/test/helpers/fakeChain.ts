@@ -49,6 +49,7 @@ export function fakeChain(
 
   const client = {
     deployment,
+    publicClient: { getBlock: async () => ({ timestamp: BigInt(now()) }) },
     walletClient: options.wallet === false ? undefined : {},
     get account() {
       if (options.wallet === false) throw new Error("no wallet");

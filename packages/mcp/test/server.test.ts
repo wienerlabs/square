@@ -71,7 +71,6 @@ function stage(options: { balance?: bigint; horizon?: number; minimum?: (capabil
     resolver,
     a2a: new A2AClient({ fetch, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))) }),
     cards: new WellKnownCache({ fetch }),
-    now,
     pollIntervalMs: 5,
   };
   return { chain, agent, seen, serverOptions };

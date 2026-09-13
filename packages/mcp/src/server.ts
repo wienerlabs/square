@@ -33,7 +33,6 @@ export interface SquareMcpServerOptions {
   taskTimeoutMs?: number | undefined;
   pollIntervalMs?: number | undefined;
   serverInfo?: { name: string; version: string } | undefined;
-  now?: (() => number) | undefined;
 }
 
 const USDC = /^\d+(\.\d{1,6})?$/;
@@ -63,7 +62,6 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
   const { client, resolver } = options;
   const a2a = options.a2a ?? new A2AClient();
   const cards = options.cards ?? new WellKnownCache();
-  const now = options.now ?? Date.now;
   const chainId = client.deployment.chainId;
   const usdc = client.deployment.usdc;
   const canSpend = client.walletClient !== undefined;
@@ -237,7 +235,11 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
                 `(${Math.round(horizon / 3_600)} h) ahead of the job's expiry`,
             );
           }
-          const expiredAt = BigInt(Math.floor(now() / 1000) + seconds);
+          // From the chain's clock, not this machine's: `createJob` holds
+          // `expiredAt` against `block.timestamp`, and on a local chain whose
+          // time has been advanced the two are days apart.
+          const { timestamp } = await client.publicClient.getBlock();
+          const expiredAt = timestamp + BigInt(seconds);
           const created = await client.createJob({
             provider: profile.provider,
             expiredAt,
