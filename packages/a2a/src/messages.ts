@@ -1,4 +1,4 @@
-import { TaskState } from "./states.js";
+import { TaskState, type JobStatus } from "./states.js";
 
 /**
  * The wire format: JSON-RPC 2.0 over HTTP POST.
@@ -57,6 +57,13 @@ export const RpcErrorCode = {
   TaskNotFound: -32002,
   /** The taskId is already in use for a task with different content. A retry of the same request is not this. */
   TaskIdInUse: -32003,
+  /**
+   * The job the task names is not funded for this provider: not Funded, or
+   * funded for somebody else, or below what the capability costs. Read from
+   * the chain by the settlement the host composed in; a server without one
+   * never answers this.
+   */
+  JobNotFunded: -32004,
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCode)[keyof typeof RpcErrorCode];
@@ -110,6 +117,17 @@ export interface TaskStatusResult {
   deliverable?: string;
   /** Present when state is FAILED. */
   reason?: string;
+  /**
+   * Present when state is DELIVERED and a settlement produced it: the
+   * transaction that carried the `submit`.
+   */
+  reference?: string;
+  /**
+   * What the chain says about the job now, when the host composed a
+   * settlement in. Read at answer time, never stored: the evaluator moves a
+   * job to Completed or Rejected, and this package keeps no ledger of that.
+   */
+  job?: { status: JobStatus; name: string };
   updatedAt: string;
 }
 
