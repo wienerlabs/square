@@ -147,7 +147,8 @@ beacon
   ok    round 31968374 corresponds to 2026-09-06T15:28:06.000Z
 
 keys
-  ok    the verifying key is the one the transcript records
+  ok    the verifying key is the one the final key exports
+  ok    and it is unchanged since the transcript recorded it
 
 All checks passed. The chain is what the transcript says it is.
 ```
