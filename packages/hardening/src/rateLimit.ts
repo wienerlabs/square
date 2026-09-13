@@ -1,5 +1,6 @@
 import type { Context, MiddlewareHandler } from "hono";
 import type { SqlClient } from "./sql.js";
+import { markTransientRejection } from "./transient.js";
 
 export interface RateLimitStore {
   increment(bucket: string, windowStart: number): Promise<number>;
@@ -130,6 +131,7 @@ export function rateLimitMiddleware(store: RateLimitStore, options: RateLimitMid
       "RateLimit-Reset": String(resetSeconds),
     };
     if (!decision.allowed) {
+      markTransientRejection(c);
       return c.json({ error: "rate_limited", retryAfterSeconds: resetSeconds }, 429, {
         ...headers,
         "Retry-After": String(resetSeconds),
