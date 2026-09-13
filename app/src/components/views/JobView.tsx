@@ -578,7 +578,7 @@ export function JobView() {
   const expiryHeldByKeeper = expired && record.status === JobStatus.Submitted && keeperEvaluates;
   const withdrawable = positions.data?.withdrawable ?? 0n;
   const bondWithdrawable = positions.data?.bondWithdrawable ?? 0n;
-  const showRecordExpiry = record.status === JobStatus.Expired && detail.agentId !== 0n && !detail.expiryRecorded;
+  const showRecordExpiry = record.status === JobStatus.Expired && detail.agentId !== null && !detail.expiryRecorded;
   const anyAction =
     showSetProvider ||
     showSetBudget ||
@@ -695,7 +695,7 @@ export function JobView() {
                 </span>
               ) : null}
             </Row>
-            <Row label="Agent">{detail.agentId !== 0n ? <span className="tabular-nums">ERC-8004 agent #{detail.agentId.toString()}</span> : <span className="text-ash">Not bound</span>}</Row>
+            <Row label="Agent">{detail.agentId !== null ? <span className="tabular-nums">ERC-8004 agent #{detail.agentId.toString()}</span> : <span className="text-ash">Not bound</span>}</Row>
             <Row label="Created">{formatTimestamp(record.createdAt)}</Row>
             <Row label="Expires">
               {formatTimestamp(record.expiredAt)}

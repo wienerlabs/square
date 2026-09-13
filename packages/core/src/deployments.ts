@@ -11,6 +11,7 @@ export interface SquareDeployment {
   identityRegistry: Address;
   reputationRegistry: Address;
   validationRegistry: Address;
+  startBlock?: bigint;
 }
 
 export const ARC_TESTNET_CHAIN_ID = 5042002;
@@ -154,6 +155,12 @@ export function deploymentFromJson(json: unknown): SquareDeployment {
       throw new InvalidDeploymentError(`${key} is not an address`);
     }
     out[field] = getAddress(value);
+  }
+  const block = record["block"];
+  if (block !== undefined && block !== null) {
+    const parsed = typeof block === "number" || typeof block === "string" ? BigInt(block) : null;
+    if (parsed === null || parsed < 0n) throw new InvalidDeploymentError("block is not a block number");
+    out["startBlock"] = parsed;
   }
   return out as unknown as SquareDeployment;
 }

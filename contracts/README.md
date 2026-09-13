@@ -39,6 +39,11 @@ owns, 1 is the client, 2 the provider (owner of mock agent 1), 3 the buyer,
 4 to 6 the arbiters. `@squaresdk/core`'s anvil test runs the whole lifecycle
 against it.
 
+It runs on 31337 only, unless `DEPLOY_LOCAL_ALLOW_CHAIN_ID` names the chain
+meant (a fork of Arc answers with Arc's id). On that chain `DEPLOYMENT_FILE`
+has to say where the addresses go, and `deployments/<chainid>.json` is refused:
+that is the record of the chain's real deployment, and a mock stack is not it.
+
 ## Arc Testnet
 
 ```bash
@@ -88,7 +93,15 @@ dropped from the SDK and the docs:
 2. Have every account with `withdrawable(account) > 0` on the old `SquareJob`
    and the old `Arbitration` call `withdraw()`; the deploy record lists the
    accounts that did and the balances that remain claimable.
-3. Record the transactions in `docs/deploy/redeploy-<date>.md`.
+3. Read `unaccounted()` on the old `SquareJob`. It is the balance no ledger
+   entry and no live escrow claims, and `skim(to)` is the only way it can move.
+   A plain ERC-20 transfer to the kernel lands there, which is how
+   `0x76E8690c...` came to hold 0.009602 USDC that the first three steps cannot
+   reach.
+4. Check that `balanceOf(kernel)` is zero. The three steps above drain the
+   ledger and the escrow, so anything left is unaccounted and step 3 is what
+   moves it.
+5. Record the transactions in `docs/deploy/redeploy-<date>.md`.
 
 A dry run against a fork of the testnet with the real ERC-8004 registries is
 `packages/core/test/fork.test.ts`. It escrows an EIP-3009 mock instead of the

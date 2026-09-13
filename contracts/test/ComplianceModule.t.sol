@@ -11,6 +11,7 @@ import {PolicyRegistry} from "../src/PolicyRegistry.sol";
 import {Groth16Verifier} from "../src/Groth16Verifier.sol";
 import {ComplianceModule} from "../src/ComplianceModule.sol";
 import {ISquareJob} from "../src/interfaces/ISquareJob.sol";
+import {SCALAR_FIELD} from "../src/interfaces/IGroth16Verifier.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {MockIdentityRegistry, MockReputationRegistry, MockValidationRegistry} from "./mocks/MockRegistries.sol";
 
@@ -213,9 +214,18 @@ contract ComplianceModuleTest is Test, BuyerLists {
 
     /// Move to the moment the proof was built for, then complete with it.
     function completeWith(uint256 jobId, bytes memory proof) internal {
+        bindProof(jobId, proof);
         vm.warp(FIXTURE_TIMESTAMP);
         vm.prank(address(keeper));
         kernel.complete(jobId, bytes32(0), abi.encode(FULL_BPS, proof));
+    }
+
+    /// The proof belongs to the job, not to whoever cranks it: the client that
+    /// holds the mandate writes it, and the hook reads it from there.
+    function bindProof(uint256 jobId, bytes memory proof) internal {
+        address mandate = kernel.getJobRecord(jobId).client;
+        vm.prank(mandate);
+        kernel.setComplianceProof(jobId, proof);
     }
 
     // ------------------------------------------------------- the happy path
@@ -295,9 +305,15 @@ contract ComplianceModuleTest is Test, BuyerLists {
         assertEq(module.boundSignalCount(), 8, "a signal was added without a binding");
 
         // 1. policy_data_hash — the client commits to a different policy
+        //
+        // Reduced into the scalar field, because that is where a commitment
+        // lives: this line used to pass the raw keccak digest, which is above
+        // the field and so is a commitment no proof can carry at all (#231).
+        // The refusal looked the same, so the binding read as tested when what
+        // was being tested was a value the registry now refuses outright.
         uint256 jobId = submittedJob();
         vm.prank(client);
-        registry.setPolicy(keccak256("some other policy"), DAILY_LIMIT);
+        registry.setPolicy(bytes32(uint256(keccak256("some other policy")) % SCALAR_FIELD), DAILY_LIMIT);
         completeWith(jobId, compliantProof());
         assertEq(kernel.withdrawable(provider), 0, "policy_data_hash is not bound");
     }
@@ -325,6 +341,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
         // A split moves the amount the kernel will pay; the proof's signal 3
         // still claims the whole net.
         uint256 jobId = submittedJob();
+        bindProof(jobId, compliantProof());
         vm.warp(FIXTURE_TIMESTAMP);
         vm.prank(address(keeper));
         kernel.complete(jobId, bytes32(0), abi.encode(uint16(5_000), compliantProof()));
@@ -341,6 +358,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
 
     function test_binding_timestamp() public {
         uint256 jobId = submittedJob();
+        bindProof(jobId, compliantProof());
         vm.warp(FIXTURE_TIMESTAMP + TOLERANCE + 1);
         vm.prank(address(keeper));
         kernel.complete(jobId, bytes32(0), abi.encode(FULL_BPS, compliantProof()));
@@ -349,6 +367,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
 
     function test_binding_timestampAcceptsTheEdgeOfTheWindow() public {
         uint256 jobId = submittedJob();
+        bindProof(jobId, compliantProof());
         vm.warp(FIXTURE_TIMESTAMP + TOLERANCE);
         vm.prank(address(keeper));
         kernel.complete(jobId, bytes32(0), abi.encode(FULL_BPS, compliantProof()));
@@ -409,6 +428,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
         assertEq(registry.spentToday(client), FIXTURE_SPENT_BEFORE, "the counter is back where the proof wants it");
 
         uint256 second = submittedJob();
+        bindProof(second, compliantProof());
         vm.warp(FIXTURE_TIMESTAMP + 1 days);
         vm.prank(address(keeper));
         kernel.complete(second, bytes32(0), abi.encode(FULL_BPS, compliantProof()));
@@ -461,6 +481,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
         );
 
         uint256 second = submittedJob();
+        bindProof(second, copy);
         // Named, so the test cannot pass for a different reason later.
         vm.expectEmit(true, false, false, true, address(module));
         emit ComplianceModule.ReleaseRefused(second, "proof already used");
@@ -542,6 +563,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
         uint256 jobId = submittedJob();
         vm.warp(FIXTURE_TIMESTAMP);
         bytes memory proof = compliantProof();
+        bindProof(jobId, proof);
 
         uint256 before = gasleft();
         vm.prank(address(keeper));
@@ -568,6 +590,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
         uint256 jobId = submittedJob();
         vm.warp(FIXTURE_TIMESTAMP);
         bytes memory proof = compliantProof();
+        bindProof(jobId, proof);
         bytes memory data = abi.encode(bytes32(0), abi.encode(FULL_BPS, proof));
 
         uint256 before = gasleft();

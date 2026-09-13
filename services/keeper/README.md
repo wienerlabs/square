@@ -43,6 +43,37 @@ compete honestly: the kernel pays whichever lands first and the other's
 transaction reverts with `NotSubmitted`, which is journaled as a failure and
 costs the loser a revert.
 
+## What a restart carries
+
+Giving up is written down. The rest of the retry state is not, and the
+difference is deliberate.
+
+A give-up row in `keeper_actions` carries `gave_up = true`, and `run()` reads
+those job ids back before its first tick (`keeper.give_ups_restored`). A job the
+keeper gave up on stays given up across a restart: it is skipped before any
+attempt, so it sends nothing, costs no gas and adds no further journal rows.
+Without that, every restart would spend `RETRY_GIVE_UP_AFTER` fresh attempts on
+a job that is permanently failing and write `RETRY_MAX_JOURNAL_ROWS` more rows,
+which makes the journal bound a per-process one instead of a per-job one.
+
+Three things are per process by design, and all three are cheap:
+
+| State | On restart | Why that is acceptable |
+|---|---|---|
+| Backoff window of a job not yet given up | forgotten, the next tick may retry at once | at most one attempt earlier than the schedule wanted, and `finalize` is simulated before it is sent |
+| Journal budget of such a job | counted again from zero | the give-up is what bounds the total, and it survives the restart |
+| `keeper.expiry_near`, warned once per job | warned once more | one line per candidate per restart, not one per tick |
+
+A job that was given up on is never retried on its own, not even by a keeper
+build that fixes the cause. That call belongs to the operator, and it is one
+statement:
+
+```sql
+update keeper_actions set gave_up = false where chain_id = 5042002 and job_id = 42;
+```
+
+The next start restores nothing for that job and the keeper tries it again.
+
 ## The expiry sweep
 
 Recording an expiry for reputation is not on the finalize path. `tick()` decides

@@ -10,19 +10,41 @@ export interface SweepOptions {
   rateLimitWindowMs?: number | undefined;
 }
 
-export interface SweepResult {
+export interface SweepCounts {
   idempotency_keys: number;
   rate_limits: number;
   x402_payments: number;
   keeper_actions: number;
 }
 
+export type SweptTable = keyof SweepCounts;
+
+export interface SweepFailure {
+  table: SweptTable;
+  message: string;
+}
+
+export interface SweepResult {
+  removed: SweepCounts;
+  failures: SweepFailure[];
+}
+
 export async function sweepAll(db: Database, options: SweepOptions = {}): Promise<SweepResult> {
   const rateLimitWindowMs = options.rateLimitWindowMs ?? DEFAULT_RATE_LIMIT_WINDOW_MS;
-  return {
-    idempotency_keys: await idempotencyKeys.sweepExpired(db),
-    rate_limits: await rateLimits.sweep(db, rateLimitWindowMs),
-    x402_payments: await x402Payments.sweep(db),
-    keeper_actions: await keeperActions.sweep(db),
-  };
+  const sweeps: Array<[SweptTable, () => Promise<number>]> = [
+    ["idempotency_keys", () => idempotencyKeys.sweepExpired(db)],
+    ["rate_limits", () => rateLimits.sweep(db, rateLimitWindowMs)],
+    ["x402_payments", () => x402Payments.sweep(db)],
+    ["keeper_actions", () => keeperActions.sweep(db)],
+  ];
+  const removed: SweepCounts = { idempotency_keys: 0, rate_limits: 0, x402_payments: 0, keeper_actions: 0 };
+  const failures: SweepFailure[] = [];
+  for (const [table, run] of sweeps) {
+    try {
+      removed[table] = await run();
+    } catch (error) {
+      failures.push({ table, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { removed, failures };
 }

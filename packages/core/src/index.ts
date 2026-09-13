@@ -61,6 +61,7 @@ export {
 } from "./buyers.js";
 export {
   AgentIdMismatchError,
+  connectSquareClient,
   createSquareClient,
   DeploymentChainMismatchError,
   DidScopeMismatchError,
@@ -76,3 +77,4 @@ export {
   type SubmitParams,
   type TransactionResult,
 } from "./client.js";
+export { SQUARE_ERRORS, withSquareErrors } from "./revertAbi.js";

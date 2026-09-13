@@ -1,7 +1,7 @@
 import type { Hex } from "viem";
 import { JobStatus, squareHookAbi, type SquareClient } from "@squaresdk/core";
 import { disputes, jobs, keeperActions, type Database } from "@squaresdk/data";
-import type { Logger, Metrics } from "@squaresdk/observability";
+import { waitUnlessAborted, type Logger, type Metrics } from "@squaresdk/observability";
 import {
   decide,
   expiryIsNear,
@@ -22,6 +22,8 @@ export interface KeeperRetryPolicy {
 
 export const DEFAULT_EXPIRY_BATCH_SIZE = 25;
 export const DEFAULT_EXPIRY_INTERVAL_MS = 60_000;
+
+export const KEEPER_LOG_FIELDS: readonly string[] = Object.freeze(["attempts", "retryInSeconds"]);
 
 export const DEFAULT_RETRY_POLICY: KeeperRetryPolicy = {
   baseDelaySeconds: 60n,
@@ -119,7 +121,7 @@ export class Keeper {
     if (!state.journaled.has(marker) && (state.gaveUp || state.journaled.size < policy.maxJournalRowsPerJob)) {
       state.journaled.add(marker);
       const reason = state.gaveUp ? `gave up after ${state.attempts} attempts: ${message}`.slice(0, 200) : message.slice(0, 200);
-      await keeperActions.append(db, { chainId, jobId, action, reason });
+      await keeperActions.append(db, { chainId, jobId, action, reason, gaveUp: state.gaveUp });
     }
     metrics?.recordKeeperAction(action, "failure");
     if (state.gaveUp) {
@@ -128,6 +130,28 @@ export class Keeper {
       logger.error("keeper.finalize_failed", { jobId: key, attempts: state.attempts, retryInSeconds: Number(delay), error: message });
     }
     return state.gaveUp;
+  }
+
+  async restoreGiveUps(): Promise<bigint[]> {
+    const { db, chainId, logger } = this.options;
+    const restored = await keeperActions.listGaveUp(db, chainId);
+    for (const jobId of restored) {
+      const key = jobId.toString();
+      if (this.retries.has(key)) continue;
+      this.retries.set(key, {
+        attempts: this.retryPolicy.giveUpAfter,
+        nextAttemptAt: 0n,
+        gaveUp: true,
+        journaled: new Set<string>(),
+      });
+    }
+    if (restored.length > 0) {
+      logger.info("keeper.give_ups_restored", {
+        count: restored.length,
+        reason: "these jobs were given up on before this process started and stay skipped until an operator clears the journal flag",
+      });
+    }
+    return restored;
   }
 
   private async economics(): Promise<KeeperEconomics> {
@@ -189,7 +213,7 @@ export class Keeper {
     report.oldestPendingAgeSeconds = Number(oldestPendingAge(confirmed, now));
     metrics?.setFinalizePending(report.pending);
     metrics?.setOldestPendingAgeSeconds(report.oldestPendingAgeSeconds);
-    metrics?.setDisputesOpen((await disputes.listOpen(db, chainId)).length);
+    metrics?.setDisputesOpen(await disputes.countOpen(db, chainId));
     this.forgetJobsThatLeft(confirmed);
 
     for (const candidate of confirmed) {
@@ -316,6 +340,7 @@ export class Keeper {
   }
 
   async run(pollIntervalMs: number, signal: AbortSignal): Promise<void> {
+    await this.restoreGiveUps();
     let nextExpirySweepAt = 0;
     while (!signal.aborted) {
       try {
@@ -331,13 +356,7 @@ export class Keeper {
         }
         nextExpirySweepAt = Date.now() + this.expiryIntervalMs;
       }
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, pollIntervalMs);
-        signal.addEventListener("abort", () => {
-          clearTimeout(timer);
-          resolve();
-        }, { once: true });
-      });
+      await waitUnlessAborted(pollIntervalMs, signal);
     }
   }
 }

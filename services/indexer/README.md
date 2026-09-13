@@ -28,6 +28,14 @@ proves it by comparing the rebuilt state with the chain field by field.
   still commits and the checkpoint still advances. Chain strings are untrusted,
   so a `U+0000` in a job description is stripped on the way into the mirror
   rather than left to poison a `jsonb` bind.
+- A set-aside log is written to `quarantined_events` in the same transaction that
+  advances the checkpoint, and `/quarantine` is that table read back, capped at
+  the hundred most recent. Durability matters most for the `journal` stage: a log
+  the reducer rejected is still in `job_events` and comes back through the replay
+  on the next start, but a log Postgres refused is in no table at all and its
+  block range is never read again, so before this it vanished on restart and the
+  `quarantine` health check went green with the event still missing from the
+  mirror.
 - On start it compares the address stored in `indexer_checkpoints` with the
   address in the deployment file. A mismatch means the checkpoint belongs to an
   earlier deployment on the same chain and resuming from it would silently skip
@@ -82,8 +90,8 @@ proves it by comparing the rebuilt state with the chain field by field.
 export CHAIN_ID=5042002
 export RPC_URL=https://rpc.testnet.arc.io
 export DATABASE_URL=postgres://...    # empty means an ephemeral PGlite database
-export START_BLOCK=<deployment block>
-export BATCH_BLOCKS=2000
+export START_BLOCK=                    # empty takes the block from the deployment record; neither is an error, not a scan from genesis
+export BATCH_BLOCKS=2000              # Arc refuses a span above roughly 20 000 blocks, and a refused batch is halved until it fits
 export POLL_INTERVAL_MS=3000
 export PORT=3010
 export CORS_ORIGINS=                  # comma separated browser origins; localhost is always allowed
@@ -96,6 +104,23 @@ export ON_DEPLOYMENT_CHANGE=fail      # or restart, to delete this chain's deriv
 npx square-data migrate up
 npm install --install-links && npm run build && npm start
 ```
+
+`START_BLOCK` is the block the settlement stack was deployed in. A deploy script
+writes it into the deployment record as `block`, and the indexer reads it from
+there when the variable is unset, so the number lives in one place rather than in
+an operator's notes. When neither the record nor the variable carries one the
+indexer fails to start and says so: scanning Arc from genesis is roughly a day of
+catching up with the lag check red the whole way, which is never what anyone
+wanted.
+
+`BATCH_BLOCKS` is a request size, not a promise. Arc's `eth_getLogs` refuses a
+span above roughly twenty thousand blocks with code `-32012`, and a batch set
+wider than that used to fail, be retried unchanged, and stall the cursor forever
+behind a repeating `indexer.sync_failed`. A refused range is now halved until the
+node accepts it, logged once per split as `indexer.batch_split`, and the batch
+still ends where it was meant to. The splitting is a recovery, not a setting:
+each split costs an extra request, so `indexer.batch_split` in the log means
+`BATCH_BLOCKS` should come down.
 
 Migrations are never run at boot against a real database; `square-data
 migrate up` is the explicit step. Only the ephemeral PGlite mode migrates

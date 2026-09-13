@@ -3,7 +3,8 @@
     "Machine-readable form of Appendix A of method-spec-v2.md.",
     "The resolver (#9) consumes this so the spec and the implementation cannot drift.",
     "onChain values are a snapshot of Arc Testnet, not fixtures: ownerOf, getAgentWallet",
-    "and tokenURI are mutable. A test that asserts them must read the chain, not this file."
+    "and tokenURI are mutable. A test that asserts them must read the chain, not this file.",
+    "metadata vectors are consumed by the resolver's unit tests against a stub chain; every file in them is inline and no network is needed."
   ],
   "specVersion": "2.0",
   "parse": {
@@ -88,7 +89,8 @@
         "expect": {
           "resolves": true,
           "serviceCount": 0,
-          "warnings": []
+          "warnings": [],
+          "agentUriScheme": null
         }
       },
       {
@@ -113,6 +115,7 @@
             "#agent-wallet"
           ],
           "serviceCountDependsOnGateway": true,
+          "agentUriScheme": "ipfs",
           "$comment": "The Agent URI is ipfs:// and public gateways are not always reachable. A runner MUST NOT fail this vector on an unreachable URI: per §5 that is a warning, and the on-chain assertions above must still hold."
         }
       },
@@ -140,5 +143,348 @@
         "source": "Arc Testnet agentId 2 owner"
       }
     ]
+  },
+  "metadata": {
+    "$comment": [
+      "Resolution metadata beyond the chain reads: §6.1, §8 and §10.3.",
+      "A registration file given here is served to the stub chain as a data: agentURI, which the default",
+      "fetcher decodes in-process, so these vectors exercise the resolver and not a gateway."
+    ],
+    "agentUriScheme": {
+      "$comment": "§10.3: the scheme is reported as the chain gives it, whether or not the file behind it could be read. A null expectation means the field is absent.",
+      "cases": [
+        {
+          "tokenURI": "",
+          "expect": null,
+          "$comment": "Empty agentURI: no file, no scheme (§5)."
+        },
+        {
+          "tokenURI": "ipfs://bafkreibdi6623n3xpf7ymk62ckb4bo75o3qemwkpfvp5i25j66itxvsoei",
+          "expect": "ipfs"
+        },
+        {
+          "tokenURI": "https://example.com/agent.json",
+          "expect": "https"
+        },
+        {
+          "tokenURI": "data:application/json,%7B%22services%22%3A%5B%5D%7D",
+          "expect": "data"
+        },
+        {
+          "tokenURI": "HTTPS://EXAMPLE.COM/AGENT.JSON",
+          "expect": "https",
+          "$comment": "Schemes are case-insensitive (RFC 3986 §3.1) and are reported lowercase."
+        },
+        {
+          "tokenURI": "http://example.com/agent.json",
+          "expect": "http",
+          "$comment": "Reported although the fetcher refuses http: the field says what the chain says; the warning says what was done about it."
+        },
+        {
+          "tokenURI": "not a uri",
+          "expect": null,
+          "$comment": "No scheme to report. The fetch fails and that is a warning, per §5."
+        }
+      ]
+    },
+    "crossRegistrations": {
+      "$comment": [
+        "§8: each registrations[] entry maps to a DID by §3.2 and is a claim until the counterpart's own file lists the original back.",
+        "The resolver is configured with an endpoint for each chain in `rpc`, all with the registry below. `file` is the registration file of `did`.",
+        "`counterparts` maps a DID to what its registry says: a file object, \"\" for an empty agentURI, and a DID absent from the map is unminted (tokenURI reverts).",
+        "`expect.warnings` are warning codes. `expect.crossRegistrations` null means the field is absent."
+      ],
+      "rpc": [
+        5042002,
+        1
+      ],
+      "registry": "0x8004a818bfb912233c491871b3d84c89a494bd9e",
+      "cases": [
+        {
+          "$comment": "The example from §8. The counterpart on chain 1 lists the original back: verified.",
+          "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+          "file": {
+            "registrations": [
+              {
+                "agentId": 22,
+                "agentRegistry": "eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              }
+            ]
+          },
+          "counterparts": {
+            "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22": {
+              "registrations": [
+                {
+                  "agentId": 2,
+                  "agentRegistry": "eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+                }
+              ]
+            }
+          },
+          "expect": {
+            "crossRegistrations": {
+              "verified": [
+                "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22"
+              ],
+              "unverified": []
+            },
+            "warnings": []
+          }
+        },
+        {
+          "$comment": "One-way. The counterpart exists and has a file, and the file names someone else: unverified. This is the impersonation case §8 warns about.",
+          "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+          "file": {
+            "registrations": [
+              {
+                "agentId": 22,
+                "agentRegistry": "eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              }
+            ]
+          },
+          "counterparts": {
+            "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22": {
+              "registrations": [
+                {
+                  "agentId": 3,
+                  "agentRegistry": "eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+                }
+              ]
+            }
+          },
+          "expect": {
+            "crossRegistrations": {
+              "verified": [],
+              "unverified": [
+                "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22"
+              ]
+            },
+            "warnings": []
+          }
+        },
+        {
+          "$comment": "The counterpart's file lists nothing: unverified.",
+          "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+          "file": {
+            "registrations": [
+              {
+                "agentId": 22,
+                "agentRegistry": "eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              }
+            ]
+          },
+          "counterparts": {
+            "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22": {
+              "services": []
+            }
+          },
+          "expect": {
+            "crossRegistrations": {
+              "verified": [],
+              "unverified": [
+                "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22"
+              ]
+            },
+            "warnings": []
+          }
+        },
+        {
+          "$comment": "The counterpart has an empty agentURI: there is no file to list anyone, so unverified.",
+          "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+          "file": {
+            "registrations": [
+              {
+                "agentId": 22,
+                "agentRegistry": "eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              }
+            ]
+          },
+          "counterparts": {
+            "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22": ""
+          },
+          "expect": {
+            "crossRegistrations": {
+              "verified": [],
+              "unverified": [
+                "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22"
+              ]
+            },
+            "warnings": []
+          }
+        },
+        {
+          "$comment": "The counterpart is not minted; tokenURI reverts. The claim names nobody: unverified, and not a resolution error.",
+          "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+          "file": {
+            "registrations": [
+              {
+                "agentId": 22,
+                "agentRegistry": "eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              }
+            ]
+          },
+          "counterparts": {},
+          "expect": {
+            "crossRegistrations": {
+              "verified": [],
+              "unverified": [
+                "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22"
+              ]
+            },
+            "warnings": []
+          }
+        },
+        {
+          "$comment": "A chain this resolver has no endpoint for. The round trip cannot be made: unverified, and not unsupportedChain, because the DID being resolved is on a chain it does have.",
+          "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+          "file": {
+            "registrations": [
+              {
+                "agentId": 5,
+                "agentRegistry": "eip155:8453:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              }
+            ]
+          },
+          "counterparts": {},
+          "expect": {
+            "crossRegistrations": {
+              "verified": [],
+              "unverified": [
+                "did:aip:eip155:8453:0x8004a818bfb912233c491871b3d84c89a494bd9e:5"
+              ]
+            },
+            "warnings": []
+          }
+        },
+        {
+          "$comment": "Checksummed registry and a decimal string agentId are the same claim as the lowercase, numeric form, and verify the same way. The DID reported is the §3.2 form.",
+          "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+          "file": {
+            "registrations": [
+              {
+                "agentId": "22",
+                "agentRegistry": "eip155:1:0x8004A818BFB912233c491871b3d84c89A494BD9e"
+              }
+            ]
+          },
+          "counterparts": {
+            "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22": {
+              "registrations": [
+                {
+                  "agentId": "2",
+                  "agentRegistry": "eip155:5042002:0x8004A818BFB912233c491871b3d84c89A494BD9e"
+                }
+              ]
+            }
+          },
+          "expect": {
+            "crossRegistrations": {
+              "verified": [
+                "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22"
+              ],
+              "unverified": []
+            },
+            "warnings": []
+          }
+        },
+        {
+          "$comment": "Entries that name no agent are counted in a warning and not read; an entry naming the DID itself is dropped; a claim listed twice is one claim. What remains is checked as usual.",
+          "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+          "file": {
+            "registrations": [
+              {
+                "agentId": 2,
+                "agentRegistry": "eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              },
+              {
+                "agentId": 22,
+                "agentRegistry": "eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              },
+              {
+                "agentId": 22,
+                "agentRegistry": "eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              },
+              {
+                "agentId": "022",
+                "agentRegistry": "eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              },
+              {
+                "agentId": 22,
+                "agentRegistry": "eip155:1:not-a-registry"
+              },
+              {
+                "agentId": 22,
+                "agentRegistry": "solana:mainnet:8004"
+              },
+              {
+                "agentId": -1,
+                "agentRegistry": "eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              },
+              {
+                "agentRegistry": "eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              },
+              "not an object"
+            ]
+          },
+          "counterparts": {
+            "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22": {
+              "registrations": [
+                {
+                  "agentId": 2,
+                  "agentRegistry": "eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+                }
+              ]
+            }
+          },
+          "expect": {
+            "crossRegistrations": {
+              "verified": [
+                "did:aip:eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e:22"
+              ],
+              "unverified": []
+            },
+            "warnings": [
+              "crossRegistrationMalformed"
+            ]
+          }
+        },
+        {
+          "$comment": "Only self-references and junk: nothing to report, and the warning still counts the junk.",
+          "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+          "file": {
+            "registrations": [
+              {
+                "agentId": 2,
+                "agentRegistry": "eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              },
+              {
+                "agentId": "x",
+                "agentRegistry": "eip155:1:0x8004a818bfb912233c491871b3d84c89a494bd9e"
+              }
+            ]
+          },
+          "counterparts": {},
+          "expect": {
+            "crossRegistrations": null,
+            "warnings": [
+              "crossRegistrationMalformed"
+            ]
+          }
+        },
+        {
+          "$comment": "No registrations key, and a registrations value that is not an array: the field is absent and nothing is warned; the file simply claims nothing.",
+          "did": "did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2",
+          "file": {
+            "services": [],
+            "registrations": "none"
+          },
+          "counterparts": {},
+          "expect": {
+            "crossRegistrations": null,
+            "warnings": []
+          }
+        }
+      ]
+    }
   }
 }

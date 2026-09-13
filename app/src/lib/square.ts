@@ -129,7 +129,8 @@ export interface JobDetail {
   buyerRoot: Hex | null;
   netPayout: bigint;
   payee: Address;
-  agentId: bigint;
+  /** The ERC-8004 agent the submit bound, or null when none was. Agent 0 is an agent (#300). */
+  agentId: bigint | null;
   expiryRecorded: boolean;
   bond: bigint;
   arbiters: readonly Address[];

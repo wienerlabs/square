@@ -35,6 +35,36 @@ Other places that carry an address and have to be updated by hand:
 - `site/src/lib/links.ts`, the explorer link of the kernel
 - `contracts/src/PolicyRegistry.sol`, the docstring that names the deployed hook
 
+### The balance a redeploy has to reach zero
+
+`redeploy-2026-09-09.md` records the success condition for the stack it
+replaced: `totalWithdrawable` and the kernel's USDC balance both read zero
+afterwards. That is the right condition and the current stack can no longer
+meet it by the runbook's three steps alone, because `0x76E8690cEa9d94df810eE6b1F453866f0ee68c7B`
+holds 0.009602 USDC that arrived as a plain ERC-20 transfer in block 61250488
+and belongs to no ledger entry and no escrow.
+
+`unaccounted()` names that balance and `skim(to)` moves it, and neither can
+touch the ledger: `skim` transfers `balanceOf(this) - totalWithdrawable -
+totalEscrowed` and nothing else. The live kernel predates both, so its
+0.009602 USDC stays where it is until the stack is superseded by one that
+carries them. The supersede checklist in
+[contracts/README.md](../../contracts/README.md) now reads the balance to zero
+rather than assuming the withdrawals got there.
+
+### The block, and who needs it
+
+The deploy script also writes `"block"` into `contracts/deployments/<chainId>.json`,
+the block the stack was deployed in. The indexer reads it through
+`deploymentFromJson` whenever `START_BLOCK` is unset, so the number that decides
+where indexing starts comes from the same record as the addresses rather than
+from an operator's memory. `packages/core/src/deployments.ts` carries no block:
+the compiled constants are for the app and the SDK, neither of which indexes.
+
+An indexer given neither a `START_BLOCK` nor a record with a block refuses to
+start. That is deliberate: the old default was zero, and on Arc that is about a
+day of catching up from genesis with the lag check red throughout.
+
 ## 3. After the deploy
 
 1. Read the parameters back from the chain and record them
