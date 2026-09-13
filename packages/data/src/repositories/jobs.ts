@@ -1,4 +1,5 @@
 import type { Database } from "../database.js";
+import { pageSql, type ListPage } from "../pagination.js";
 import {
   bytesToHex,
   hexToBytes,
@@ -68,6 +69,19 @@ interface JobRow {
 
 const COLUMNS =
   "chain_id, job_id, client, provider, evaluator, hook, description, budget, status, expired_at, created_at, funded_at, submitted_at, challenge_end, platform_fee_bp, evaluator_fee_bp, deliverable, payee, provider_bps, reason, disputed, agent_id, updated_block, refund_reason";
+
+const QUALIFIED_COLUMNS = COLUMNS.split(", ")
+  .map((column) => `jobs.${column}`)
+  .join(", ");
+
+const OPEN_FILTER = `chain_id = $1 and status in (${JOB_STATUS.open}, ${JOB_STATUS.funded})`;
+const IN_CHALLENGE_WINDOW_FILTER = `chain_id = $1 and status = ${JOB_STATUS.submitted} and not disputed and challenge_end > $2`;
+const FINALIZABLE_FILTER = `chain_id = $1 and status = ${JOB_STATUS.submitted} and not disputed and challenge_end is not null and challenge_end <= $2`;
+
+async function count(db: Database, filter: string, params: unknown[]): Promise<number> {
+  const { rows } = await db.query<{ total: string }>(`select count(*)::text as total from jobs where ${filter}`, params);
+  return Number(rows[0]?.total ?? "0");
+}
 
 function rowToJob(row: JobRow): JobRecord {
   return {
@@ -162,42 +176,58 @@ export async function get(db: Database, chainId: number, jobId: bigint): Promise
   return row === undefined ? null : rowToJob(row);
 }
 
-export async function listOpen(db: Database, chainId: number): Promise<JobRecord[]> {
-  const { rows } = await db.query<JobRow>(
-    `select ${COLUMNS} from jobs where chain_id = $1 and status in (${JOB_STATUS.open}, ${JOB_STATUS.funded}) order by job_id`,
-    [chainId],
-  );
+export async function listOpen(db: Database, chainId: number, page?: ListPage): Promise<JobRecord[]> {
+  const params: unknown[] = [chainId];
+  const { cursor, order, bound } = pageSql(page, params, "job_id");
+  const { rows } = await db.query<JobRow>(`select ${COLUMNS} from jobs where ${OPEN_FILTER}${cursor} order by ${order}${bound}`, params);
   return rows.map(rowToJob);
 }
 
-export async function listByProvider(db: Database, chainId: number, provider: Hex): Promise<JobRecord[]> {
-  const { rows } = await db.query<JobRow>(`select ${COLUMNS} from jobs where chain_id = $1 and provider = $2 order by job_id`, [
-    chainId,
-    hexToBytes(provider),
-  ]);
-  return rows.map(rowToJob);
+export async function countOpen(db: Database, chainId: number): Promise<number> {
+  return count(db, OPEN_FILTER, [chainId]);
 }
 
-export async function listInChallengeWindow(db: Database, chainId: number, now: bigint): Promise<JobRecord[]> {
+export async function listByProvider(db: Database, chainId: number, provider: Hex, page?: ListPage): Promise<JobRecord[]> {
+  const params: unknown[] = [chainId, hexToBytes(provider)];
+  const { cursor, order, bound } = pageSql(page, params, "job_id");
   const { rows } = await db.query<JobRow>(
-    `select ${COLUMNS} from jobs
-     where chain_id = $1 and status = ${JOB_STATUS.submitted} and not disputed and challenge_end > $2
-     order by challenge_end, job_id`,
-    [chainId, now.toString()],
-  );
-  return rows.map(rowToJob);
-}
-
-export async function listFinalizable(db: Database, chainId: number, now: bigint, evaluator?: Hex): Promise<JobRecord[]> {
-  const filter = evaluator === undefined ? "" : " and evaluator = $3";
-  const params: unknown[] = evaluator === undefined ? [chainId, now.toString()] : [chainId, now.toString(), hexToBytes(evaluator)];
-  const { rows } = await db.query<JobRow>(
-    `select ${COLUMNS} from jobs
-     where chain_id = $1 and status = ${JOB_STATUS.submitted} and not disputed and challenge_end is not null and challenge_end <= $2${filter}
-     order by challenge_end, job_id`,
+    `select ${COLUMNS} from jobs where chain_id = $1 and provider = $2${cursor} order by ${order}${bound}`,
     params,
   );
   return rows.map(rowToJob);
+}
+
+export async function listInChallengeWindow(db: Database, chainId: number, now: bigint, page?: ListPage): Promise<JobRecord[]> {
+  const params: unknown[] = [chainId, now.toString()];
+  const { cursor, order, bound } = pageSql(page, params, "challenge_end, job_id");
+  const { rows } = await db.query<JobRow>(
+    `select ${COLUMNS} from jobs where ${IN_CHALLENGE_WINDOW_FILTER}${cursor} order by ${order}${bound}`,
+    params,
+  );
+  return rows.map(rowToJob);
+}
+
+export async function countInChallengeWindow(db: Database, chainId: number, now: bigint): Promise<number> {
+  return count(db, IN_CHALLENGE_WINDOW_FILTER, [chainId, now.toString()]);
+}
+
+export async function listFinalizable(db: Database, chainId: number, now: bigint, evaluator?: Hex, page?: ListPage): Promise<JobRecord[]> {
+  const params: unknown[] = [chainId, now.toString()];
+  let filter = "";
+  if (evaluator !== undefined) {
+    params.push(hexToBytes(evaluator));
+    filter = ` and evaluator = $${params.length}`;
+  }
+  const { cursor, order, bound } = pageSql(page, params, "challenge_end, job_id");
+  const { rows } = await db.query<JobRow>(
+    `select ${COLUMNS} from jobs where ${FINALIZABLE_FILTER}${filter}${cursor} order by ${order}${bound}`,
+    params,
+  );
+  return rows.map(rowToJob);
+}
+
+export async function countFinalizable(db: Database, chainId: number, now: bigint): Promise<number> {
+  return count(db, FINALIZABLE_FILTER, [chainId, now.toString()]);
 }
 
 export async function listDisputedSubmitted(db: Database, chainId: number, evaluator?: Hex): Promise<JobRecord[]> {
@@ -210,8 +240,14 @@ export async function listDisputedSubmitted(db: Database, chainId: number, evalu
   return rows.map(rowToJob);
 }
 
-export async function listExpiredWithAgent(db: Database, chainId: number, evaluator?: Hex, limit?: number): Promise<JobRecord[]> {
-  const params: unknown[] = [chainId];
+export async function listExpiredWithAgent(
+  db: Database,
+  chainId: number,
+  evaluator?: Hex,
+  limit?: number,
+  now: bigint = BigInt(Math.floor(Date.now() / 1000)),
+): Promise<JobRecord[]> {
+  const params: unknown[] = [chainId, now.toString()];
   let filter = "";
   if (evaluator !== undefined) {
     params.push(hexToBytes(evaluator));
@@ -223,16 +259,13 @@ export async function listExpiredWithAgent(db: Database, chainId: number, evalua
     bound = ` limit $${params.length}`;
   }
   const { rows } = await db.query<JobRow>(
-    `select ${COLUMNS} from jobs
+    `select ${QUALIFIED_COLUMNS} from jobs
+     left join keeper_job_state state on state.chain_id = jobs.chain_id and state.job_id = jobs.job_id
      where jobs.chain_id = $1 and jobs.status = ${JOB_STATUS.expired} and jobs.agent_id is not null${filter}
-       and not exists (
-         select 1 from keeper_actions
-         where keeper_actions.chain_id = jobs.chain_id
-           and keeper_actions.job_id = jobs.job_id
-           and keeper_actions.action = 'recordExpiry'
-           and keeper_actions.reason is null
-       )
-     order by jobs.job_id${bound}`,
+       and state.expiry_recorded_at is null
+       and coalesce(state.expiry_gave_up, false) = false
+       and (state.expiry_next_at is null or state.expiry_next_at <= $2)
+     order by coalesce(state.expiry_next_at, 0), jobs.job_id${bound}`,
     params,
   );
   return rows.map(rowToJob);

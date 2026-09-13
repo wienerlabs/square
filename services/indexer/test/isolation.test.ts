@@ -402,9 +402,10 @@ describe("a checkpoint from another deployment", () => {
       const health = createHealth({ service: "t", version: "0" });
       const api = createApi({ db, chainId: CHAIN, indexer, health, metrics });
       const status = (await (await api.request("/status")).json()) as { jobs: number };
-      const open = (await (await api.request("/jobs/open")).json()) as Array<{ jobId: string }>;
-      expect(open.map((row) => row.jobId)).toEqual(["1"]);
-      expect(status.jobs).toBe(open.length);
+      const open = (await (await api.request("/jobs/open")).json()) as { items: Array<{ jobId: string }>; nextAfter: string | null };
+      expect(open.items.map((row) => row.jobId)).toEqual(["1"]);
+      expect(open.nextAfter).toBe(null);
+      expect(status.jobs).toBe(open.items.length);
     } finally {
       await db.close();
     }

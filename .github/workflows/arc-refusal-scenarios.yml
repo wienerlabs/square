@@ -1,0 +1,122 @@
+name: arc refusal scenarios
+
+# square#28: the six scenarios of a compliance-gated release against Arc
+# Testnet itself, run by the same script the `six refusal scenarios (policy →
+# proof → anvil)` job runs, pointed at Arc. It spends real testnet USDC: the
+# first run on Arc was 26.2M gas, 12.6M of it deploying the run's own stack,
+# and cost the funder 0.588 USDC (docs/deploy/refusal-scenarios.md).
+# That cost is why it lives in its own workflow, as arc-acceptance.yml does,
+# and keeps a path filter. On a pull request it runs only when the script or
+# this file changes, the change that most needs showing on Arc before it
+# merges; any other pull request would pay for a run that tests nothing new.
+# Like arc-acceptance.yml it skips pull requests from forks, which get no
+# secrets.
+#
+# The funded account is the SCENARIO_FUNDER_PRIVATE_KEY secret. Without it the
+# script refuses to start and says so, and it refuses too when the account
+# holds less than the run needs. A red here is therefore a statement about the
+# secret or the balance as often as about the gate, and that is why this is not
+# a required check. docs/ci.md has the row.
+#
+# One run at a time, whatever the ref: two runs signing as the same funder would
+# race each other's nonces.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "circuits/**"
+      - "services/prover/**"
+      - "contracts/src/**"
+      - "contracts/script/refusal-scenarios.mjs"
+      - "contracts/script/verifier-constants.mjs"
+      - ".github/workflows/arc-refusal-scenarios.yml"
+  pull_request:
+    paths:
+      - "contracts/script/refusal-scenarios.mjs"
+      - ".github/workflows/arc-refusal-scenarios.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arc-refusal-scenarios
+  cancel-in-progress: false
+
+jobs:
+  arc:
+    name: six refusal scenarios (Arc Testnet, funded key)
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09  # v1.9.1
+        with:
+          version: stable
+
+      - uses: ./.github/actions/circom
+
+      - name: Cache the phase-1 powers of tau
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: circuits/build/ppot_0080_14.ptau
+          key: ptau-${{ hashFiles('circuits/scripts/fetch-ptau.mjs') }}
+
+      - name: Build the circuit and a development proving key
+        working-directory: circuits
+        run: |
+          npm ci
+          npm run build
+
+      - name: Put the artifacts where the prover looks for them
+        run: |
+          set -euo pipefail
+          mkdir -p services/prover/artifacts
+          cp circuits/build/payment.zkey services/prover/artifacts/
+          cp circuits/build/payment_vk.json services/prover/artifacts/
+          cp circuits/build/payment_js/payment.wasm services/prover/artifacts/
+
+      - name: Install the prover
+        working-directory: services/prover
+        run: npm install --install-links
+
+      - name: Build @squaresdk/did-resolver and @squaresdk/core
+        run: |
+          set -euo pipefail
+          (cd packages/did-resolver && npm install && npm run build)
+          (cd packages/core && npm install --install-links && npm run build)
+
+      - name: Build the contracts
+        working-directory: contracts
+        run: forge build
+
+      - name: Six scenarios on Arc Testnet
+        working-directory: contracts
+        env:
+          SCENARIO_RPC_URL: https://rpc.testnet.arc.io
+          SCENARIO_FUNDER_PRIVATE_KEY: ${{ secrets.SCENARIO_FUNDER_PRIVATE_KEY }}
+        run: |
+          set -o pipefail
+          node script/refusal-scenarios.mjs | tee ../refusal-scenarios-arc.txt
+
+      - name: On the run summary
+        if: always()
+        run: |
+          {
+            echo '### Six refusal scenarios: policy → proof → Arc Testnet'
+            echo
+            echo '```'
+            cat refusal-scenarios-arc.txt 2>/dev/null || echo 'the run produced no output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

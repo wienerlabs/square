@@ -10,7 +10,7 @@ writes ERC-8004 reputation.
 | `SquareJob` | ERC-8183 kernel: lifecycle, escrow, fee snapshot, pull-payment ledger, hook whitelist | [storage-and-events.md](../docs/design/storage-and-events.md) |
 | `KeeperEvaluator` | evaluator seat: challenge window, permissionless finalize, keeper fee, dispute entry | [keeper-economics.md](../docs/design/keeper-economics.md) |
 | `Arbitration` | bonded disputes, versioned M-of-N arbiter set, bitmask votes, bond routing | [storage-and-events.md](../docs/design/storage-and-events.md) |
-| `ClaimMarket` | list, buy, cancel the receivable; `payeeOf` for the kernel | [storage-and-events.md](../docs/design/storage-and-events.md) |
+| `ClaimMarket` | list, buy, cancel the receivable; only a buyer on the poster's list can buy; `payeeOf` for the kernel | [storage-and-events.md](../docs/design/storage-and-events.md), [buyer-eligibility.md](../docs/decisions/buyer-eligibility.md) |
 | `SquareHook` | the hook: agent binding, payout routing, compliance slot, reputation and validation writes | [square-hook.md](../docs/design/square-hook.md) |
 
 ## Commands

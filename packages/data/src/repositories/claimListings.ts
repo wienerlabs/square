@@ -1,4 +1,5 @@
 import type { Database } from "../database.js";
+import { pageSql, type ListPage } from "../pagination.js";
 import { bytesToHex, hexToBytes, nullableBytesToHex, nullableHexToBytes, toBigInt, type Hex } from "../codec.js";
 
 export const CLAIM_LISTING_STATUS = { listed: 1, sold: 2, cancelled: 3 } as const;
@@ -75,10 +76,12 @@ export async function get(db: Database, chainId: number, jobId: bigint): Promise
   return row === undefined ? null : rowToListing(row);
 }
 
-export async function listListed(db: Database, chainId: number): Promise<ClaimListingRecord[]> {
+export async function listListed(db: Database, chainId: number, page?: ListPage): Promise<ClaimListingRecord[]> {
+  const params: unknown[] = [chainId];
+  const { cursor, order, bound } = pageSql(page, params, "job_id");
   const { rows } = await db.query<ClaimListingRow>(
-    `select ${COLUMNS} from claim_listings where chain_id = $1 and status = ${CLAIM_LISTING_STATUS.listed} order by job_id`,
-    [chainId],
+    `select ${COLUMNS} from claim_listings where chain_id = $1 and status = ${CLAIM_LISTING_STATUS.listed}${cursor} order by ${order}${bound}`,
+    params,
   );
   return rows.map(rowToListing);
 }

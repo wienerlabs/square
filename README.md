@@ -19,13 +19,21 @@
 An institution commits a private spending mandate on-chain. Identified agents execute
 against it. The hook that releases escrow carries a compliance slot: with a module
 installed, a release must first prove, in zero knowledge, that it fits the mandate.
-The receivable created during the challenge window is discountable.
+The receivable created during the challenge window is discountable, and sells only to
+a buyer the institution's policy approved.
 
-The slot is empty on the deployed hook, so no release is proof gated on Arc Testnet
-today: `SquareHook.complianceModule()` returns the zero address, and the app's
-[network page](https://square-wienerlabs.vercel.app/network) reads it live. The
-circuit, the prover and the on-chain verifier are live (#14, #18, #17); wiring the
-check into settlement is [#27](https://github.com/wienerlabs/square/issues/27).
+The slot is empty on the shared deployed hook, so no release on that stack is proof
+gated: `SquareHook.complianceModule()` returns the zero address, and the app's
+[network page](https://square-wienerlabs.vercel.app/network) reads it live. The gate
+itself has run on Arc Testnet, on a stack deployed with the module installed
+([#28](https://github.com/wienerlabs/square/issues/28)): a compliant payment released
+for 815,728 gas (0.017946 USDC), and a payment over its daily cap, to a blocked
+recipient, against a replaced policy, outside its time window or carrying another
+job's proof refused by name
+([refusal-scenarios.md](docs/deploy/refusal-scenarios.md)). The circuit, the prover
+and the on-chain verifier are live (#14, #18, #17), and the check is wired into
+settlement by [#27](https://github.com/wienerlabs/square/issues/27)'s
+`ComplianceModule`.
 
 ---
 
@@ -71,8 +79,11 @@ Three layers. Arc supplies the bottom one already.
 
 The composition point is the hook: the proof gates **release**, not deposit,
 and it is bound to the address the kernel will actually pay, which is the
-receivable's buyer when the receivable was sold. Reputation stays with the agent
-that did the work.
+receivable's buyer when the receivable was sold. Who can become that buyer is
+gated too: the poster's policy publishes the root of a salted list of approved
+buyers, and `buy` checks the purchaser against it without the list reaching the
+chain ([buyer-eligibility.md](docs/decisions/buyer-eligibility.md)). Reputation
+stays with the agent that did the work.
 
 Design notes, each the record of a decision:
 
@@ -126,7 +137,9 @@ circuits/    Circom payment-compliance circuit + ceremony scripts
 packages/    did-resolver, cli, did-aip-driver, core (SDK, embedded ABIs), data (Postgres
              access layer + migrations), hardening (SSRF, idempotency, rate limit, RPC
              failover, signed actions), observability (logs, metrics, health, alerts),
-             x402 (payment gateway), aa (ERC-4337 smart accounts)
+             x402 (payment gateway), aa (ERC-4337 smart accounts), a2a (task protocol),
+             agent (an agent in a few lines: card, A2A tasks paid through escrow, x402),
+             mcp (agents calling MCP tools; Square as an MCP server for Claude Desktop)
 services/    prover, indexer, keeper
 app/         Next.js reference application (static export, wagmi, Open Runde design system)
 site/        The website at https://square-protocol.vercel.app: what Square is, and the door to the app
