@@ -36,7 +36,13 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     IScreeningRegistry private _screening;
     address private _trustedEvaluator;
     uint64 private _minReputationBudget;
-    mapping(uint256 jobId => uint256) private _agentOf;
+    /// @dev The bound agent's id plus one, so that zero means "no agent bound".
+    ///      Agent id 0 is a real agent: on Arc's Identity Registry it is the
+    ///      first registration, with an owner and a wallet. Storing the id
+    ///      itself made that agent's jobs look unbound after beforeAction had
+    ///      bound them, so no feedback was written and recordExpiry refused
+    ///      them (square#300).
+    mapping(uint256 jobId => uint256) private _boundAgentPlusOne;
     mapping(uint256 jobId => bytes32) private _validationOf;
     mapping(uint256 jobId => bool) private _recorded;
     uint256 private transient _checkedJob;
@@ -123,20 +129,28 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     ///      wrapped anyway: an unusable module reads as "not verified" rather
     ///      than as a stuck job. See docs/decisions/hook-failure-modes.md.
     ///
-    ///      With no module and no screening registry installed nothing changes
-    ///      and the split arrives from `optParams` as before.
+    ///      The split arrives from `optParams`, which the evaluator encodes.
+    ///      The proof does not: it is read from the job through
+    ///      `complianceProofOf`, where only the client can put it. A
+    ///      permissionless crank's bytes therefore decide nothing, which is
+    ///      what square#245 closed. With no module installed the proof is not
+    ///      read, and with no screening registry installed the payee is not
+    ///      screened; with neither, the split arrives from `optParams` as is.
     function resolvePayout(uint256 jobId, bytes calldata data)
         external
         view
         returns (address payee, uint16 providerBps)
     {
         (, bytes memory optParams) = abi.decode(data, (bytes32, bytes));
-        bytes memory proof;
-        (providerBps, proof) = _decodeComplete(optParams);
+        (providerBps,) = _decodeComplete(optParams);
         payee = _claimMarket.payeeOf(jobId);
 
-        if (address(_complianceModule) != address(0) && !_previewsCompliant(jobId, payee, providerBps, proof)) {
-            providerBps = 0;
+        // No early return when there is no module: screening below still has to
+        // run, and returning here would pay an unscreened payee on a hook that
+        // screens but gates no proofs.
+        if (address(_complianceModule) != address(0)) {
+            bytes memory proof = _squareJob.complianceProofOf(jobId);
+            if (!_previewsCompliant(jobId, payee, providerBps, proof)) providerBps = 0;
         }
         // square#35. The payee is the address money leaves to, and it need not
         // be the provider screened at funding: a sold receivable pays its buyer,
@@ -215,7 +229,7 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
             if (requestHash != bytes32(0) && !_requestBelongsTo(requestHash, agentId)) {
                 revert ValidationRequestMismatch(requestHash);
             }
-            _agentOf[jobId] = agentId;
+            _boundAgentPlusOne[jobId] = agentId + 1;
             _validationOf[jobId] = requestHash;
             emit AgentBound(jobId, agentId, requestHash);
         } else if (selector == FUND_SELECTOR) {
@@ -233,14 +247,17 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     }
 
     function _checkRelease(uint256 jobId, bytes memory optParams) private {
-        (uint16 providerBps, bytes memory proof) = _decodeComplete(optParams);
+        (uint16 providerBps,) = _decodeComplete(optParams);
+        bytes memory proof = _squareJob.complianceProofOf(jobId);
         address payee = _claimMarket.payeeOf(jobId);
         uint256 amount = (_squareJob.netPayout(jobId) * providerBps) / FULL_BPS;
         uint8 outcome = CHECK_NOT_RUN;
         if (address(_complianceModule) != address(0)) {
             try _complianceModule.checkRelease(
                 jobId, payee, amount, _squareJob.paymentToken(), _squareJob.getJobRecord(jobId).client, proof
-            ) returns (bool ok) {
+            ) returns (
+                bool ok
+            ) {
                 outcome = ok ? CHECK_PASSED : CHECK_FAILED;
             } catch (bytes memory reason) {
                 outcome = CHECK_FAILED;
@@ -292,7 +309,7 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     function recordExpiry(uint256 jobId) external {
         ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
         if (job.status != ISquareJob.JobStatus.Expired) revert NotExpired();
-        if (_agentOf[jobId] == 0) revert NoAgentBound();
+        if (_boundAgentPlusOne[jobId] == 0) revert NoAgentBound();
         if (_recorded[jobId]) revert AlreadyRecorded();
         _writeReputation(jobId, 0, "expired", job.deliverable);
     }
@@ -318,8 +335,22 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         return _minReputationBudget;
     }
 
+    /// @notice The agent bound to `jobId` by its submit. Reverts with
+    ///         NoAgentBound when none is: agent id 0 exists, so no id can
+    ///         stand for "none" (square#300). `boundAgentOf` is the form that
+    ///         answers both questions without reverting.
     function agentOf(uint256 jobId) external view returns (uint256) {
-        return _agentOf[jobId];
+        uint256 slot = _boundAgentPlusOne[jobId];
+        if (slot == 0) revert NoAgentBound();
+        return slot - 1;
+    }
+
+    /// @notice Whether an agent is bound to `jobId`, and which. `agentId` is
+    ///         meaningful only when `bound` is true.
+    function boundAgentOf(uint256 jobId) external view returns (bool bound, uint256 agentId) {
+        uint256 slot = _boundAgentPlusOne[jobId];
+        if (slot == 0) return (false, 0);
+        return (true, slot - 1);
     }
 
     function validationOf(uint256 jobId) external view returns (bytes32) {
@@ -342,7 +373,11 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         return address(_claimMarket);
     }
 
-    function _decodeComplete(bytes memory optParams) private pure returns (uint16 providerBps, bytes memory proof) {
+    function _decodeComplete(bytes memory optParams)
+        private
+        pure
+        returns (uint16 providerBps, bytes memory proof)
+    {
         if (optParams.length == 0) return (FULL_BPS, "");
         (providerBps, proof) = abi.decode(optParams, (uint16, bytes));
     }
@@ -368,8 +403,9 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     }
 
     function _writeReputation(uint256 jobId, int128 value, string memory tag2, bytes32 feedbackHash) private {
-        uint256 agentId = _agentOf[jobId];
-        if (agentId == 0 || _recorded[jobId]) return;
+        uint256 slot = _boundAgentPlusOne[jobId];
+        if (slot == 0 || _recorded[jobId]) return;
+        uint256 agentId = slot - 1;
         _recorded[jobId] = true;
         if (value > 0) {
             ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);

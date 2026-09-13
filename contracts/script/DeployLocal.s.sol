@@ -15,6 +15,46 @@ import {MockUSDC3009} from "../test/mocks/MockUSDC3009.sol";
 import {MockIdentityRegistry, MockReputationRegistry, MockValidationRegistry} from "../test/mocks/MockRegistries.sol";
 
 contract DeployLocal is Script {
+    /// @dev The chain this script may deploy to, and the environment variable
+    ///      that names a different one on purpose.
+    ///
+    ///      It deploys mocks — `MockUSDC3009`, three mock ERC-8004 registries,
+    ///      a whole second kernel and hook — and then writes their addresses to
+    ///      `deployments/<chainid>.json`. For 5042002 that is the file in
+    ///      version control carrying the real Arc Testnet addresses.
+    ///
+    ///      square#232: `docs/deploy/local-stack.md` told an operator to point
+    ///      the stack at Arc with `CHAIN_ID=5042002`, a funded key and a
+    ///      `docker compose up` that starts this container. The mock stack would
+    ///      have been broadcast to the real testnet and the deployment record
+    ///      overwritten with mock addresses, with the indexer and keeper then
+    ///      reporting healthy against it.
+    ///
+    ///      A fork answers with the chain id of the chain it forks, so no check
+    ///      here can tell one from the other. `DEPLOY_LOCAL_ALLOW_CHAIN_ID` is
+    ///      how a caller says which chain it means: `packages/aa` sets it to
+    ///      5042002 for the Arc fork it spawns itself and deletes the artefacts
+    ///      afterwards. Nothing reaches a real network without someone writing
+    ///      that id down first.
+    ///
+    ///      square#270: the id was written down, and the addresses still went
+    ///      to `deployments/5042002.json`, because that is where this script
+    ///      wrote for whatever chain it was on. `packages/aa`'s harness read
+    ///      the mock stack from the committed record and deleted it, so an
+    ///      `npm test` there left the working tree without the Arc Testnet
+    ///      addresses. On any chain but 31337 the path now has to be named
+    ///      with `DEPLOYMENT_FILE`, and `deployments/<chainid>.json` is not
+    ///      accepted: that is the record of that chain's real deployment, and
+    ///      a mock stack is never that. `deploymentPath` is where the rule
+    ///      lives, resolved before anything is broadcast.
+    uint256 internal constant LOCAL_CHAIN_ID = 31337;
+
+    error WrongChain(uint256 chainId, uint256 allowed);
+    /// @dev On a chain other than 31337 nothing says where the addresses go.
+    error DeploymentFileRequired(uint256 chainId, string record);
+    /// @dev `DEPLOYMENT_FILE` names the chain's own record, which a mock stack must not overwrite.
+    error DeploymentFileIsTheRecord(uint256 chainId, string record);
+
     string internal constant ANVIL_MNEMONIC = "test test test test test test test test test test test junk";
     address internal constant ANVIL_1 = 0x70997970C51812dc3A010C7d01b50e0d17dc79C8;
     address internal constant ANVIL_2 = 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC;
@@ -43,6 +83,12 @@ contract DeployLocal is Script {
     }
 
     function run() external {
+        uint256 allowed = vm.envOr("DEPLOY_LOCAL_ALLOW_CHAIN_ID", LOCAL_CHAIN_ID);
+        if (block.chainid != allowed) revert WrongChain(block.chainid, allowed);
+        // Resolved first: a refusal here costs nothing, one after the broadcast
+        // would leave a mock stack on the chain with its addresses nowhere.
+        string memory path = deploymentPath(block.chainid, vm.envOr("DEPLOYMENT_FILE", string("")));
+
         uint256 key = vm.envOr("DEPLOYER_PRIVATE_KEY", vm.deriveKey(ANVIL_MNEMONIC, 0));
         address deployer = vm.addr(key);
         vm.startBroadcast(key);
@@ -50,7 +96,23 @@ contract DeployLocal is Script {
         Stack memory stack = _deployStack(deployer, mocks);
         _seed(mocks);
         vm.stopBroadcast();
-        _record(mocks, stack);
+        _record(mocks, stack, path);
+    }
+
+    /// @notice Where the addresses are written for `chainId`, given what the
+    ///         caller `named` in `DEPLOYMENT_FILE` (empty when unset).
+    /// @dev On 31337 the default is `deployments/31337.json`, as it always was,
+    ///      and a name is taken as given. On any other chain the name is
+    ///      required, and the chain's own record is refused (square#270).
+    function deploymentPath(uint256 chainId, string memory named) public pure returns (string memory) {
+        string memory record = string.concat("deployments/", vm.toString(chainId), ".json");
+        bool unnamed = bytes(named).length == 0;
+        if (chainId == LOCAL_CHAIN_ID) return unnamed ? record : named;
+        if (unnamed) revert DeploymentFileRequired(chainId, record);
+        if (keccak256(bytes(named)) == keccak256(bytes(record))) {
+            revert DeploymentFileIsTheRecord(chainId, record);
+        }
+        return named;
     }
 
     function _deployMocks() private returns (Mocks memory m) {
@@ -64,7 +126,10 @@ contract DeployLocal is Script {
         s.kernel = new SquareJob(address(m.usdc), deployer, 100, 50, 1_000_000, deployer);
         s.keeper = new KeeperEvaluator(address(s.kernel), deployer, 1 days, 3 days, 1 hours);
         s.arbitration = new Arbitration(address(s.keeper), deployer, 1_000, 1_000_000);
-        s.market = new ClaimMarket(address(s.kernel), address(s.keeper));
+        // square#30: the market reads each poster's buyer list from the registry,
+        // so the registry exists before the market does.
+        s.policy = new PolicyRegistry(deployer);
+        s.market = new ClaimMarket(address(s.kernel), address(s.keeper), address(s.policy));
         s.hook = new SquareHook(
             address(s.kernel),
             address(s.market),
@@ -75,8 +140,9 @@ contract DeployLocal is Script {
             address(s.keeper),
             1_000_000
         );
-        // square#27 filled the slot. The registry, the verifying key and the
-        // module are wired here, in the order their access control needs:
+        // square#27 filled the slot. The verifying key and the module are
+        // deployed here and wired to the registry above, in the order their
+        // access control needs:
         // the module has to know its hook before the hook can use it, and the
         // registry has to know the module before the module can move a counter.
         //
@@ -84,7 +150,6 @@ contract DeployLocal is Script {
         // generous. On a real chain it is the time between building a proof and
         // it being mined, and every second of it is a second in which a policy's
         // time window can be straddled.
-        s.policy = new PolicyRegistry(deployer);
         s.verifier = new Groth16Verifier();
         s.compliance = new ComplianceModule(
             address(s.verifier), address(s.policy), address(s.kernel), deployer, 1 hours
@@ -137,7 +202,7 @@ contract DeployLocal is Script {
         m.identity.setAgent(1, ANVIL_2, ANVIL_2);
     }
 
-    function _record(Mocks memory m, Stack memory s) private {
+    function _record(Mocks memory m, Stack memory s, string memory path) private {
         string memory json = "deployment";
         vm.serializeUint(json, "chainId", block.chainid);
         vm.serializeAddress(json, "SquareJob", address(s.kernel));
@@ -153,7 +218,6 @@ contract DeployLocal is Script {
         vm.serializeAddress(json, "IdentityRegistry", address(m.identity));
         vm.serializeAddress(json, "ReputationRegistry", address(m.reputation));
         string memory out = vm.serializeAddress(json, "ValidationRegistry", address(m.validation));
-        string memory path = string.concat("deployments/", vm.toString(block.chainid), ".json");
         vm.writeJson(out, path);
         console2.log("local stack written to", path);
     }

@@ -1,5 +1,5 @@
 export type { Database, QueryResult } from "./database.js";
-export { pgDatabase, type PgDatabaseOptions } from "./pg.js";
+export { pgDatabase, pgDatabaseFromPool, type PgDatabaseOptions } from "./pg.js";
 export { pgliteDatabase, type PgliteDatabaseOptions } from "./pglite.js";
 export {
   migrate,
@@ -10,7 +10,15 @@ export {
   type MigrationResult,
   type MigrationStatus,
 } from "./migrate.js";
-export { sweepAll, DEFAULT_RATE_LIMIT_WINDOW_MS, type SweepOptions, type SweepResult } from "./retention.js";
+export {
+  sweepAll,
+  DEFAULT_RATE_LIMIT_WINDOW_MS,
+  type SweepOptions,
+  type SweepResult,
+  type SweepCounts,
+  type SweepFailure,
+  type SweptTable,
+} from "./retention.js";
 export {
   hexToBytes,
   bytesToHex,
@@ -32,4 +40,6 @@ export * as idempotencyKeys from "./repositories/idempotencyKeys.js";
 export * as rateLimits from "./repositories/rateLimits.js";
 export * as x402Payments from "./repositories/x402Payments.js";
 export * as keeperActions from "./repositories/keeperActions.js";
+export * as keeperJobState from "./repositories/keeperJobState.js";
+export * as quarantinedEvents from "./repositories/quarantinedEvents.js";
 export * as hostedAgents from "./repositories/hostedAgents.js";

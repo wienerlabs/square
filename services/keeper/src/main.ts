@@ -8,7 +8,7 @@ import { keeperActions, migrate, MIGRATIONS_DIR, pgDatabase, pgliteDatabase } fr
 import { createAlerting, createHealth, createLogger, createMetrics, keeperStalled, logNotifier, webhookNotifier } from "@squaresdk/observability";
 import { observabilityRoutes } from "@squaresdk/observability/hono";
 import { keeperChecks } from "./checks.js";
-import { Keeper } from "./run.js";
+import { Keeper, KEEPER_LOG_FIELDS } from "./run.js";
 import { payeeScreening } from "./screening.js";
 
 function required(name: string): string {
@@ -42,11 +42,13 @@ async function main(): Promise<void> {
     nativeCurrency: profile?.nativeCurrency ?? { name: "USDC", symbol: "USDC", decimals: 18 },
     rpcUrls: { default: { http: [rpcUrl] } },
   });
-  const logger = createLogger({ service: "square-keeper", version });
+  const logger = createLogger({ service: "square-keeper", version, allowlist: KEEPER_LOG_FIELDS });
   const metrics = createMetrics({ service: "square-keeper" });
   const databaseUrl = process.env["DATABASE_URL"];
   const ephemeralMirror = !databaseUrl;
-  const db = databaseUrl ? pgDatabase(databaseUrl) : await pgliteDatabase();
+  const db = databaseUrl
+    ? pgDatabase(databaseUrl, { onPoolError: (error) => logger.error("keeper.pool_error", { error: error.message }) })
+    : await pgliteDatabase();
   if (ephemeralMirror) {
     await migrate(db, MIGRATIONS_DIR, "up");
     logger.warn("keeper.ephemeral_mirror", {

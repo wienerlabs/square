@@ -55,7 +55,9 @@ function fakeChain(opts: {
         return opts.tokenURI(id);
       }
       if (functionName === "getAgentWallet") {
-        if (!opts.getAgentWallet) throw new Error("reverted");
+        // OPTIONAL in ERC-8004: a registry without it reverts, and that is
+        // the chain's own "not exposed", not a failure to read.
+        if (!opts.getAgentWallet) throw revert("getAgentWallet");
         return opts.getAgentWallet(id);
       }
       throw new Error(`unexpected ${functionName}`);
@@ -205,6 +207,125 @@ describe("resolve — agent wallet", () => {
     }));
     const res = await r.resolve(DID(2));
     expect(res.didDocument!.verificationMethod).toHaveLength(1);
+  });
+});
+
+describe("resolve — a wallet that could not be read is not a wallet that is not there", () => {
+  // getAgentWallet is OPTIONAL, so a revert means "not exposed" and the
+  // document is whole without it. A dropped eth_call is not that: the wallet
+  // may be there, and a document that quietly omits it hands a verifier an
+  // assertionMethod with the payment key missing. ownerOf already tells the
+  // two apart; this read did not (#272).
+  it("says nothing when the registry reverts", async () => {
+    const r = resolverWith(fakeChain({ ownerOf: () => OWNER, tokenURI: () => "" }));
+    const res = await r.resolve(DID(2));
+    expect(res.didDocument!.verificationMethod.map((v) => v.id)).toEqual([`${DID(2)}#owner`]);
+    expect(res.didResolutionMetadata.warnings).toBeUndefined();
+  });
+
+  it("warns when the read failed in transport", async () => {
+    for (const transport of [
+      new HttpRequestError({ url: "http://stub", status: 429, details: "rate limited" }),
+      new TimeoutError({ body: {}, url: "http://stub" }),
+      new Error("socket hang up"),
+    ]) {
+      const chain = fakeChain({ ownerOf: () => OWNER, tokenURI: () => "", getAgentWallet: () => OWNER });
+      chain.readContract.mockImplementationOnce(async ({ functionName }: any) => {
+        if (functionName === "ownerOf") return OWNER;
+        throw new Error("unexpected");
+      });
+      chain.readContract.mockRejectedValueOnce(contractError(transport, "getAgentWallet"));
+      const res = await resolverWith(chain).resolve(DID(2));
+      expect(res.didResolutionMetadata.error, transport.constructor.name).toBeUndefined();
+      expect(res.didDocument!.verificationMethod.map((v) => v.id), transport.constructor.name)
+        .toEqual([`${DID(2)}#owner`]);
+      expect(res.didResolutionMetadata.warnings, transport.constructor.name).toEqual([
+        { code: "agentWalletUnavailable", message: "getAgentWallet could not be read" },
+      ]);
+    }
+  });
+
+  it("hands the cause to onNetworkError and keeps it out of the warning", async () => {
+    const seen: unknown[] = [];
+    const secret = "http://127.0.0.1:1/v2/SUPER-SECRET-KEY";
+    const chain = fakeChain({ ownerOf: () => OWNER, tokenURI: () => "", getAgentWallet: () => OWNER });
+    chain.readContract.mockImplementationOnce(async () => OWNER);
+    chain.readContract.mockRejectedValueOnce(
+      contractError(new HttpRequestError({ url: secret, status: 503, details: "down" }), "getAgentWallet"),
+    );
+    const res = await resolverWith(chain, { onNetworkError: (_c, cause) => seen.push(cause) }).resolve(DID(2));
+    expect(seen).toHaveLength(1);
+    expect(JSON.stringify(res)).not.toContain("SUPER-SECRET-KEY");
+  });
+});
+
+describe("resolve — a registration file that is a JSON array was not read", () => {
+  // typeof [] is "object", so an array used to pass the parse gate and come
+  // back as a file that had been read: no `unavailable`, no warning, and a
+  // consumer reading only `deactivated` takes that for active. Neither
+  // `active` nor `services` can be read from an array; spec §6.1 calls that
+  // "could not be parsed" (#273).
+  for (const [label, body] of [
+    ["an empty array", []],
+    ["an array of services", [{ name: "chat", type: "A2A", endpoint: "https://x.example" }]],
+  ] as const) {
+    it(`reports ${label} as unavailable`, async () => {
+      const r = resolverWith(
+        fakeChain({ ownerOf: () => OWNER, tokenURI: () => "https://x.example/card.json", getAgentWallet: () => OWNER }),
+        { fetchAgentUri: async () => body },
+      );
+      const res = await r.resolve(DID(2));
+      expect(res.didDocumentMetadata.registrationFile).toBe("unavailable");
+      expect(res.didResolutionMetadata.warnings).toEqual([
+        { code: "agentUriMalformed", message: "registration file is not a JSON object" },
+      ]);
+      expect(res.didDocument!.service).toEqual([]);
+      expect(res.didDocumentMetadata.deactivated).toBeUndefined();
+    });
+  }
+});
+
+describe("resolve — a network error says what failed, never where", () => {
+  // viem writes the endpoint into every transport error, and the endpoint
+  // carries the operator's API key in its path. fetch.ts has kept the URL out
+  // of the registration-file warnings for exactly this reason; the chain
+  // reads did not (#267).
+  const secret = "http://127.0.0.1:1/v2/SUPER-SECRET-ALCHEMY-KEY-abc123";
+  const leak = () => new HttpRequestError({ url: secret, status: 429, details: "rate limited" });
+
+  it("on the chain id check", async () => {
+    const chain = fakeChain({ ownerOf: () => OWNER });
+    chain.getChainId.mockRejectedValueOnce(leak());
+    const res = await resolverWith(chain).resolve(DID(2));
+    expect(res.didResolutionMetadata.error).toBe("networkError");
+    expect(res.didResolutionMetadata.errorMessage).toBe("chain id check failed");
+    expect(JSON.stringify(res)).not.toContain("SUPER-SECRET");
+  });
+
+  it("on the block number read", async () => {
+    const chain = fakeChain({ ownerOf: () => OWNER });
+    chain.getBlockNumber.mockRejectedValueOnce(leak());
+    const res = await resolverWith(chain).resolve(DID(2));
+    expect(res.didResolutionMetadata.errorMessage).toBe("block number read failed, so the reads could not be pinned");
+    expect(JSON.stringify(res)).not.toContain("SUPER-SECRET");
+  });
+
+  it("on ownerOf", async () => {
+    const chain = fakeChain({ ownerOf: () => OWNER });
+    chain.readContract.mockRejectedValueOnce(contractError(leak(), "ownerOf"));
+    const res = await resolverWith(chain).resolve(DID(2));
+    expect(res.didResolutionMetadata.errorMessage).toBe("ownerOf could not be read");
+    expect(JSON.stringify(res)).not.toContain("SUPER-SECRET");
+  });
+
+  it("still gives the operator the cause", async () => {
+    const seen: Array<[string, unknown]> = [];
+    const chain = fakeChain({ ownerOf: () => OWNER });
+    chain.getChainId.mockRejectedValueOnce(leak());
+    await resolverWith(chain, { onNetworkError: (c, e) => seen.push([c, e]) }).resolve(DID(2));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]![0]).toBe("chain id check failed");
+    expect(String(seen[0]![1])).toContain("SUPER-SECRET");
   });
 });
 

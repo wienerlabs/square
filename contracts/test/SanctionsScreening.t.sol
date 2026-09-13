@@ -20,17 +20,17 @@ contract SanctionsScreeningTest is BaseTest {
     uint64 internal constant MAX_AGE = 1 hours;
     bytes32 internal constant SOURCE = "trm-sanctions-v1";
 
-    ScreeningRegistry internal registry;
+    ScreeningRegistry internal screeningRegistry;
     address internal screener;
     uint256 internal screenerKey;
 
     function setUp() public override {
         super.setUp();
         (screener, screenerKey) = makeAddrAndKey("screener");
-        registry = new ScreeningRegistry(owner, MAX_AGE);
+        screeningRegistry = new ScreeningRegistry(owner, MAX_AGE);
         vm.startPrank(owner);
-        registry.setScreener(screener, true);
-        hook.setScreening(address(registry));
+        screeningRegistry.setScreener(screener, true);
+        hook.setScreening(address(screeningRegistry));
         vm.stopPrank();
     }
 
@@ -40,8 +40,8 @@ contract SanctionsScreeningTest is BaseTest {
         );
         IScreeningRegistry.Screening memory s =
             IScreeningRegistry.Screening(who, sanctioned, uint64(vm.getBlockTimestamp()), SOURCE, keccak256(body));
-        (uint8 v, bytes32 r, bytes32 sig) = vm.sign(screenerKey, registry.digestOf(s));
-        registry.submit(s, abi.encodePacked(r, sig, v));
+        (uint8 v, bytes32 r, bytes32 sig) = vm.sign(screenerKey, screeningRegistry.digestOf(s));
+        screeningRegistry.submit(s, abi.encodePacked(r, sig, v));
     }
 
     function _clear(address who) internal {
@@ -155,7 +155,7 @@ contract SanctionsScreeningTest is BaseTest {
     /// avoid this; anyone finalizing without doing so causes it.
     function test_release_aStaleScreeningIsARefusal() public {
         uint256 jobId = _submittedAndDue();
-        assertFalse(registry.isCleared(provider), "the funding-time screening has aged out");
+        assertFalse(screeningRegistry.isCleared(provider), "the funding-time screening has aged out");
         vm.prank(cranker);
         keeper.finalize(jobId, "");
         assertEq(kernel.withdrawable(provider), 0);
@@ -169,8 +169,7 @@ contract SanctionsScreeningTest is BaseTest {
         vm.warp(keeper.challengeEndsAt(jobId) - 1);
         vm.prank(provider);
         market.list(jobId, uint64(900 * USDC));
-        vm.prank(buyer);
-        market.buy(jobId, uint64(900 * USDC));
+        buyAs(buyer, jobId, uint64(900 * USDC));
         pastWindow(jobId);
         _clear(provider);
         _designate(buyer);
@@ -186,8 +185,7 @@ contract SanctionsScreeningTest is BaseTest {
         vm.warp(keeper.challengeEndsAt(jobId) - 1);
         vm.prank(provider);
         market.list(jobId, uint64(900 * USDC));
-        vm.prank(buyer);
-        market.buy(jobId, uint64(900 * USDC));
+        buyAs(buyer, jobId, uint64(900 * USDC));
         pastWindow(jobId);
         _clear(buyer);
         vm.prank(cranker);
@@ -216,7 +214,7 @@ contract SanctionsScreeningTest is BaseTest {
     function test_validation_aClearedReleaseIsAttestedWithItsScreening() public {
         uint256 jobId = _submittedAndDue();
         _clear(provider);
-        bytes32 commitment = keccak256(abi.encode(provider, registry.screeningOf(provider)));
+        bytes32 commitment = keccak256(abi.encode(provider, screeningRegistry.screeningOf(provider)));
         vm.expectCall(
             address(validation),
             abi.encodeCall(IValidationRegistry.validationResponse, (REQUEST_HASH, uint8(100), "", commitment, "square.compliance"))
@@ -233,8 +231,8 @@ contract SanctionsScreeningTest is BaseTest {
     function test_validation_aRefusedPayeeIsAttestedAsFailed() public {
         uint256 jobId = _submittedAndDue();
         _designate(provider);
-        bytes32 commitment = keccak256(abi.encode(provider, registry.screeningOf(provider)));
-        assertTrue(registry.screeningOf(provider).sanctioned);
+        bytes32 commitment = keccak256(abi.encode(provider, screeningRegistry.screeningOf(provider)));
+        assertTrue(screeningRegistry.screeningOf(provider).sanctioned);
         vm.expectCall(
             address(validation),
             abi.encodeCall(IValidationRegistry.validationResponse, (REQUEST_HASH, uint8(0), "", commitment, "square.compliance"))

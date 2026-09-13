@@ -1,6 +1,12 @@
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
-import { canonicalJson, memoryNonceStore, signAction, verifyAction } from "../src/signedMessages.js";
+import {
+  canonicalJson,
+  DEFAULT_MAX_ACTION_LIFETIME_SECONDS,
+  memoryNonceStore,
+  signAction,
+  verifyAction,
+} from "../src/signedMessages.js";
 import type { SquareAction, VerifyActionInput } from "../src/signedMessages.js";
 
 const alice = privateKeyToAccount("0x1111111111111111111111111111111111111111111111111111111111111111");
@@ -128,6 +134,49 @@ describe("verifyAction", () => {
     expect(await nonceStore.consume(alice.address, message.nonce, message.expiresAt)).toBe(true);
   });
 
+  it("refuses an expiresAt the signer stretched past the cap, and does not burn the nonce", async () => {
+    const nonceStore = freshStore();
+    const message = action({ expiresAt: 2n ** 200n });
+    const signature = await signAction(alice, message);
+    const result = await verifyAction({ message, signature, expectedActor: alice.address, now: NOW, nonceStore, expectedChainId: CHAIN_ID });
+    expect(result).toMatchObject({ ok: false, reason: "malformed_message" });
+    expect(await nonceStore.consume(alice.address, message.nonce, message.expiresAt)).toBe(true);
+  });
+
+  it("accepts a lifetime exactly at the cap and refuses one second beyond it", async () => {
+    const atTheCap = action({ issuedAt: NOW, expiresAt: NOW + DEFAULT_MAX_ACTION_LIFETIME_SECONDS });
+    const accepted = await verifyAction({
+      message: atTheCap,
+      signature: await signAction(alice, atTheCap),
+      expectedActor: alice.address,
+      now: NOW,
+      nonceStore: freshStore(),
+      expectedChainId: CHAIN_ID,
+    });
+    expect(accepted.ok).toBe(true);
+
+    const beyondTheCap = action({ issuedAt: NOW, expiresAt: NOW + DEFAULT_MAX_ACTION_LIFETIME_SECONDS + 1n });
+    const refused = await verifyAction({
+      message: beyondTheCap,
+      signature: await signAction(alice, beyondTheCap),
+      expectedActor: alice.address,
+      now: NOW,
+      nonceStore: freshStore(),
+      expectedChainId: CHAIN_ID,
+    });
+    expect(refused).toMatchObject({ ok: false, reason: "malformed_message" });
+  });
+
+  it("lets the verifier pick a shorter cap than the default", async () => {
+    const message = action({ issuedAt: NOW, expiresAt: NOW + 30n });
+    const signature = await signAction(alice, message);
+    const base = { message, signature, expectedActor: alice.address, now: NOW, expectedChainId: CHAIN_ID } as const;
+    const refused = await verifyAction({ ...base, nonceStore: freshStore(), maxLifetimeSeconds: 29 });
+    expect(refused).toMatchObject({ ok: false, reason: "malformed_message" });
+    const accepted = await verifyAction({ ...base, nonceStore: freshStore(), maxLifetimeSeconds: 30 });
+    expect(accepted.ok).toBe(true);
+  });
+
   it("rejects garbage signatures without throwing", async () => {
     const message = action();
     const result = await verifyAction({ message, signature: "0x1234", expectedActor: alice.address, now: NOW, nonceStore: freshStore(), expectedChainId: CHAIN_ID });
@@ -155,7 +204,7 @@ describe("memoryNonceStore", () => {
 
   it("drops an actor entry once every nonce it holds has expired", async () => {
     let clock = NOW;
-    const store = memoryNonceStore({ now: () => clock, pruneEvery: 1_000_000 });
+    const store = memoryNonceStore({ now: () => clock, pruneIntervalSeconds: 3_600 });
     for (let index = 0; index < 200; index += 1) {
       const actor = `0x${index.toString(16).padStart(40, "0")}` as `0x${string}`;
       expect(await store.consume(actor, 1n, NOW + 10n)).toBe(true);
@@ -166,25 +215,63 @@ describe("memoryNonceStore", () => {
     expect(store.size()).toBe(0);
   });
 
-  it("prunes on its own after pruneEvery calls, without waiting for each actor to return", async () => {
+  it("prunes on a time interval rather than on a call count", async () => {
     let clock = NOW;
-    const store = memoryNonceStore({ now: () => clock, pruneEvery: 4 });
-    for (let index = 0; index < 3; index += 1) {
+    const store = memoryNonceStore({ now: () => clock, pruneIntervalSeconds: 30 });
+    for (let index = 0; index < 200; index += 1) {
       const actor = `0x${index.toString(16).padStart(40, "0")}` as `0x${string}`;
       await store.consume(actor, 1n, NOW + 10n);
     }
-    expect(store.size()).toBe(3);
-    clock = NOW + 10n;
-    await store.consume(bob.address, 1n, NOW + 20n);
+    expect(store.size()).toBe(200);
+
+    clock = NOW + 31n;
+    await store.consume(bob.address, 1n, clock + 10n);
     expect(store.size()).toBe(1);
   });
 
   it("keeps a live nonce when a prune runs", async () => {
-    const store = memoryNonceStore({ now: () => NOW, pruneEvery: 1 });
+    const store = memoryNonceStore({ now: () => NOW, pruneIntervalSeconds: 0 });
     expect(await store.consume(alice.address, 1n, NOW + 10n)).toBe(true);
     expect(await store.consume(alice.address, 1n, NOW + 10n)).toBe(false);
     expect(store.size()).toBe(1);
   });
+
+  it(
+    "consumes at a cost that does not grow with the number of live nonces the actor holds",
+    async () => {
+      const store = memoryNonceStore({ now: () => NOW, pruneIntervalSeconds: 3_600 });
+      const fill = async (from: number, to: number): Promise<number> => {
+        const startedAt = performance.now();
+        for (let nonce = from; nonce < to; nonce += 1) await store.consume(alice.address, BigInt(nonce), NOW + 300n);
+        return performance.now() - startedAt;
+      };
+
+      const onAnEmptyStore = await fill(0, 10_000);
+      await fill(10_000, 40_000);
+      const onAStoreHolding40k = await fill(40_000, 50_000);
+
+      expect(onAStoreHolding40k).toBeLessThan(Math.max(onAnEmptyStore, 1) * 4);
+    },
+    30_000
+  );
+
+  it(
+    "fills in linear time, so an actor cannot make its own verification quadratic",
+    async () => {
+      const fillFreshStore = async (count: number): Promise<number> => {
+        const store = memoryNonceStore({ now: () => NOW, pruneIntervalSeconds: 3_600 });
+        const startedAt = performance.now();
+        for (let nonce = 0; nonce < count; nonce += 1) await store.consume(alice.address, BigInt(nonce), NOW + 300n);
+        return performance.now() - startedAt;
+      };
+
+      const tenThousand = await fillFreshStore(10_000);
+      const fortyThousand = await fillFreshStore(40_000);
+
+      expect(fortyThousand).toBeLessThan(Math.max(tenThousand, 1) * 8);
+    },
+    30_000
+  );
 });
 
 describe("canonicalJson", () => {
@@ -212,5 +299,73 @@ describe("canonicalJson", () => {
     expect(() => canonicalJson(Number.NaN)).toThrow(TypeError);
     expect(() => canonicalJson({ big: 1n })).toThrow(TypeError);
     expect(() => canonicalJson(undefined)).toThrow(TypeError);
+  });
+
+  it("refuses a Map instead of flattening two different maps to the same empty object", () => {
+    const alice = new Map<string, unknown>([
+      ["amount", 1],
+      ["to", "0xalice"],
+    ]);
+    const mallory = new Map<string, unknown>([
+      ["amount", 1_000_000],
+      ["to", "0xmallory"],
+    ]);
+
+    expect(() => canonicalJson(alice)).toThrow(TypeError);
+    expect(() => canonicalJson(alice)).toThrow(/cannot represent Map/);
+    expect(() => canonicalJson(mallory)).toThrow(TypeError);
+  });
+
+  it("refuses a Set", () => {
+    expect(() => canonicalJson(new Set([1, 2, 3]))).toThrow(/cannot represent Set/);
+  });
+
+  it("refuses an instance whose state hides behind a non-plain prototype", () => {
+    class Payout {
+      readonly #amount: number;
+
+      constructor(amount: number) {
+        this.#amount = amount;
+      }
+
+      amount(): number {
+        return this.#amount;
+      }
+    }
+
+    expect(() => canonicalJson(new Payout(1))).toThrow(/cannot represent Payout/);
+    expect(() => canonicalJson(new Payout(1_000_000))).toThrow(TypeError);
+    expect(() => canonicalJson(Object.create(Object.create(null)) as object)).toThrow(
+      /cannot represent an object with a non-plain prototype/
+    );
+  });
+
+  it("refuses a typed array, which would otherwise collide with the plain object of its indices", () => {
+    expect(() => canonicalJson(new Uint8Array([1, 2]))).toThrow(/cannot represent Uint8Array/);
+    expect(canonicalJson({ 0: 1, 1: 2 })).toBe('{"0":1,"1":2}');
+  });
+
+  it("refuses a Map nested inside an otherwise plain body", () => {
+    expect(() => canonicalJson({ payout: new Map([["amount", 1]]) })).toThrow(/cannot represent Map/);
+    expect(() => canonicalJson({ recipients: [new Set(["0xalice"])] })).toThrow(/cannot represent Set/);
+  });
+
+  it("still serialises plain objects, null-prototype dictionaries and classes that define toJSON", () => {
+    class Money {
+      constructor(private readonly amount: number) {}
+
+      toJSON(): unknown {
+        return { amount: this.amount };
+      }
+    }
+
+    const dictionary = Object.create(null) as Record<string, unknown>;
+    dictionary["b"] = 2;
+    dictionary["a"] = 1;
+
+    expect(canonicalJson(new Money(5))).toBe('{"amount":5}');
+    expect(canonicalJson({ paid: new Money(5) })).toBe('{"paid":{"amount":5}}');
+    expect(canonicalJson(dictionary)).toBe('{"a":1,"b":2}');
+    expect(canonicalJson({ at: new Date(0) })).toBe('{"at":"1970-01-01T00:00:00.000Z"}');
   });
 });

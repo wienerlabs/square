@@ -43,6 +43,63 @@ compete honestly: the kernel pays whichever lands first and the other's
 transaction reverts with `NotSubmitted`, which is journaled as a failure and
 costs the loser a revert.
 
+## What a restart carries
+
+Giving up is written down. The rest of the retry state is not, and the
+difference is deliberate.
+
+A give-up is a row in `keeper_job_state` with `finalize_gave_up = true`, and
+`run()` reads those job ids back before its first tick
+(`keeper.give_ups_restored`). A job the keeper gave up on stays given up across
+a restart: it is skipped before any attempt, so it sends nothing, costs no gas
+and adds no further journal rows. Without that, every restart would spend
+`RETRY_GIVE_UP_AFTER` fresh attempts on a job that is permanently failing and
+write `RETRY_MAX_JOURNAL_ROWS` more rows, which makes the journal bound a
+per-process one instead of a per-job one.
+
+`keeper_actions` is the journal and `keeper_job_state` is the state, and the
+two are kept apart on purpose. The journal is append-only and `square-data
+sweep` deletes rows older than ninety days without looking at them; the
+give-up row it deletes is a record of the event, not the flag. The flag, the
+expiry marks and the expiry backoff live in the state table, which no sweep
+touches, so a ninety day old give-up is still a give-up and a ninety day old
+expiry mark still keeps its job out of the sweep.
+
+Three things are per process by design, and all three are cheap:
+
+| State | On restart | Why that is acceptable |
+|---|---|---|
+| Backoff window of a job not yet given up | forgotten, the next tick may retry at once | at most one attempt earlier than the schedule wanted, and `finalize` is simulated before it is sent |
+| Journal budget of such a job | counted again from zero | the give-up is what bounds the total, and it survives the restart |
+| `keeper.expiry_near`, warned once per job | warned once more | one line per candidate per restart, not one per tick |
+
+A job that was given up on is never retried on its own, not even by a keeper
+build that fixes the cause. That call belongs to the operator, and it is one
+statement:
+
+```sql
+update keeper_job_state set finalize_gave_up = false where chain_id = 5042002 and job_id = 42;
+```
+
+The next start restores nothing for that job and the keeper tries it again.
+
+## A job that cannot pay for its own finalize
+
+Profitability is decided from the mirror before the chain is asked anything.
+`listFinalizable` already carries the budget and the evaluator fee the kernel
+pinned at funding, and the gas price is read once per tick, so `tick()` knows
+which jobs cannot cover `FINALIZE_GAS` plus `MINIMUM_MARGIN_BPS` without a
+single call per job. Those are counted as `unprofitable` in the tick report,
+journaled once as `skipped` and logged once (`keeper.skipped`), and then cost
+nothing: no `getJobRecord`, no `isDisputed`, no `challengeEndsAt`. They are not
+pending either, so `square_keeper_oldest_pending_age_seconds` measures jobs the
+keeper means to finalize and not jobs it has already decided against.
+
+The three chain reads are spent only on jobs the mirror says are worth them,
+which is what keeps a profitable job from waiting behind two hundred that never
+will be. A job under dispute is always asked, because its next step may be a
+free `lapse` whatever its budget.
+
 ## The expiry sweep
 
 Recording an expiry for reputation is not on the finalize path. `tick()` decides
@@ -52,14 +109,31 @@ costs the same whether the mirror holds one dead job or ten thousand and the
 finalize of a profitable job never waits behind them.
 
 The candidate query is what keeps the set shrinking. `listExpiredWithAgent`
-returns expired jobs with a bound agent, under our evaluator, that carry no
-successful `recordExpiry` row in `keeper_actions`, ordered by job id and paged.
-An expiry this keeper recorded leaves the set through its journal row; an expiry
-another keeper recorded is journaled on the first pass that reads it from the
-chain (`keeper.expiry_already_recorded`) and leaves the set the same way; a
-failed attempt keeps no such row and is retried on the next pass. `status = 5`
-is covered by the partial index `jobs_expired_with_agent`, so the query does not
-scan a table that only grows. `RECORD_EXPIRIES=false` turns the sweep off.
+returns expired jobs with a bound agent, under our evaluator, whose row in
+`keeper_job_state` carries no `expiry_recorded_at`, is not given up, and is
+not inside a backoff window, paged and ordered so that the job that has waited
+longest comes first. An expiry this keeper recorded leaves the set through its
+mark; an expiry another keeper recorded is marked on the first pass that reads
+it from the chain (`keeper.expiry_already_recorded`) and leaves the set the same
+way. `status = 5` is covered by the partial index `jobs_expired_with_agent`, so
+the query does not scan a table that only grows. `RECORD_EXPIRIES=false` turns
+the sweep off.
+
+A failed attempt follows the same retry policy as `tick()`: the attempt count
+and the next time to try are written to the state row, the delay doubles from
+`RETRY_BASE_SECONDS` up to `RETRY_MAX_SECONDS`, and after `RETRY_GIVE_UP_AFTER`
+attempts the job is given up on (`keeper.record_expiry_gave_up`, journaled with
+`gave_up = true` so it shows on `/actions`). While a job is backing off the
+query does not return it, so a job whose `recordExpiry` reverts on every pass
+takes one slot in one pass and then none until its window ends, rather than a
+slot in every pass forever. The mirror has such jobs today: an agent bound as
+`0` reverts with `NoAgentBound` on the deployed hook until the next stack. The
+operator reopens one with:
+
+```sql
+update keeper_job_state set expiry_gave_up = false, expiry_attempts = 0, expiry_next_at = null
+where chain_id = 5042002 and job_id = 42;
+```
 
 ## Running your own
 

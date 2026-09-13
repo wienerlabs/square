@@ -11,6 +11,7 @@ export interface SquareDeployment {
   identityRegistry: Address;
   reputationRegistry: Address;
   validationRegistry: Address;
+  startBlock?: bigint;
 }
 
 export const ARC_TESTNET_CHAIN_ID = 5042002;
@@ -102,8 +103,8 @@ const localAnvil: SquareDeployment = {
   squareJob: "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",
   keeperEvaluator: "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707",
   arbitration: "0x0165878A594ca255338adfa4d48449f69242Eb8F",
-  claimMarket: "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
-  squareHook: "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6",
+  claimMarket: "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6",
+  squareHook: "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318",
 };
 
 const arcTestnet: SquareDeployment = {
@@ -154,6 +155,12 @@ export function deploymentFromJson(json: unknown): SquareDeployment {
       throw new InvalidDeploymentError(`${key} is not an address`);
     }
     out[field] = getAddress(value);
+  }
+  const block = record["block"];
+  if (block !== undefined && block !== null) {
+    const parsed = typeof block === "number" || typeof block === "string" ? BigInt(block) : null;
+    if (parsed === null || parsed < 0n) throw new InvalidDeploymentError("block is not a block number");
+    out["startBlock"] = parsed;
   }
   return out as unknown as SquareDeployment;
 }

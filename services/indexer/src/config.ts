@@ -48,6 +48,15 @@ export function loadDeployment(chainId: number): SquareDeployment {
   return deploymentFor(chainId);
 }
 
+export function startBlockFor(deployment: SquareDeployment): bigint {
+  const configured = process.env["START_BLOCK"];
+  if (configured !== undefined && configured !== "") return BigInt(integer("START_BLOCK", 0));
+  if (deployment.startBlock !== undefined) return deployment.startBlock;
+  throw new Error(
+    "START_BLOCK is unset and the deployment record carries no block. Scanning from genesis is not a default: set START_BLOCK to the block the stack was deployed in, or take it from a deployment record written by a script that records one.",
+  );
+}
+
 function deploymentChangePolicy(): DeploymentChangePolicy {
   const raw = process.env["ON_DEPLOYMENT_CHANGE"];
   if (raw === undefined || raw === "") return "fail";
@@ -57,11 +66,12 @@ function deploymentChangePolicy(): DeploymentChangePolicy {
 
 export function configFromEnv(): IndexerConfig {
   const chainId = integer("CHAIN_ID", ARC_TESTNET_CHAIN_ID);
+  const deployment = loadDeployment(chainId);
   return {
     chainId,
     rpcUrl: required("RPC_URL"),
-    deployment: loadDeployment(chainId),
-    startBlock: BigInt(integer("START_BLOCK", 0)),
+    deployment,
+    startBlock: startBlockFor(deployment),
     batchBlocks: BigInt(integer("BATCH_BLOCKS", 2000)),
     pollIntervalMs: integer("POLL_INTERVAL_MS", 3000),
     port: integer("PORT", 3010),

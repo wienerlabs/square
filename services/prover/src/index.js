@@ -1,11 +1,10 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { generateProof, validateRequest } from './prover.js';
+import { ARTIFACT_PATHS, generateProof, validateRequest } from './prover.js';
 import { logEntriesForProof, proofFailedLogEntry, requestRejectedLogEntry } from './logging.js';
 import { openapiSpec } from './openapi.js';
-import { existsSync } from 'node:fs';
-import path from 'node:path';
+import { accessSync, constants } from 'node:fs';
 import { createHealth, createMetrics, mountObservability } from '@squaresdk/observability';
 
 const app = express();
@@ -29,18 +28,33 @@ app.get('/api-docs.json', (_req, res) => {
   res.json(openapiSpec);
 });
 
-const artifactsDir = process.env.PROVER_ARTIFACTS_DIR
-  ? path.resolve(process.env.PROVER_ARTIFACTS_DIR)
-  : path.resolve('artifacts');
 const metrics = createMetrics({ service: 'square-prover' });
 const health = createHealth({
   service: 'square-prover',
   version: '0.1.0',
   checks: {
     artifacts: {
+      // The paths the prover opens, not a second derivation of them.
+      //
+      // square#235: this used to resolve `artifacts` against the working
+      // directory while prover.js resolved it against the module, so a service
+      // started from anywhere else answered for one directory and proved from
+      // another — healthy with every request failing, or unhealthy while
+      // proving fine.
+      //
+      // Readable, not merely present: the Dockerfile says this check is what
+      // turns an empty or unmounted /artifacts into an unhealthy container, and
+      // a volume mounted with the wrong ownership is the same failure with the
+      // files in place.
       check: () => {
-        const present = existsSync(path.join(artifactsDir, 'payment.wasm')) && existsSync(path.join(artifactsDir, 'payment.zkey'));
-        return { ok: present, detail: present ? 'payment.wasm and payment.zkey present' : `no circuit artifacts under ${artifactsDir}` };
+        for (const file of [ARTIFACT_PATHS.wasm, ARTIFACT_PATHS.zkey]) {
+          try {
+            accessSync(file, constants.R_OK);
+          } catch (error) {
+            return { ok: false, detail: `cannot read ${file}: ${error.code ?? error.message}` };
+          }
+        }
+        return { ok: true, detail: `payment.wasm and payment.zkey readable under ${ARTIFACT_PATHS.dir}` };
       },
       critical: true,
     },

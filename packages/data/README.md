@@ -32,7 +32,22 @@ const testDb = await pgliteDatabase();
 ```
 
 `pgDatabase` wraps a `pg.Pool`. `pgliteDatabase` opens an in-memory PGlite, or a persistent
-one when given `{ dataDir }`. Inside `transaction`, issue every query through `tx`; nested
+one when given `{ dataDir }`.
+
+The pool always carries an `error` listener, because `pg` re-emits the failure of an idle
+connection on the pool itself and an `error` event with no listener is an
+`uncaughtException`: a healthy keeper sitting between ticks would die of a database
+restart without reaching its own fatal log line. The listener swallows the event so the
+next query takes a fresh connection, which is what the pool already does on its own, and
+`onPoolError` is where a service says what to write:
+
+```ts
+const db = pgDatabase(process.env.DATABASE_URL, {
+  onPoolError: (error) => logger.error("keeper.pool_error", { error: error.message }),
+});
+```
+
+`pgDatabaseFromPool(pool, options)` is the same thing over a pool the caller built. Inside `transaction`, issue every query through `tx`; nested
 `tx.transaction` calls become savepoints. A `Database` handed to a transaction callback
 cannot be closed.
 
@@ -88,7 +103,8 @@ reject 2, expired 3), `claimListings.CLAIM_LISTING_STATUS` (listed 1, sold 2, ca
 `x402_payments` has one transition rule and this repository is the only implementation of
 it: `accepted` is the only state a row can leave, `settled` and `failed` are terminal, and
 `markSettled` and `markFailed` return whether the update held so a caller can tell a real
-transition from a zero-row update. `markFailed` stores its reason.
+transition from a zero-row update. `markFailed` stores its reason, and the transaction
+hash when the failure carries one; a failure with no hash leaves the column as it was.
 `recordSettlementAttempt` records a broadcast transaction hash without leaving `accepted`,
 and `listAccepted` returns the rows that have not reached a terminal state, which is what
 `@squaresdk/x402`'s reconciliation pass reads.
@@ -131,6 +147,12 @@ beyond the database.
 | `0004_hosted_agents` | `hosted_agents` |
 | `0005_keeper` | `keeper_actions` |
 | `0006_x402_reason` | `x402_payments.reason` |
+| `0007_refund_reason_and_expiry_sweep` | `jobs.refund_reason` |
+| `0008_keeper_give_up` | `keeper_actions.gave_up` |
+| `0009_x402_last_checked` | `x402_payments.last_checked_at` |
+| `0010_quarantined_events` | `quarantined_events` |
+| `0011_x402_valid_before_repair` | `x402_payments.valid_before` rows and index |
+| `0012_keeper_job_state` | `keeper_job_state`, seeded from the journal rows it replaces |
 
 Migrations never run at service boot against a configured database. They are an explicit
 deploy step, run before the new service version starts, with the connection string in
@@ -162,16 +184,30 @@ could damage; a configured Postgres is never touched at boot.
 The test suite applies up, down and up again on PGlite and checks that the schema comes
 back identical, so every migration is exercised on every run without a daemon.
 
+`0010_x402_valid_before_repair` is the one migration that also touches rows. `valid_before`
+is a client-signed integer, and the sweep used to read it with `to_timestamp(valid_before)
++ interval '30 days'`, an expression that raises `timestamp out of range` from
+`9224315424000` up. A single row in that range made the sweep throw on every run, which
+took `keeper_actions` down with it because the sweeps ran in one chain. The sweep no longer
+calls `to_timestamp`, so it can no longer overflow, but it also cannot delete a deadline
+that far out, so this migration removes exactly the rows the old expression could not
+evaluate, and indexes `valid_before` for the comparison that replaced it. The delete has
+no inverse; the down script drops the index.
+
 ## Retention
 
 Sweeps encode the retention table from the design document: `idempotencyKeys.sweepExpired`
 removes keys 24 hours after `expires_at`, `rateLimits.sweep(db, windowMs)` keeps two
 windows, `x402Payments.sweep` removes authorizations 30 days after `valid_before`, and
-`keeperActions.sweep` removes journal rows older than 90 days. Mirror tables and
+`keeperActions.sweep` removes journal rows older than 90 days, and only journal rows: the keeper's state (`keeper_job_state`: the finalize give-up, the expiry mark, the expiry backoff) is a separate table that no sweep touches. Mirror tables and
 `job_events` are kept forever.
 
 `square-data sweep` runs all four in one pass and prints the row count each removed, and
-`sweepAll(db, { rateLimitWindowMs })` is the same thing in process. Nothing schedules
+`sweepAll(db, { rateLimitWindowMs })` is the same thing in process. The four are
+independent, so one failing no longer cancels the rest: `sweepAll` returns
+`{ removed, failures }`, runs every sweep whatever the ones before it did, and names the
+table and the message of each one that threw. `square-data sweep` prints the counts,
+prints each failure on stderr, and exits 1 when there is one. Nothing schedules
 itself: a sweep runs because an operator scheduled it, on the same host and with the same
 `DATABASE_URL` as the migration step. Hourly, as the design document says, is one cron
 line:

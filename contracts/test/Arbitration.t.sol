@@ -267,6 +267,56 @@ contract ArbitrationTest is BaseTest {
         assertSolvent();
     }
 
+    function test_settleBond_expiredAfterAFullCompleteGivesTheBondToTheWinner() public {
+        MaliciousHook rogue = new MaliciousHook(address(kernel));
+        vm.prank(owner);
+        kernel.setHookWhitelist(address(rogue), true);
+        uint256 jobId = submittedJob(BUDGET, address(rogue));
+        uint64 bond = arbitration.bondFor(uint64(BUDGET));
+        vm.prank(client);
+        keeper.dispute(jobId, keccak256("evidence"));
+
+        vote(arb1, jobId, IArbitration.Outcome.Complete, FULL_BPS);
+        vote(arb2, jobId, IArbitration.Outcome.Complete, FULL_BPS);
+        rogue.setMode(MaliciousHook.Mode.ResolverReverts);
+        vm.expectRevert(MaliciousHook.HookSaysNo.selector);
+        keeper.finalizeDecided(jobId, "");
+        vm.warp(expiry());
+        kernel.claimRefund(jobId);
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Expired));
+
+        vm.prank(stranger);
+        arbitration.settleBond(jobId);
+
+        assertEq(arbitration.withdrawable(provider), bond, "the side the panel decided for takes the bond");
+        assertEq(arbitration.withdrawable(client), 0, "a disputer decided fully against does not get it back");
+        assertEq(record(jobId).payee, address(0), "an expired job never named a payee, so the provider is the winner");
+        assertSolvent();
+    }
+
+    function test_vote_refusesEveryOutcomeOnceTheJobIsTerminal() public {
+        MaliciousHook rogue = new MaliciousHook(address(kernel));
+        vm.prank(owner);
+        kernel.setHookWhitelist(address(rogue), true);
+        uint256 jobId = submittedJob(BUDGET, address(rogue));
+        vm.prank(client);
+        keeper.dispute(jobId, keccak256("evidence"));
+        vote(arb1, jobId, IArbitration.Outcome.Reject, 0);
+
+        rogue.setMode(MaliciousHook.Mode.ResolverReverts);
+        vm.warp(expiry());
+        kernel.claimRefund(jobId);
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Expired));
+
+        bytes memory refusal =
+            abi.encodeWithSelector(IArbitration.JobNoLongerVotable.selector, uint8(ISquareJob.JobStatus.Expired));
+        vm.expectRevert(refusal);
+        vote(arb2, jobId, IArbitration.Outcome.Reject, 0);
+        vm.expectRevert(refusal);
+        vote(arb2, jobId, IArbitration.Outcome.Complete, FULL_BPS);
+        assertEq(uint8(arbitration.disputeOf(jobId).outcome), uint8(IArbitration.Outcome.None));
+    }
+
     function test_bondWithdraw() public {
         (uint256 jobId, uint64 bond) = _disputed(BUDGET);
         vote(arb1, jobId, IArbitration.Outcome.Reject, 0);

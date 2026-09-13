@@ -39,6 +39,8 @@ export interface GatewayAppOptions {
   settlement?: SettlementMode;
 }
 
+const HEAD_METHOD = "HEAD";
+
 export const BEFORE_HANDLER_UNSUPPORTED =
   'settlement: "before-handler" is not supported. The upfront payment flow makes the resource server accept the payload ' +
   "without calling the facilitator's verify, and every replay-ledger operation this package owns lives in the verify hooks: " +
@@ -57,8 +59,9 @@ export function createPaidRoutes(options: PaidRoutesOptions): MiddlewareHandler 
     new ExactEvmScheme()
   );
   const routes: Record<string, RouteConfig> = {};
+  const declared = new Set(Object.keys(options.routes).map((pattern) => routePatternKey(parseRoutePattern(pattern))));
   for (const [pattern, route] of Object.entries(options.routes)) {
-    routes[pattern] = {
+    const config: RouteConfig = {
       accepts: {
         scheme: "exact",
         payTo,
@@ -69,6 +72,14 @@ export function createPaidRoutes(options: PaidRoutesOptions): MiddlewareHandler 
       mimeType: route.mimeType ?? "application/json",
       ...(route.description !== undefined ? { description: route.description } : {}),
     };
+    routes[pattern] = config;
+    const parsed = parseRoutePattern(pattern);
+    if (parsed.method === "GET") {
+      const headKey = routePatternKey({ method: HEAD_METHOD, path: parsed.path });
+      if (!declared.has(headKey)) {
+        routes[headKey] = config;
+      }
+    }
   }
   return paymentMiddleware(routes, server);
 }
@@ -91,18 +102,44 @@ export function routePatternKey(parsed: ParsedRoutePattern): string {
   return parsed.method === "*" ? parsed.path : `${parsed.method} ${parsed.path}`;
 }
 
+export function routeCollisionMessage(first: string, second: string, key: string): string {
+  return (
+    `createGatewayApp: two route keys collapse to the same route: ${JSON.stringify(first)} and ` +
+    `${JSON.stringify(second)} both mean ${JSON.stringify(key)}. Keep one.`
+  );
+}
+
+interface CanonicalGatewayRoute extends ParsedRoutePattern {
+  key: string;
+  config: PaidRouteConfig;
+  handler: GatewayHandler;
+}
+
+function canonicalGatewayRoutes(routes: Record<string, GatewayRoute>): CanonicalGatewayRoute[] {
+  const spellingByKey = new Map<string, string>();
+  const canonical: CanonicalGatewayRoute[] = [];
+  for (const [pattern, route] of Object.entries(routes)) {
+    const { method, path } = parseRoutePattern(pattern);
+    const key = routePatternKey({ method, path });
+    const previous = spellingByKey.get(key);
+    if (previous !== undefined) throw new Error(routeCollisionMessage(previous, pattern, key));
+    spellingByKey.set(key, pattern);
+    const { handler, ...config } = route;
+    canonical.push({ method, path, key, config, handler });
+  }
+  return canonical;
+}
+
 export function createGatewayApp(options: GatewayAppOptions): Hono {
   const asset = options.asset ?? ARC_TESTNET_USDC;
   const app = new Hono();
   app.get("/health", (c) =>
     c.json({ ok: true, network: options.network, payTo: getAddress(options.payTo), asset })
   );
-  const parsed = Object.entries(options.routes).map(([pattern, route]) => ({ ...parseRoutePattern(pattern), route }));
+  const canonical = canonicalGatewayRoutes(options.routes);
   const paidRoutes: Record<string, PaidRouteConfig> = {};
-  for (const { method, path, route } of parsed) {
-    const { handler, ...config } = route;
-    void handler;
-    paidRoutes[routePatternKey({ method, path })] = config;
+  for (const { key, config } of canonical) {
+    paidRoutes[key] = config;
   }
   app.use(
     "*",
@@ -115,11 +152,11 @@ export function createGatewayApp(options: GatewayAppOptions): Hono {
       ...(options.settlement !== undefined ? { settlement: options.settlement } : {}),
     })
   );
-  for (const { method, path, route } of parsed) {
+  for (const { method, path, handler } of canonical) {
     if (method === "*") {
-      app.all(path, route.handler);
+      app.all(path, handler);
     } else {
-      app.on(method, path, route.handler);
+      app.on(method, path, handler);
     }
   }
   return app;

@@ -38,7 +38,7 @@ other is implemented. The two questions #6 was asked answer as follows.
 | `Arbitration` | bonded disputes, versioned arbiter set, M-of-N vote by bitmask, decision record | yes: dispute bonds until the dispute closes |
 | `ClaimMarket` | receivable listing, purchase, cancellation, payee lookup | no: price moves buyer → seller directly |
 | `SquareHook` | the single whitelisted `IACPHook`: payout routing, compliance slot, reputation and validation writes | no |
-| `PolicyRegistry` | the policy commitment and the daily spend counter the compliance module reads and moves | no |
+| `PolicyRegistry` | the policy commitment and the daily spend counter the compliance module reads and moves, and each poster's buyer list root | no |
 | `ScreeningRegistry` | signed sanctions screenings the hook reads at funding and at release (#35) | no |
 
 `SquareJob` never reads a live token balance. Every transfer out is computed
@@ -188,6 +188,7 @@ them.
 squareJob        immutable
 keeperEvaluator  immutable
 paymentToken     immutable
+policyRegistry   immutable   where each poster's buyer list root is read from (#30)
 listings         mapping(uint256 jobId => Listing)
 
 Listing
@@ -201,13 +202,19 @@ Listing
 One listing per job. A cancelled listing may be replaced; a sold one is final.
 `payeeOf(jobId)` returns `buyer` when `status == Sold`, else the provider.
 
+`buy` takes the buyer's salt and Merkle path and checks the leaf it rebuilds
+from `msg.sender` against `PolicyRegistry.buyerRootOf(client)`. Nothing about the
+list is stored here; the market keeps only the buyer's address, because that is
+the address the kernel will pay
+([buyer-eligibility.md](../decisions/buyer-eligibility.md)).
+
 ## SquareHook storage
 
 ```
 squareJob, claimMarket, identityRegistry, reputationRegistry, validationRegistry   immutable
 complianceModule   address                       zero until #27 plugs in
 screening          address                       ScreeningRegistry; zero means no screening (#35)
-agentOf            mapping(uint256 jobId => uint256 agentId)         bound at submit
+boundAgentPlusOne  mapping(uint256 jobId => uint256)                 bound at submit; the agent id plus one, zero = none (agent 0 exists, #300)
 validationOf       mapping(uint256 jobId => bytes32 requestHash)     bound at submit
 recorded           mapping(uint256 jobId => bool)                    reputation written once
 ```
@@ -227,6 +234,8 @@ spend       mapping(address poster => DailySpend)
               day         uint64      UTC day index, timestamp / 86400
               spent       uint128     recorded against that day; stale days read as zero
 spenders    mapping(address spender => bool)   who may move a counter — #27's module
+buyerRoots  mapping(address poster => bytes32)  Merkle root of the buyers the poster approved;
+                                                zero approves nobody (#30)
 ```
 
 `Policy` is two slots (`bytes32`, then `uint128 + uint64 + uint64`) and
@@ -279,8 +288,8 @@ debit. The reference reducer takes both through the account rather than the job
 (`services/indexer/src/reducer.ts`), and anything else reading these logs has to
 do the same.
 
-**Configuration and administration, which have no job to name:** `FeesUpdated`
-and `HookWhitelistUpdated` on `SquareJob`; `ArbitrationSet`,
+**Configuration and administration, which have no job to name:** `FeesUpdated`,
+`FeesScheduled`, `Skimmed` and `HookWhitelistUpdated` on `SquareJob`; `ArbitrationSet`,
 `WindowsConfigured` and `FinalizeGraceConfigured` on `KeeperEvaluator`;
 `ArbitersUpdated` and `BondParametersUpdated` on `Arbitration`;
 `ComplianceModuleUpdated` and `ReputationPolicyUpdated` on `SquareHook`; and the
@@ -325,6 +334,9 @@ What the normative set does not carry and the indexer needs.
 | `PlatformFeeAccrued(uint256 indexed jobId, address indexed treasury, uint256 amount)` | `complete` | |
 | `Withdrawn(address indexed account, address indexed to, uint256 amount)` | `withdraw`, `withdrawTo` | ledger debit; keyed by account, not by job |
 | `FeesUpdated(uint16 platformFeeBP, uint16 evaluatorFeeBP, address treasury)` | admin | |
+| `FeesScheduled(uint16 platformFeeBP, uint16 evaluatorFeeBP, uint48 effectiveFrom)` | admin | the rate a later `fund` will pin, once `effectiveFrom` passes |
+| `Skimmed(address indexed to, uint256 amount)` | admin | a balance no ledger entry and no escrow claimed, moved out; it can never reduce either |
+| `ComplianceProofSet(uint256 indexed jobId, address indexed client, bytes32 digest)` | the job's client | the proof the hook will read at settlement; the digest, not the proof, so the log carries no witness |
 | `HookFailed(uint256 indexed jobId, address indexed hook, bytes4 selector, bytes reason)` | `complete`, `reject` | a hook call the kernel makes tolerantly reverted and settlement went ahead regardless. `selector` is the kernel function that was running, `reason` the revert data. A hook that fails on the settlement path is a signal, never a stuck job |
 | `PayoutUnresolvable(uint256 indexed jobId, address indexed hook)` | `claimRefund` | the job was Submitted and its hook resolves the payout, but the hook can no longer answer with a usable payee. Expiry proceeds and the client is refunded; without this branch the escrow would have no way out |
 
@@ -350,6 +362,7 @@ What the normative set does not carry and the indexer needs.
 | `DecisionReached(uint256 indexed jobId, uint8 outcome, uint16 providerBps, bytes32 resolutionHash)` | threshold met |
 | `DisputeExpired(uint256 indexed jobId)` | no decision by `resolveBy`; degrades to the optimistic outcome |
 | `BondSettled(uint256 indexed jobId, address indexed to, uint64 amount)` | bond credited to whoever won it |
+| `RejectionNotApplied(uint256 indexed jobId, bytes reason)` | the panel decided Reject and the kernel refused to apply it, because the job turned terminal between the vote and the decision; the decision is still recorded |
 | `BondWithdrawn(address indexed account, address indexed to, uint256 amount)` | bond ledger debit; keyed by account, not by job |
 
 ### ClaimMarket
@@ -388,6 +401,7 @@ institution's compliance state filters on the poster address.
 | `SpendRecorded(address indexed poster, uint64 indexed day, uint256 amount, uint256 spentAfter)` | on every release, accepted or not; `day` is the UTC day index |
 | `ReleaseOutsidePolicy(address indexed poster, uint64 indexed day, uint256 spentAfter, uint128 dailyLimit, Verdict verdict)` | beside `SpendRecorded` when the verdict is not `Compliant`, with `verdict` either `NoPolicy` or `LimitExceeded`. The release still happened; this is the record that it happened outside the ceiling |
 | `SpenderUpdated(address indexed spender, bool allowed)` | owner only |
+| `BuyerRootCommitted(address indexed poster, bytes32 indexed root)` | on every `setBuyerRoot`, including a replacement; a zero `root` means the poster approved nobody. The list itself is never emitted, only its root |
 
 A release outside the policy is not refused, it is recorded. `recordSpend` never
 reverts on policy grounds: it advances the counter, returns a `Verdict` and

@@ -14,6 +14,8 @@ export interface RegistrationService {
 export interface RegistrationFile {
   services?: unknown;
   active?: unknown;
+  /** Cross-registrations, spec §8. Read by the resolver, not by the document. */
+  registrations?: unknown;
 }
 
 function verificationMethod(

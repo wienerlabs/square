@@ -12,6 +12,12 @@ export function createApp(config: DriverConfig, resolver = new AipDidResolver({
   timeoutMs: config.timeoutMs,
   ...(config.allowedRegistries ? { allowedRegistries: config.allowedRegistries } : {}),
   ...(config.allowedAgentUriHosts ? { allowedAgentUriHosts: config.allowedAgentUriHosts } : {}),
+  // The resolution envelope is public and the RPC URL, API key included, is
+  // not. The resolver keeps the URL out of the envelope; the detail lands
+  // here, in the operator's log, where the other driver errors already go.
+  onNetworkError: (context, cause) => {
+    console.error(`[did:aip-driver] ${context}:`, cause);
+  },
 })): Express {
   const app = express();
   app.disable("x-powered-by");
