@@ -1,4 +1,5 @@
 import type { Database } from "../database.js";
+import { pageSql, type ListPage } from "../pagination.js";
 import { bytesToHex, hexToBytes, toBigInt, type Hex } from "../codec.js";
 
 export const DISPUTE_OUTCOME = { complete: 1, reject: 2, expired: 3 } as const;
@@ -95,7 +96,12 @@ export async function countOpen(db: Database, chainId: number): Promise<number> 
   return Number(rows[0]?.open ?? "0");
 }
 
-export async function listOpen(db: Database, chainId: number): Promise<DisputeRecord[]> {
-  const { rows } = await db.query<DisputeRow>(`select ${COLUMNS} from disputes where chain_id = $1 and not closed order by resolve_by, job_id`, [chainId]);
+export async function listOpen(db: Database, chainId: number, page?: ListPage): Promise<DisputeRecord[]> {
+  const params: unknown[] = [chainId];
+  const { cursor, order, bound } = pageSql(page, params, "resolve_by, job_id");
+  const { rows } = await db.query<DisputeRow>(
+    `select ${COLUMNS} from disputes where chain_id = $1 and not closed${cursor} order by ${order}${bound}`,
+    params,
+  );
   return rows.map(rowToDispute);
 }
