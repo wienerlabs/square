@@ -36,6 +36,7 @@ on:
       - "contracts/script/DeployLocal.s.sol"
       - "contracts/script/check-verifier-ic.mjs"
       - "contracts/script/refuse-and-replay-on-anvil.mjs"
+      - "contracts/script/refusal-scenarios.mjs"
       - ".github/actions/circom/**"
       - ".github/scripts/vitest-summary.mjs"
       - ".github/workflows/circuits.yml"
@@ -387,5 +388,90 @@ jobs:
             echo
             echo '```'
             cat refuse-and-replay.txt 2>/dev/null || echo 'the run produced no output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  refusal-scenarios:
+    name: six refusal scenarios (policy → proof → anvil)
+    runs-on: ubuntu-latest
+    # square#28. The six scenarios of a compliance-gated release, run by the
+    # same script that runs them on Arc Testnet: a compliant payment released,
+    # and a payment over the daily cap, to a blocked recipient, against a
+    # replaced policy, outside its time window, or carrying another job's proof,
+    # each refused by the module's own reason. The script deploys its own stack,
+    # so there is no DeployLocal here, and it waits out a real 30-second
+    # challenge window instead of moving the clock, so this job runs the code
+    # path the Arc run does. Hermetic apart from the ptau fetch.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09  # v1.9.1
+        with:
+          version: stable
+
+      - uses: ./.github/actions/circom
+
+      - name: Cache the phase-1 powers of tau
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: circuits/build/ppot_0080_14.ptau
+          key: ptau-${{ hashFiles('circuits/scripts/fetch-ptau.mjs') }}
+
+      - name: Build the circuit and a development proving key
+        working-directory: circuits
+        run: |
+          npm ci
+          npm run build
+
+      - name: Put the artifacts where the prover looks for them
+        run: |
+          set -euo pipefail
+          mkdir -p services/prover/artifacts
+          cp circuits/build/payment.zkey services/prover/artifacts/
+          cp circuits/build/payment_vk.json services/prover/artifacts/
+          cp circuits/build/payment_js/payment.wasm services/prover/artifacts/
+
+      - name: Install the prover
+        working-directory: services/prover
+        run: npm install --install-links
+
+      # The script signs with viem and reads the chain's profile from the SDK,
+      # so both come from @squaresdk/core, built the way its own job builds it.
+      - name: Build @squaresdk/did-resolver and @squaresdk/core
+        run: |
+          set -euo pipefail
+          (cd packages/did-resolver && npm install && npm run build)
+          (cd packages/core && npm install --install-links && npm run build)
+
+      - name: Build the contracts
+        working-directory: contracts
+        run: forge build
+
+      - name: A local chain
+        run: |
+          anvil --silent &
+          for _ in $(seq 1 30); do cast chain-id --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1 && break; sleep 1; done
+
+      - name: Six scenarios, released when compliant and refused by name otherwise
+        working-directory: contracts
+        run: |
+          set -o pipefail
+          node script/refusal-scenarios.mjs | tee ../refusal-scenarios.txt
+
+      - name: On the run summary
+        if: always()
+        run: |
+          {
+            echo '### Six refusal scenarios: policy → proof → anvil'
+            echo
+            echo '```'
+            cat refusal-scenarios.txt 2>/dev/null || echo 'the run produced no output'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

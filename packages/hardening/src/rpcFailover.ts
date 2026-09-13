@@ -51,6 +51,7 @@ interface EndpointState {
 
 interface AttemptTrail {
   lastFailure: { url: string; error: Error } | undefined;
+  countedFailures: Set<number>;
 }
 
 type RequestArgs = Parameters<EIP1193RequestFn>[0];
@@ -84,16 +85,20 @@ export function createFailoverTransport(
   const healthierEndpointFollows = (index: number): boolean =>
     endpoints.slice(index + 1).some((endpoint) => !isCoolingDown(endpoint));
 
-  const recordSuccess = (endpoint: EndpointState): void => {
+  const recordSuccess = (endpoint: EndpointState, index: number): void => {
     endpoint.consecutiveFailures = 0;
     endpoint.cooldownUntil = undefined;
     endpoint.lastSuccessAt = now();
+    trail.getStore()?.countedFailures.delete(index);
   };
 
-  const recordFailure = (endpoint: EndpointState, error: Error): void => {
-    endpoint.consecutiveFailures += 1;
+  const recordFailure = (endpoint: EndpointState, index: number, error: Error): void => {
     endpoint.lastError = error.message;
     endpoint.lastFailureAt = now();
+    const attempt = trail.getStore();
+    if (attempt !== undefined && attempt.countedFailures.has(index)) return;
+    attempt?.countedFailures.add(index);
+    endpoint.consecutiveFailures += 1;
     if (endpoint.consecutiveFailures < failureThreshold) return;
     const exponent = endpoint.consecutiveFailures - failureThreshold;
     endpoint.cooldownUntil = now() + Math.min(maxBackoffMs, baseCooldownMs * 2 ** exponent);
@@ -114,11 +119,11 @@ export function createFailoverTransport(
         }
         try {
           const result: unknown = await inner.request(args, requestOptions);
-          recordSuccess(endpoint);
+          recordSuccess(endpoint, index);
           return result;
         } catch (error) {
           const failure = error instanceof Error ? error : new Error(String(error));
-          recordFailure(endpoint, failure);
+          recordFailure(endpoint, index, failure);
           if (attempt !== undefined) attempt.lastFailure = { url: endpoint.url, error: failure };
           throw error;
         }
@@ -140,15 +145,17 @@ export function createFailoverTransport(
   const fallbackConfig: FallbackTransportConfig = {
     key: options.key ?? "failover",
     name: options.name ?? "Failover",
+    retryCount: options.retryCount ?? 0,
   };
-  if (options.retryCount !== undefined) fallbackConfig.retryCount = options.retryCount;
   if (options.retryDelay !== undefined) fallbackConfig.retryDelay = options.retryDelay;
   const chain = fallback(guarded, fallbackConfig);
 
   const transport: Transport = (config) => {
     const inner = chain(config);
     const request = ((args: RequestArgs, requestOptions?: RequestOptions) =>
-      trail.run({ lastFailure: undefined }, () => inner.request(args, requestOptions))) as EIP1193RequestFn;
+      trail.run({ lastFailure: undefined, countedFailures: new Set<number>() }, () =>
+        inner.request(args, requestOptions)
+      )) as EIP1193RequestFn;
     return { ...inner, request };
   };
 

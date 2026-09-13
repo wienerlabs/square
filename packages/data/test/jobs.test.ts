@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as jobs from "../src/repositories/jobs.js";
 import * as keeperActions from "../src/repositories/keeperActions.js";
+import * as keeperJobState from "../src/repositories/keeperJobState.js";
 import { address, hash32, openMigratedDatabase } from "./helpers.js";
 
 const CHAIN = 5042002;
@@ -89,7 +90,7 @@ describe("jobs", () => {
 describe("expiries the keeper still has to record", () => {
   const expired = { status: jobs.JOB_STATUS.expired, challengeEnd: null, agentId: 42n };
 
-  it("skips a journaled expiry, honours the evaluator filter and the limit, and keeps a failed attempt", async () => {
+  it("skips a marked expiry, honours the evaluator filter and the limit, and ignores the journal", async () => {
     const db = await openMigratedDatabase();
     try {
       await jobs.upsert(db, job({ jobId: 10n, ...expired }));
@@ -103,12 +104,15 @@ describe("expiries the keeper still has to record", () => {
       expect((await jobs.listExpiredWithAgent(db, CHAIN, address(0x03), 1)).map((row) => row.jobId)).toEqual([10n]);
 
       await keeperActions.append(db, { chainId: CHAIN, jobId: 10n, action: "recordExpiry", txHash: hash32(0xaa) });
+      expect((await jobs.listExpiredWithAgent(db, CHAIN, address(0x03))).map((row) => row.jobId)).toEqual([10n, 11n]);
+
+      await keeperJobState.markExpiryRecorded(db, CHAIN, 10n);
       expect((await jobs.listExpiredWithAgent(db, CHAIN, address(0x03))).map((row) => row.jobId)).toEqual([11n]);
 
       await keeperActions.append(db, { chainId: CHAIN, jobId: 11n, action: "recordExpiry", reason: "execution reverted" });
       expect((await jobs.listExpiredWithAgent(db, CHAIN, address(0x03))).map((row) => row.jobId)).toEqual([11n]);
 
-      await keeperActions.append(db, { chainId: CHAIN, jobId: 11n, action: "recordExpiry" });
+      await keeperJobState.markExpiryRecorded(db, CHAIN, 11n);
       expect(await jobs.listExpiredWithAgent(db, CHAIN, address(0x03))).toEqual([]);
     } finally {
       await db.close();

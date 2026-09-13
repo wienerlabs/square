@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Hex } from "viem";
 import { JobStatus, deploymentFor, type SquareClient } from "@squaresdk/core";
-import { jobs, keeperActions, migrate, MIGRATIONS_DIR, pgliteDatabase, type Database } from "@squaresdk/data";
+import { jobs, keeperActions, keeperJobState, migrate, MIGRATIONS_DIR, pgliteDatabase, type Database } from "@squaresdk/data";
 import { createLogger, createMetrics, type Metrics } from "@squaresdk/observability";
 import { Keeper, KEEPER_LOG_FIELDS } from "../src/run.js";
 
@@ -274,9 +274,9 @@ describe("what a restart carries", () => {
         await first.keeper.tick(now);
         now += 15n;
       }
-      expect(await keeperActions.listGaveUp(db, CHAIN)).toEqual([1n]);
+      expect(await keeperJobState.listFinalizeGaveUp(db, CHAIN)).toEqual([1n]);
 
-      expect(await keeperActions.clearGiveUp(db, CHAIN, 1n)).toBe(1);
+      expect(await keeperJobState.clearFinalizeGiveUp(db, CHAIN, 1n)).toBe(1);
       failing = false;
       const restarted = build(db, chain, { retryPolicy: policy });
       expect(await restarted.keeper.restoreGiveUps()).toEqual([]);
@@ -284,6 +284,95 @@ describe("what a restart carries", () => {
 
       expect(report.finalized).toEqual([1n]);
       expect(chain.calls).toHaveLength(4);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("still remembers the give-up after the ninety day journal sweep", async () => {
+    const db = await openDatabase();
+    try {
+      await jobs.upsert(db, job({ jobId: 1n }));
+      const chain: FakeChain = {
+        calls: [],
+        finalize: async () => {
+          throw new Error("execution reverted: NotOurJob");
+        },
+      };
+      const first = build(db, chain, { retryPolicy: policy });
+      let now = NOW;
+      for (let tick = 0; tick < 20; tick += 1) {
+        await first.keeper.tick(now);
+        now += 15n;
+      }
+      expect(chain.calls).toHaveLength(3);
+
+      await db.query("update keeper_actions set created_at = now() - interval '91 days'");
+      expect(await keeperActions.sweep(db)).toBeGreaterThan(0);
+      expect(await keeperActions.recent(db, CHAIN, 100)).toEqual([]);
+
+      const restarted = build(db, chain, { retryPolicy: policy });
+      expect(await restarted.keeper.restoreGiveUps()).toEqual([1n]);
+      const report = await restarted.keeper.tick(now);
+
+      expect(report.skipped).toEqual([{ jobId: 1n, reason: "gaveUp" }]);
+      expect(chain.calls).toHaveLength(3);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe("a job that can never pay for its own finalize", () => {
+  it("is decided from the mirror and never asked of the chain, so the profitable job is not behind it", async () => {
+    const db = await openDatabase();
+    try {
+      for (let id = 1n; id <= 200n; id += 1n) {
+        await jobs.upsert(db, job({ jobId: id, budget: 1_000_000n, evaluatorFeeBp: 50, challengeEnd: NOW - 7_200n }));
+      }
+      await jobs.upsert(db, job({ jobId: 201n, budget: 25_000_000n, evaluatorFeeBp: 50, challengeEnd: NOW - 600n }));
+      const reads: string[] = [];
+      const chain: FakeChain = {
+        calls: [],
+        finalize: async () => ({ hash: `0x${"ab".repeat(32)}` as Hex, receipt: { gasUsed: 465_486n }, events: [] }),
+      };
+      const client = fakeClient(chain, 25_000_000n);
+      const counting = {
+        ...client,
+        getJobRecord: async (jobId: bigint) => {
+          reads.push(`record:${jobId}`);
+          return client.getJobRecord(jobId);
+        },
+        isDisputed: async (jobId: bigint) => {
+          reads.push(`disputed:${jobId}`);
+          return client.isDisputed(jobId);
+        },
+        challengeEndsAt: async (jobId: bigint) => {
+          reads.push(`window:${jobId}`);
+          return client.challengeEndsAt(jobId);
+        },
+      } as unknown as SquareClient;
+      const { keeper, logs } = build(db, chain, { client: counting });
+
+      const first = await keeper.tick(NOW);
+
+      expect(first.finalized).toEqual([201n]);
+      expect(first.unprofitable).toBe(200);
+      expect(first.skipped).toHaveLength(200);
+      expect(first.pending).toBe(1);
+      expect(first.oldestPendingAgeSeconds).toBe(600);
+      expect(reads).toEqual(["record:201", "disputed:201", "window:201"]);
+      expect(logs.filter((entry) => entry.event === "keeper.skipped")).toHaveLength(200);
+
+      reads.length = 0;
+      const second = await keeper.tick(NOW + 15n);
+
+      expect(second.unprofitable).toBe(200);
+      expect(second.pending).toBe(1);
+      expect(second.oldestPendingAgeSeconds).toBe(615);
+      expect(reads).toEqual(["record:201", "disputed:201", "window:201"]);
+      expect(logs.filter((entry) => entry.event === "keeper.skipped")).toHaveLength(200);
+      expect((await keeperActions.recent(db, CHAIN, 500)).filter((row) => row.action === "skipped")).toHaveLength(200);
     } finally {
       await db.close();
     }
