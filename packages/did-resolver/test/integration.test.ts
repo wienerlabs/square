@@ -54,6 +54,11 @@ describe.skipIf(!process.env.LIVE)("Arc testnet", () => {
       if (agent.expect.serviceCount !== undefined) {
         expect(res.didDocument!.service).toHaveLength(agent.expect.serviceCount as number);
       }
+      // The scheme is what tokenURI says, and tokenURI is mutable: a vector
+      // that pins it also pins that the chain still says so.
+      if ("agentUriScheme" in agent.expect) {
+        expect(res.didDocumentMetadata.agentUriScheme).toBe(agent.expect.agentUriScheme ?? undefined);
+      }
     }, 45_000);
   }
 

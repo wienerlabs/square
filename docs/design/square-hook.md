@@ -100,7 +100,7 @@ names another validator or another agent reverts the submit with
 `ValidationRequestMismatch` (#113). That is what lets the hook answer the
 request later without answering someone else's.
 
-### `complete`: the evaluator carries the split, the keeper carries the proof
+### `complete`: the evaluator carries the split, the job carries the proof
 
 ```
 optParams = abi.encode(uint16 providerBps, bytes complianceProof)
@@ -113,10 +113,23 @@ feedback only when the job's evaluator is its `trustedEvaluator` (the
 `minReputationBudget`, and emits `ReputationSkipped` otherwise (#111).
 Negative and neutral records are written for any job, since a provider gains
 nothing by writing them against its own agent. `providerBps` is `10 000` on
-the optimistic path and whatever the arbitration decided otherwise. `complianceProof` is opaque to the hook and is
-handed to the compliance module unchanged; its inner layout (Groth16 proof and
-the eight public signals) is #27's. Empty bytes are valid while no module is
-installed.
+the optimistic path and whatever the arbitration decided otherwise.
+
+The `complianceProof` slot in that encoding is no longer what the module reads.
+The hook takes the proof from `SquareJob.complianceProofOf(jobId)`, which only
+the job's client can write and only while the job is `Funded` or `Submitted`
+(`setComplianceProof`, capped at `MAX_COMPLIANCE_PROOF` bytes). The proof is
+still opaque to the hook and handed to the module unchanged, and its inner
+layout (Groth16 proof and the eight public signals) is #27's.
+
+The reason is #108. `finalize` is permissionless by design, and its bytes reached
+the module unchecked, so any address could crank a job with junk and the module's
+refusal would set `providerBps = 0`: the whole net back to the client, terminal,
+on a job the provider had delivered. On a sold receivable it destroyed what the
+buyer had already paid for. Compliance is the client's mandate, so the proof is
+now the client's to write and the crank's bytes decide nothing. A job with no
+proof bound still refuses, which is the same answer a client gets by withholding
+one; what changed is that nobody else can produce that answer.
 
 ### `reject`
 
