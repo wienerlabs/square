@@ -19,6 +19,25 @@ export const policyRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "buyerRootOf",
+    "inputs": [
+      {
+        "name": "poster",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "commitmentOf",
     "inputs": [
       {
@@ -192,6 +211,19 @@ export const policyRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "setBuyerRoot",
+    "inputs": [
+      {
+        "name": "root",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setPolicy",
     "inputs": [
       {
@@ -257,6 +289,25 @@ export const policyRegistryAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "BuyerRootCommitted",
+    "inputs": [
+      {
+        "name": "poster",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "root",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
   },
   {
     "type": "event",

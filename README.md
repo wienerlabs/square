@@ -19,7 +19,8 @@
 An institution commits a private spending mandate on-chain. Identified agents execute
 against it. The hook that releases escrow carries a compliance slot: with a module
 installed, a release must first prove, in zero knowledge, that it fits the mandate.
-The receivable created during the challenge window is discountable.
+The receivable created during the challenge window is discountable, and sells only to
+a buyer the institution's policy approved.
 
 The slot is empty on the deployed hook, so no release is proof gated on Arc Testnet
 today: `SquareHook.complianceModule()` returns the zero address, and the app's
@@ -71,8 +72,11 @@ Three layers. Arc supplies the bottom one already.
 
 The composition point is the hook: the proof gates **release**, not deposit,
 and it is bound to the address the kernel will actually pay, which is the
-receivable's buyer when the receivable was sold. Reputation stays with the agent
-that did the work.
+receivable's buyer when the receivable was sold. Who can become that buyer is
+gated too: the poster's policy publishes the root of a salted list of approved
+buyers, and `buy` checks the purchaser against it without the list reaching the
+chain ([buyer-eligibility.md](docs/decisions/buyer-eligibility.md)). Reputation
+stays with the agent that did the work.
 
 Design notes, each the record of a decision:
 
