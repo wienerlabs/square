@@ -71,10 +71,6 @@ jobs:
           cp circuits/build/payment.zkey services/prover/artifacts/
           cp circuits/build/payment_vk.json services/prover/artifacts/
           cp circuits/build/payment_js/payment.wasm services/prover/artifacts/
-      - name: Install the prover
-        working-directory: services/prover
-        run: npm install --install-links
-
       - name: Build the contracts
         working-directory: contracts
         run: forge build
@@ -84,6 +80,12 @@ jobs:
           for dep in packages/did-resolver packages/core packages/observability packages/data packages/a2a packages/x402 packages/agent packages/policy packages/mcp; do
             (cd "$dep" && npm install --install-links && npm run build)
           done
+      # After observability, which the prover's process (src/index.js) logs and
+      # reports health through; the scenarios scripts import src/prover.js
+      # alone and do not need it, this job starts the service.
+      - name: Install the prover
+        working-directory: services/prover
+        run: npm install --install-links
       - name: Install the surfaces
         run: |
           set -euo pipefail
