@@ -2,7 +2,10 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { ARTIFACT_PATHS, generateProof, validateRequest } from './prover.js';
-import { logEntriesForProof, proofFailedLogEntry, requestRejectedLogEntry } from './logging.js';
+import {
+  logEntriesForProof, proofFailedLogEntry, requestFailedLogEntry, requestRejectedLogEntry, requestShedLogEntry,
+} from './logging.js';
+import { createProofLimiter } from './concurrency.js';
 import { openapiSpec } from './openapi.js';
 import { accessSync, constants } from 'node:fs';
 import { createHealth, createMetrics, mountObservability } from '@squaresdk/observability';
@@ -22,7 +25,9 @@ app.use(
     methods: ['GET', 'POST'],
   }),
 );
-app.use(express.json({ limit: '256kb' }));
+// One value, so the limit and the message that reports it cannot disagree.
+const BODY_LIMIT = '256kb';
+app.use(express.json({ limit: BODY_LIMIT }));
 
 app.get('/api-docs.json', (_req, res) => {
   res.json(openapiSpec);
@@ -62,6 +67,28 @@ const health = createHealth({
 });
 mountObservability(app, { health, metrics });
 
+// How many proofs may run at once, how many may wait, and how long one may take.
+// The knobs and the measurements behind their defaults are in concurrency.js.
+//
+// `onChange` is what makes saturation visible: the limiter reports every
+// transition and the three gauges follow it, so `/metrics` shows how full the
+// service is rather than leaving it to be inferred from the 503s (square#236).
+const limiter = createProofLimiter({
+  limit: process.env.PROVER_MAX_CONCURRENCY,
+  queueLimit: process.env.PROVER_MAX_QUEUE,
+  timeoutMs: process.env.PROVER_PROOF_TIMEOUT_MS,
+  onChange: (slots) => metrics.setProofSlots(slots),
+});
+// The ceiling never moves, but a gauge nobody has written to is absent from the
+// exposition, and an alert dividing by an absent series is an alert that never
+// fires. Publish it once, before any request arrives.
+metrics.setProofSlots({ active: 0, queued: 0, limit: limiter.limit });
+
+// A slot frees in about the time one proof takes, so a second is the shortest
+// wait worth naming; `packages/hardening` sets the same header on the rate
+// limiter's 429.
+const RETRY_AFTER_SECONDS = 1;
+
 app.post('/prove', async (req, res) => {
   // The request is checked before anything else happens, and a request the
   // caller got wrong is answered 400 rather than 500.
@@ -86,10 +113,62 @@ app.post('/prove', async (req, res) => {
     return;
   }
 
-  const start = Date.now();
-  const timer = metrics.startProof();
+  // Under the ceiling, or not at all.
+  //
+  // square#236: every request started a proof, so 250 of them started 243 at
+  // once. Each holds its own read of the proving key, so the ceiling is a
+  // memory bound before it is a CPU one, and the failure it prevents is the
+  // container being killed with every proof in flight.
+  let start;
+  let timer;
   try {
-    const result = await generateProof(req.body);
+    const outcome = await limiter.run(() => {
+      // Started here rather than before the queue: the duration histogram is
+      // about how long a proof takes, and waiting for a slot is not proving.
+      start = Date.now();
+      timer = metrics.startProof();
+      return generateProof(req.body);
+    });
+
+    if (!outcome.ok && outcome.reason === 'shed') {
+    // Not a proof failure. This service did not try and did not fail; it
+    // refused, which is a capacity fact and belongs in its own event rather
+    // than in the rate an operator pages on (the same line square#148 drew
+    // between a refused request and a failed proof).
+      const entry = requestShedLogEntry({
+        active: limiter.active,
+        queued: limiter.queued,
+        limit: limiter.limit,
+      });
+      console.error(JSON.stringify(entry));
+      res.status(503)
+        .set('Retry-After', String(RETRY_AFTER_SECONDS))
+        .json({ error: 'busy', retryAfterSeconds: RETRY_AFTER_SECONDS });
+      return;
+    }
+
+    if (!outcome.ok && outcome.reason === 'timeout') {
+      // Two requests reach here and only one of them is a failed proof.
+      //
+      // `outcome.started` is false when the deadline passed while the request
+      // was still waiting for a slot: nothing was proved, so nothing failed to
+      // prove, and the proof metrics stay where they are — the line #148 drew
+      // between a request this service refused and a proof it got wrong. That
+      // falls out of `timer` never having been made, and saying so here keeps
+      // it deliberate rather than accidental.
+      //
+      // When a proof did start, it is a failed proof: `classifyProofFailure`
+      // files "timed out" under `timeout`, which is the label an operator
+      // already has a dashboard for. Either way the caller waited the whole
+      // bound, so either way the answer is 504.
+      const entry = proofFailedLogEntry(outcome.error);
+      if (outcome.started) timer?.failure(entry.error);
+      console.error(JSON.stringify(entry));
+      res.status(504).json({ error: entry.error });
+      return;
+    }
+
+    const result = outcome.value;
     const elapsedMs = Date.now() - start;
     timer.success();
 
@@ -122,11 +201,53 @@ app.post('/prove', async (req, res) => {
       proving_time_ms: elapsedMs,
     });
   } catch (error) {
+    // A proof that threw is still a proof this service attempted, so the
+    // failure counter moves — but a request shed before any proof started
+    // never made a timer, which is why this is optional now (square#236).
     const entry = proofFailedLogEntry(error);
-    timer.failure(entry.error);
+    timer?.failure(entry.error);
     console.error(JSON.stringify(entry));
     res.status(500).json({ error: entry.error });
   }
+});
+
+// A body the service could not read, answered the way every other refusal is.
+//
+// square#252. With no four-argument handler, what express.json raises -- a body
+// that is not JSON, one over the limit, a charset it will not decode -- went to
+// Express's default handler: an HTML page, with the stack trace in development,
+// and `<pre>Bad Request</pre>` in production with the stack written to stderr as
+// bare lines. The OpenAPI spec promises JSON on the error path, the log pipeline
+// reads one JSON object per line, and the stack carried the first bytes of the raw
+// body, because body-parser's SyntaxError quotes them ("max_daily_"... is not
+// valid JSON).
+//
+// So the status body-parser chose is kept, the message is picked here by the kind
+// of error rather than read off it, and the log line has the shape of every other
+// one. No part of the request reaches either.
+const UNREADABLE_BODY = Object.freeze({
+  'entity.parse.failed': 'the request body is not valid JSON',
+  'entity.too.large': `the request body is larger than the ${BODY_LIMIT} this service accepts`,
+  'request.aborted': 'the request body ended before it was complete',
+  'request.size.invalid': 'the request body is not the length its Content-Length declares',
+  'charset.unsupported': 'the request body is in a charset this service does not read',
+  'encoding.unsupported': 'the request body uses a content encoding this service does not read',
+});
+
+app.use((error, _req, res, _next) => {
+  const declared = Number(error?.status ?? error?.statusCode);
+  const status = Number.isInteger(declared) && declared >= 400 && declared < 600 ? declared : 500;
+  if (status < 500) {
+    const entry = requestRejectedLogEntry(UNREADABLE_BODY[error?.type] ?? 'the request could not be read');
+    console.error(JSON.stringify(entry));
+    res.status(status).json({ error: entry.error });
+    return;
+  }
+  // Not the caller's mistake, and not a proof that failed: the route catches its
+  // own. Named as neither, and still without anything the error carried.
+  const entry = requestFailedLogEntry('the request could not be handled');
+  console.error(JSON.stringify(entry));
+  res.status(500).json({ error: entry.error });
 });
 
 // Exported for the tests, which drive the route through supertest rather than

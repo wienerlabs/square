@@ -63,14 +63,26 @@ export const openapiSpec = {
           },
           400: {
             description:
-              'The request was refused before any proving started: a required field ' +
-              'is missing, a list is not a list, a time restriction is out of range, ' +
-              'or a field is not in its format (an address that is not 20 bytes of hex, ' +
-              'a policy_id that is not a UUID, an amount that is not a non-negative ' +
-              'whole number, a category that is empty or over 32 bytes, an unknown ' +
-              'weekday). ' +
+              'The request was refused before any proving started: the body is not valid ' +
+              'JSON, a required field is missing, a list is not a list, a time ' +
+              'restriction is out of range, or a field is not in its format (an address ' +
+              'that is not 20 bytes of hex, a policy_id that is not a UUID, an amount that ' +
+              'is not a non-negative whole number, a category that is empty or over 32 ' +
+              'bytes, an unknown weekday). ' +
               'The message names the offending field but never its value. Retrying an ' +
               'unchanged request will not help.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          413: {
+            description:
+              'The request body is larger than the 256 kb the service accepts. It was not ' +
+              'read and nothing was proved. The error is JSON, as on every other path.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          415: {
+            description:
+              'The request body is in a charset or content encoding the service does not ' +
+              'read. Nothing was proved. The error is JSON, as on every other path.',
             content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
           },
           500: {
@@ -78,6 +90,31 @@ export const openapiSpec = {
               'The prover failed after accepting the request — hashing, witness ' +
               'generation or the proving system. The message names the offending field ' +
               'but never its value, so it is safe to surface and to log.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          503: {
+            description:
+              'The service is already proving as many payments as it will run at once ' +
+              'and its waiting room is full, so this request was refused rather than ' +
+              'queued behind an unbounded backlog. `Retry-After` carries the number of ' +
+              'seconds to wait, and the same request will be accepted once there is ' +
+              'room. See PROVER_MAX_CONCURRENCY and PROVER_MAX_QUEUE.',
+            headers: {
+              'Retry-After': {
+                description: 'Seconds to wait before retrying.',
+                schema: { type: 'integer' },
+              },
+            },
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Busy' } } },
+          },
+          504: {
+            description:
+              'The request outran the time this service will spend on one of them ' +
+              '(PROVER_PROOF_TIMEOUT_MS), whether it was proving for all of that or ' +
+              'still waiting for a slot. A proof already started is not stopped — ' +
+              'the proving system takes no abort signal — so it goes on holding its ' +
+              'slot until it finishes, and the ceiling goes on counting it. Retrying ' +
+              'may succeed on a less loaded service.',
             content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
           },
         },
@@ -280,6 +317,16 @@ export const openapiSpec = {
       Error: {
         type: 'object',
         properties: { error: { type: 'string' } },
+      },
+      // A 503 carries one field more than an Error, and a caller that wants to
+      // back off correctly needs it: the same number as the `Retry-After`
+      // header, for clients that read the body rather than the headers.
+      Busy: {
+        type: 'object',
+        properties: {
+          error: { type: 'string', enum: ['busy'] },
+          retryAfterSeconds: { type: 'integer' },
+        },
       },
     },
   },
