@@ -15,6 +15,7 @@ const contracts = [
   ["SquareHook", "squareHookAbi"],
   ["PolicyRegistry", "policyRegistryAbi"],
   ["ScreeningRegistry", "screeningRegistryAbi"],
+  ["ComplianceModule", "complianceModuleAbi"],
 ];
 
 const erc20 = [

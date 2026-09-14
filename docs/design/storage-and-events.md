@@ -40,6 +40,7 @@ other is implemented. The two questions #6 was asked answer as follows.
 | `SquareHook` | the single whitelisted `IACPHook`: payout routing, compliance slot, reputation and validation writes | no |
 | `PolicyRegistry` | the policy commitment and the daily spend counter the compliance module reads and moves, and each poster's buyer list root | no |
 | `ScreeningRegistry` | signed sanctions screenings the hook reads at funding and at release (#35) | no |
+| `ComplianceModule` | the gate in the hook's slot: verifies the proof bound to a job against the eight bindings at release, marks the statement spent, and advances the registry's counter. Absent from the shared deployment while the slot is empty; the SDK carries its ABI (`complianceModuleAbi`) for the tools that bind proofs | no |
 
 `SquareJob` never reads a live token balance. Every transfer out is computed
 from the stored `budget` and the fee basis points snapshotted at funding.
@@ -293,11 +294,11 @@ do the same.
 `WindowsConfigured` and `FinalizeGraceConfigured` on `KeeperEvaluator`;
 `ArbitersUpdated` and `BondParametersUpdated` on `Arbitration`;
 `ComplianceModuleUpdated` and `ReputationPolicyUpdated` on `SquareHook`; and the
-`Ownable2Step` pair below, which five of the six contracts inherit.
+`Ownable2Step` pair below, which seven of the eight contracts inherit.
 `PolicyRegistry` is a case of its own, in its section further down: it is keyed
 by the institution throughout and has no `jobId` anywhere.
 
-Every event any of the six contracts declares appears in the tables below, and
+Every event any of the eight contracts declares appears in the tables below, and
 `packages/core/scripts/check-events-documented.mjs` fails the `contracts`
 workflow when one does not.
 
@@ -424,10 +425,32 @@ reconstructing who is cleared filters on the subject address.
 | `MaxAgeUpdated(uint64 maxAge)` | the constructor and every later change |
 | `EIP712DomainChanged()` | declared by OpenZeppelin's `EIP712` for ERC-5267 and never emitted here: the domain (name, version, chain id, this address) is fixed at construction |
 
+### ComplianceModule
+
+Emitted by whichever module the hook's slot holds, so an indexer reads them
+from the address `SquareHook.complianceModule()` names at the time, not from
+the deployment record. Keyed by `jobId`, like the hook's own
+`ComplianceChecked`, which follows every one of the first two.
+
+| Event | Carries |
+|---|---|
+| `ReleaseVerified(uint256 indexed jobId, address indexed payee, uint256 amount, bytes32 statement)` | the proof bound to the job passed the eight bindings; `statement` is the hash of its public signals, marked spent so a re-randomised copy is refused (docs/design/compliance-gate.md, "Replay") |
+| `ReleaseRefused(uint256 indexed jobId, bytes32 reason)` | the release was refused and pays the client back; `reason` is one of `malformed proof`, `invalid proof`, `is_compliant is 0`, `policy commitment`, `recipient`, `amount`, `token`, `daily_spent_before`, `timestamp outside window`, `stripe_receipt_hash`, `proof already used`, as a short string in the `bytes32` |
+| `VerdictDisagreed(uint256 indexed jobId, Verdict verdict)` | the proof passed every binding and the registry's `recordSpend` still answered `NoPolicy` or `LimitExceeded`: the two contracts disagree, which is visible here rather than as money moving under a policy nobody checked |
+| `HookUpdated(address indexed hook)` | owner only: the hook whose `checkRelease` calls this module accepts |
+| `TimestampToleranceUpdated(uint64 seconds_)` | owner only: how far a proof's timestamp may sit from the releasing block |
+
+The institution's side reads the first two off a release receipt
+(`@squaresdk/policy`'s `moduleVerdict`) to say whether the proof it bound was
+the one the module verified; the keeper and the indexer do not read them yet,
+and until they do a refused release is visible to the client's tools and in
+`ComplianceChecked`'s `verified = false`.
+
 ### Ownership, on every owned contract
 
-`SquareJob`, `KeeperEvaluator`, `Arbitration`, `SquareHook` and `PolicyRegistry`
-inherit OpenZeppelin's `Ownable2Step`, so each of them declares the same pair.
+`SquareJob`, `KeeperEvaluator`, `Arbitration`, `SquareHook`, `PolicyRegistry`,
+`ScreeningRegistry` and `ComplianceModule` inherit OpenZeppelin's `Ownable2Step`,
+so each of them declares the same pair.
 `ClaimMarket` has no owner and declares neither.
 
 | Event | Carries |

@@ -11,6 +11,7 @@ import { AmountUsdc } from "@/components/AmountUsdc";
 import { SegmentBar } from "@/components/charts/SegmentBar";
 import { SettlementClock } from "@/components/charts/SettlementClock";
 import { Chip } from "@/components/Chip";
+import { CompliancePanel } from "@/components/CompliancePanel";
 import { EmptyState } from "@/components/EmptyState";
 import { Field, inputClass } from "@/components/Field";
 import { GhostButton } from "@/components/GhostButton";
@@ -579,6 +580,7 @@ export function JobView() {
   const withdrawable = positions.data?.withdrawable ?? 0n;
   const bondWithdrawable = positions.data?.bondWithdrawable ?? 0n;
   const showRecordExpiry = record.status === JobStatus.Expired && detail.agentId !== null && !detail.expiryRecorded;
+  const showSettleBond = record.status === JobStatus.Expired && detail.dispute.disputedAt !== 0 && !detail.dispute.bondSettled;
   const anyAction =
     showSetProvider ||
     showSetBudget ||
@@ -734,6 +736,8 @@ export function JobView() {
       </div>
 
       {specHash ? <SpecCheck description={record.description} /> : null}
+
+      {hookIsSquare ? <CompliancePanel jobId={id} status={record.status} client={record.client} address={address} now={now} /> : null}
 
       {listing.status !== 0 || detail.dispute.disputedAt !== 0 ? (
         <div className={`grid gap-4 ${listing.status !== 0 && detail.dispute.disputedAt !== 0 ? "lg:grid-cols-2" : ""}`}>
@@ -934,6 +938,16 @@ export function JobView() {
                 buttonLabel="Record expiry"
                 description="Writes the neutral reputation signal for the bound agent on the hook. Permissionless and idempotent."
                 send={(client) => client.recordExpiry(id)}
+              />
+            ) : null}
+            {showSettleBond ? (
+              <SimpleAction
+                ctx={ctx}
+                title="Settle the bond"
+                label="Settle bond"
+                buttonLabel="Settle bond"
+                description="The job expired under its dispute. This routes the bond the way the decision says, or back to the disputer when there was none, and credits the Arbitration ledger. The keeper sends it on its next tick; anyone may send it sooner."
+                send={(client) => client.settleBond(id)}
               />
             ) : null}
           </div>

@@ -75,6 +75,13 @@ jobs:
           npm install --install-links
           npm run build
 
+      # square policy is built on @squaresdk/policy, which is built on core.
+      - name: Build @squaresdk/policy
+        working-directory: packages/policy
+        run: |
+          npm install --install-links
+          npm run build
+
       # test:live drives dist/index.js, not the library: the criterion is about
       # the command, so the command is what gets exercised.
       - name: Build @squaresdk/cli

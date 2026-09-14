@@ -28,6 +28,7 @@
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMain } from './entrypoint.mjs';
@@ -142,6 +143,23 @@ export const roundAt = (unixSeconds) =>
 export const timeOfRound = (round) =>
   DRAND.genesis + (round - 1) * DRAND.period;
 
+// The comparison `verify-chain` makes between the beacon in the key and the
+// signature the public chain published, in one place.
+//
+// square#227's review: the round-trip test wrote this out by hand and called it
+// "verify-chain's, character for character". It was, until it was not -- a
+// change to the real comparison could not turn that test red. There is one of
+// it now, and both ends call it.
+//
+// Case-insensitive because the two sources spell hex differently: snarkjs
+// stores what it was handed, drand's API returns lower case. Length is not
+// checked here on purpose; a 64-character sha256 spelling simply does not equal
+// the 96-character signature, which is the failure #227 is about.
+export const beaconMatchesRound = (beaconHash, signature) =>
+  typeof beaconHash === 'string'
+  && typeof signature === 'string'
+  && beaconHash.toLowerCase() === signature.toLowerCase();
+
 // Echoing the command is worth keeping: a ceremony tool that hides what it runs
 // is hard to audit, and every argument here is meant to be public.
 //
@@ -165,6 +183,103 @@ function sh(cmd, args, options = {}) {
 
 const sha256 = (file) =>
   crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+
+// Key order is not part of a verifying key's meaning, so keys are compared over
+// a stable ordering rather than over the bytes snarkjs happened to write.
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Is `vkFile` the verifying key `zkeyFile` produces?
+ *
+ * square#228. `verify-chain` used to answer this by comparing `payment_vk.json`
+ * against `transcript.final.vk_sha256` — and `finalize` writes that field by
+ * hashing that same file. Both sides came from the party being audited, so a
+ * verifying key nobody derived from the final key passed as long as the
+ * transcript recorded its digest. Measured, with a `vk_delta_2` that never came
+ * out of the zkey and a transcript adjusted to match: `ok the verifying key is
+ * the one the transcript records`.
+ *
+ * It is the one file whose provenance cannot rest on the transcript. The zkey
+ * is not what reaches the chain; the verifying key is — `Groth16Verifier.sol`'s
+ * constants are generated from it. `contracts/script/check-verifier-ic.mjs`
+ * binds only that file's IC points to the committed verifier, not its delta,
+ * so it does not stand in for deriving the key here; `verifyingKeyChecks`
+ * below runs this against both the ceremony's file and the repository's.
+ *
+ * This is the same shape as the substitution square#121 removed from the beacon
+ * check, named in `test/drand-beacon.test.js`: "the field the old code compared
+ * is supplied by the party it is meant to check".
+ *
+ * The export is deterministic — two exports of one key are byte-identical, and
+ * the export of `build/payment.zkey` is byte-identical to `build/payment_vk.json`
+ * — so this could compare bytes. It compares canonical JSON instead, because a
+ * reformatted but equal key should read as a pass rather than as a puzzle.
+ */
+export async function verifyingKeyMatches(zkeyFile, vkFile) {
+  if (!fs.existsSync(zkeyFile)) return { ok: false, reason: `there is no key at ${zkeyFile}` };
+  if (!fs.existsSync(vkFile)) return { ok: false, reason: `there is no verifying key at ${vkFile}` };
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-vk-'));
+  const derived = path.join(dir, 'verification_key.json');
+  try {
+    execFileSync('snarkjs', ['zkey', 'export', 'verificationkey', zkeyFile, derived], {
+      cwd: ROOT,
+      stdio: 'pipe',
+    });
+    const fromKey = canonical(JSON.parse(fs.readFileSync(derived, 'utf8')));
+    const published = canonical(JSON.parse(fs.readFileSync(vkFile, 'utf8')));
+    return fromKey === published
+      ? { ok: true, reason: null }
+      : { ok: false, reason: `${path.basename(vkFile)} is not what ${path.basename(zkeyFile)} exports` };
+  } catch (error) {
+    return { ok: false, reason: `could not export a verifying key from ${path.basename(zkeyFile)}: ${error.message}` };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Step 4 of docs/ceremony/verifying.md, as `verify-chain` runs it: three checks
+ * on the verifying key, returned rather than printed, so a test runs exactly
+ * what `verify-chain` runs.
+ *
+ * - `ceremonyVk`, the file `finalize` wrote, is what `finalZkey` exports (#228).
+ * - That file is unchanged since the transcript recorded it. On its own this
+ *   says nothing about where the file came from; it is the check #228 found
+ *   standing in for the first.
+ * - `repositoryVk`, `build/payment_vk.json`, is what `finalZkey` exports. It is
+ *   the file step 4 diffs, the one CI checks with
+ *   `contracts/script/check-verifier-ic.mjs` and copies to the prover. Until #16
+ *   installs the ceremony's key there, it holds the development key, whose phase
+ *   2 is one contribution drawn on the machine that built it; no ceremony
+ *   reproduces that, so this check fails until then, as step 4 would.
+ *   `check-verifier-ic.mjs` does not stand in for it: it binds only the IC
+ *   points to the circuit, and its header says why delta is out of its reach.
+ */
+export async function verifyingKeyChecks({ finalZkey, ceremonyVk, repositoryVk, transcript }) {
+  const derived = await verifyingKeyMatches(finalZkey, ceremonyVk);
+  const recorded = fs.existsSync(ceremonyVk) && Boolean(transcript?.final)
+    && sha256(ceremonyVk) === transcript.final.vk_sha256;
+  const repository = await verifyingKeyMatches(finalZkey, repositoryVk);
+  const where = path.relative(ROOT, repositoryVk);
+  return [
+    derived.ok
+      ? { ok: true, message: 'the verifying key is the one the final key exports' }
+      : { ok: false, message: `the verifying key is not the one the final key exports: ${derived.reason}` },
+    recorded
+      ? { ok: true, message: 'and it is unchanged since the transcript recorded it' }
+      : { ok: false, message: 'the verifying key does not match the transcript' },
+    repository.ok
+      ? { ok: true, message: `the repository's verifying key, ${where}, is the one the final key exports` }
+      : { ok: false, message: `the repository's verifying key, ${where}, is not the one the final key exports: ${repository.reason}` },
+  ];
+}
 
 // What compiled the circuit, and what it compiled.
 //
@@ -210,6 +325,9 @@ function writeTranscript(t) {
 const keyPath = (n) => path.join(CEREMONY, `payment_${String(n).padStart(4, '0')}.zkey`);
 const finalPath = () => path.join(CEREMONY, 'payment_final.zkey');
 const vkPath = () => path.join(CEREMONY, 'payment_vk.json');
+// The verifying key step 4 of docs/ceremony/verifying.md diffs: build.mjs writes
+// it, CI checks it and copies it to the prover.
+const REPOSITORY_VK = path.join(BUILD, 'payment_vk.json');
 
 // Read the contribution list out of a zkey by reusing the inspector, so the
 // transcript records what the file says rather than what this script believes.
@@ -539,7 +657,7 @@ async function verifyChain() {
       } catch (error) {
         bad(`could not fetch drand round ${announced.round}: ${error.message}`);
       }
-      if (live && beacons[0].beaconHash?.toLowerCase() === live.signature.toLowerCase()) {
+      if (live && beaconMatchesRound(beacons[0].beaconHash, live.signature)) {
         ok(`beacon is drand quicknet round ${announced.round}, matching the public chain`);
       } else if (live) {
         bad(`beacon in the key does not match drand round ${announced.round}`);
@@ -585,11 +703,19 @@ async function verifyChain() {
     }
 
     process.stdout.write('\nkeys\n');
-    if (fs.existsSync(vkPath()) && transcript.final
-        && sha256(vkPath()) === transcript.final.vk_sha256) {
-      ok('the verifying key is the one the transcript records');
-    } else {
-      bad('the verifying key does not match the transcript');
+
+    // Step 4 of docs/ceremony/verifying.md: derived from the final key rather
+    // than read out of the transcript (#228), and against both files step 4 is
+    // about, the one `finalize` wrote and the repository's.
+    const checks = await verifyingKeyChecks({
+      finalZkey: finalPath(),
+      ceremonyVk: vkPath(),
+      repositoryVk: REPOSITORY_VK,
+      transcript,
+    });
+    for (const check of checks) {
+      if (check.ok) ok(check.message);
+      else bad(check.message);
     }
   }
 

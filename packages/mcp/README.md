@@ -102,6 +102,9 @@ depends on). The server defaults to Arc Testnet; the whole environment:
 | `SQUARE_CALLER_DID` | The DID tasks are created under. Default the wallet's `did:pkh`. |
 | `SQUARE_X402_MAX_PAYMENT` | Cap per x402 call, decimal USDC. `1.00` by default; `off` to not offer `square_call`. |
 | `SQUARE_JOB_DAYS` | How long a hired job stays open. `7` by default. |
+| `SQUARE_POLICY_FILE` | The institution's policy ([`@squaresdk/policy`](../policy/README.md)); with `SQUARE_PROVER_URL`, the server proves every hire's release and keeps the proof bound to the job until it is released (square#335). One without the other is refused. |
+| `SQUARE_PROVER_URL` | The prover service the policy's secret may be sent to, `http://127.0.0.1:3003` for a local one. |
+| `SQUARE_COMPLIANCE_INTERVAL_MS` | How often the bound proofs are checked. `15000` by default; well inside the module's tolerance. |
 
 A key in an environment variable is a key in the process table, the same trade the CLI's
 unattended mode makes; it is the one a desktop client offers. Use a wallet funded for
@@ -114,13 +117,29 @@ this.
 | `square_agent` | Look an agent up by `did:aip` or https URL: the ERC-8004 owner, whether it is active, its A2A endpoint, and every capability its card offers with its price. Read-only; the model is told to call it before hiring. |
 | `square_hire` | Escrow a job for the agent and give it the task. `createJob` for the agent's wallet, `setBudget` with the capability's price (or `budget`), `fund`, then `task/create` over A2A and polling until the task ends or the wait runs out. Returns the job id, the task's state, and on `DELIVERED` the deliverable's hash and the `submit` transaction. |
 | `square_task` | `task/status` at the agent, for a task `square_hire` handed back while it was still `WORKING`. |
-| `square_job` | The job record: status, client, provider, budget, expiry, deliverable, the agent bound to it. |
+| `square_job` | The job record: status, client, provider, budget, expiry, deliverable, the agent bound to it, and on a stack whose hook holds a module, where the job stands with the gate: the proof bound to it, current or stale and why. |
 | `square_call` | Pay a priced capability per call over x402 and return the output. Only for agents whose card says `x402Support`, and only with a wallet. |
 
 Every answer comes back as text for the model and as `structuredContent` for a client
 that reads JSON; a refusal is a result with `isError`, in words (`budget 0.01 is below the
 price of text.summarize, 0.05 USDC; the agent would refuse the task`), so the model can
 say why rather than retry.
+
+### The release, on a stack with a compliance module
+
+On a stack whose hook holds a compliance module every release out of escrow
+needs a proof, bound to the job by its client, that the payment fits the
+client's policy; a release without a current one pays the client back. The
+proof binds to the payee, the net, today's counter and the clock as they
+stand at release, so it cannot be bound at funding and left. With
+`SQUARE_POLICY_FILE` and `SQUARE_PROVER_URL` the server carries that duty
+for every job `square_hire` funds, for as long as it runs: it asks the prover
+for a proof, binds it, rebinds when the release moves, and cranks the job
+when its window closes; `square_hire`'s answer says so, `square_job` shows
+the proof's state, and the log on stderr records every binding and release
+([docs/decisions/proof-freshness.md](../../docs/decisions/proof-freshness.md)).
+Without them, on such a stack, hire from a wallet whose proofs another tool
+keeps (`square policy watch`, the hosted agent), or not at all.
 
 ### What a hire returns, and what it does not
 
@@ -159,7 +178,8 @@ await server.connect(transport); // stdio, or Streamable HTTP behind your own au
 `client` is a `@squaresdk/core` `SquareClient` (with a wallet to hire, without one to
 read); `resolver` an `AipDidResolver`. `a2a`, `cards`, `callerDid`, `jobDays`,
 `taskTimeoutMs` and `pollIntervalMs` are the knobs. `lookupAgent` is the lookup on its
-own.
+own, and `hire` the escrow-and-dispatch on its own, with `admit` and `onFunded` hooks
+for a host that keeps an allowance (`@squaresdk/hosted` does).
 
 ## Tests
 
@@ -167,3 +187,9 @@ own.
 npm test              # the pool against a real MCP server over Streamable HTTP, the cache, the conversions, the bridge, and the Square server through an in-memory MCP client over a Map of a chain
 npm run test:anvil    # both directions at once: an agent whose capability is a bridged tool, hired through square-mcp spawned over stdio, on anvil with DeployLocal.s.sol
 ```
+
+`test/compliance.test.ts` hires through `square-mcp` configured with a policy
+and a prover, on a stack whose hook holds a module keyed to that prover, and
+sees the provider paid the whole net after the window closes; it skips, with
+the reason, without that stack ([`@squaresdk/policy` README](../policy/README.md),
+"the stack the tests run against").

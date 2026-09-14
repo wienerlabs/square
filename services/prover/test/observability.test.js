@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { app } from '../src/index.js';
 
@@ -57,15 +60,46 @@ describe('observability endpoints', () => {
     current_unix_timestamp: '1788356730',
   };
 
+  // A proof the service itself could not produce: its artifacts are not where it
+  // looks. That is this service's failure, so it is 500 and it is counted.
+  //
+  // This used to send a malformed blocked address, which square#251 moved to the
+  // gate, where it is the caller's 400 and counts nothing. A valid request cannot
+  // stand in for it either, because a runner with the artifacts present would
+  // prove it. So the service is loaded again with its artifact directory pointed
+  // at an empty one, which fails the same way on every runner. Each load has its
+  // own metrics registry, so the count is that instance's.
   it('counts a failed proof', async () => {
+    const empty = mkdtempSync(path.join(os.tmpdir(), 'square-prover-no-artifacts-'));
+    vi.stubEnv('PROVER_ARTIFACTS_DIR', empty);
+    vi.resetModules();
+    try {
+      const { app: unprovable } = await import('../src/index.js');
+      const count = async () => {
+        const response = await request(unprovable).get('/metrics');
+        const match = /square_proof_failures_total\{[^}]*\} (\d+)/.exec(response.text);
+        return match ? Number(match[1]) : 0;
+      };
+      const before = await count();
+      const response = await request(unprovable).post('/prove').send(VALID_SHAPE);
+      expect(response.status).toBe(500);
+      expect(await count()).toBe(before + 1);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  // What this test used to send, now that it is refused at the gate.
+  it('does not count a malformed field as a failed proof', async () => {
     const before = await failures();
-    // Passes validateRequest — blocked_addresses is an array of strings — and
-    // fails in normalize, which is inside the proving path. No artifacts needed.
     const response = await request(app)
       .post('/prove')
       .send({ ...VALID_SHAPE, blocked_addresses: ['not-an-address'] });
-    expect(response.status).toBe(500);
-    expect(await failures()).toBe(before + 1);
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('blocked_addresses: must be a 20-byte hex address');
+    expect(await failures()).toBe(before);
   });
 
   it('does not count a refused request as a failed proof', async () => {

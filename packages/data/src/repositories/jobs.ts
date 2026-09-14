@@ -240,6 +240,19 @@ export async function listDisputedSubmitted(db: Database, chainId: number, evalu
   return rows.map(rowToJob);
 }
 
+export async function listExpiredDisputed(db: Database, chainId: number, evaluator?: Hex): Promise<JobRecord[]> {
+  const filter = evaluator === undefined ? "" : " and jobs.evaluator = $2";
+  const params: unknown[] = evaluator === undefined ? [chainId] : [chainId, hexToBytes(evaluator)];
+  const { rows } = await db.query<JobRow>(
+    `select ${QUALIFIED_COLUMNS} from jobs
+     join disputes on disputes.chain_id = jobs.chain_id and disputes.job_id = jobs.job_id
+     where jobs.chain_id = $1 and jobs.status = ${JOB_STATUS.expired} and not disputes.closed${filter}
+     order by jobs.job_id`,
+    params,
+  );
+  return rows.map(rowToJob);
+}
+
 export async function listExpiredWithAgent(
   db: Database,
   chainId: number,

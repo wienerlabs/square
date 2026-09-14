@@ -131,7 +131,7 @@ contract SanctionsScreeningTest is BaseTest {
         vm.expectEmit(true, true, false, true, address(hook));
         emit SquareHook.ScreeningChecked(jobId, provider, true);
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(kernel.withdrawable(provider), netOf(BUDGET));
         assertEq(kernel.withdrawable(client), 0);
     }
@@ -144,7 +144,7 @@ contract SanctionsScreeningTest is BaseTest {
         vm.expectEmit(true, true, false, true, address(hook));
         emit SquareHook.ScreeningChecked(jobId, provider, false);
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(kernel.withdrawable(provider), 0, "not a unit to a designated payee");
         assertEq(kernel.withdrawable(client), netOf(BUDGET), "the net went back to the client");
         assertEq(uint8(kernel.getJobRecord(jobId).status), uint8(ISquareJob.JobStatus.Completed), "and it settled");
@@ -157,7 +157,7 @@ contract SanctionsScreeningTest is BaseTest {
         uint256 jobId = _submittedAndDue();
         assertFalse(screeningRegistry.isCleared(provider), "the funding-time screening has aged out");
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(kernel.withdrawable(provider), 0);
         assertEq(kernel.withdrawable(client), netOf(BUDGET));
     }
@@ -174,7 +174,7 @@ contract SanctionsScreeningTest is BaseTest {
         _clear(provider);
         _designate(buyer);
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(kernel.withdrawable(buyer), 0, "the designated buyer is not paid");
         assertEq(kernel.withdrawable(provider), 0);
         assertEq(kernel.withdrawable(client), netOf(BUDGET));
@@ -189,7 +189,7 @@ contract SanctionsScreeningTest is BaseTest {
         pastWindow(jobId);
         _clear(buyer);
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(kernel.withdrawable(buyer), netOf(BUDGET));
     }
 
@@ -200,7 +200,7 @@ contract SanctionsScreeningTest is BaseTest {
         vm.prank(owner);
         hook.setScreening(address(usdc)); // a contract with no isCleared
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(uint8(kernel.getJobRecord(jobId).status), uint8(ISquareJob.JobStatus.Completed));
         assertEq(kernel.withdrawable(client), netOf(BUDGET));
     }
@@ -220,7 +220,7 @@ contract SanctionsScreeningTest is BaseTest {
             abi.encodeCall(IValidationRegistry.validationResponse, (REQUEST_HASH, uint8(100), "", commitment, "square.compliance"))
         );
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         (,, uint8 response,, string memory tag,) = validation.getValidationStatus(REQUEST_HASH);
         assertEq(response, 100, "the release is attested as passed");
         assertEq(tag, "square.compliance");
@@ -238,7 +238,7 @@ contract SanctionsScreeningTest is BaseTest {
             abi.encodeCall(IValidationRegistry.validationResponse, (REQUEST_HASH, uint8(0), "", commitment, "square.compliance"))
         );
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         (,, uint8 response,,,) = validation.getValidationStatus(REQUEST_HASH);
         assertEq(response, 0, "the refusal is attested");
         assertEq(kernel.withdrawable(client), netOf(BUDGET));
@@ -255,7 +255,7 @@ contract SanctionsScreeningTest is BaseTest {
         pastWindow(jobId);
         vm.recordLogs();
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         (,, uint8 response,,,) = validation.getValidationStatus(REQUEST_HASH);
         assertEq(response, 0, "no response was ever written");
         assertEq(bytes(_tagOf(REQUEST_HASH)).length, 0);

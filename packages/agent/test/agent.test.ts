@@ -28,10 +28,12 @@ const owner = privateKeyToAccount("0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca
 const payer = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"); // anvil 1
 const CALLER = "did:aip:eip155:31337:0x0000000000000000000000000000000000000001:9";
 
-function chainStub(records: Record<string, { status: number; provider: `0x${string}`; budget: bigint; expiredAt: number }>) {
+function chainStub(records: Record<string, { status: number; provider: `0x${string}`; budget: bigint; expiredAt: number; settlementHorizon: number }>) {
   const publicClient = {
     chain: { id: 31337 },
     getChainId: async () => 31337,
+    // The chain's clock, which admission measures the job's window against.
+    getBlock: async () => ({ timestamp: 1_800_000_000n }),
     readContract: async ({ functionName, args }: { functionName: string; args: readonly unknown[] }) => {
       if (functionName !== "getJobRecord") throw new Error(`unexpected read ${functionName}`);
       const record = records[String(args[0])];
@@ -62,8 +64,8 @@ function acceptingFacilitator(): FacilitatorClient & { settled: string[] } {
 
 function atlas(x402?: FacilitatorClient) {
   const { publicClient, walletClient } = chainStub({
-    "1": { status: JobStatus.Open, provider: owner.address, budget: 0n, expiredAt: 4_000_000_000 },
-    "2": { status: JobStatus.Funded, provider: owner.address, budget: 49_999n, expiredAt: 4_000_000_000 },
+    "1": { status: JobStatus.Open, provider: owner.address, budget: 0n, expiredAt: 4_000_000_000, settlementHorizon: 86_400 },
+    "2": { status: JobStatus.Funded, provider: owner.address, budget: 49_999n, expiredAt: 4_000_000_000, settlementHorizon: 86_400 },
   });
   return createAgent({
     name: "Atlas",

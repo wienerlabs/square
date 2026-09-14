@@ -63,10 +63,26 @@ export const openapiSpec = {
           },
           400: {
             description:
-              'The request was refused before any proving started: a required field ' +
-              'is missing, a list is not a list, or a time restriction is out of range. ' +
+              'The request was refused before any proving started: the body is not valid ' +
+              'JSON, a required field is missing, a list is not a list, a time ' +
+              'restriction is out of range, or a field is not in its format (an address ' +
+              'that is not 20 bytes of hex, a policy_id that is not a UUID, an amount that ' +
+              'is not a non-negative whole number, a category that is empty or over 32 ' +
+              'bytes, an unknown weekday). ' +
               'The message names the offending field but never its value. Retrying an ' +
               'unchanged request will not help.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          413: {
+            description:
+              'The request body is larger than the 256 kb the service accepts. It was not ' +
+              'read and nothing was proved. The error is JSON, as on every other path.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+          415: {
+            description:
+              'The request body is in a charset or content encoding the service does not ' +
+              'read. Nothing was proved. The error is JSON, as on every other path.',
             content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
           },
           500: {

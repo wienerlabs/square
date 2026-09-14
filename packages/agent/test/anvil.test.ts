@@ -12,10 +12,11 @@ import {
   eventsNamed,
   hashDeliverable,
   JobStatus,
+  squareJobAbi,
   type SquareClient,
   type SquareDeployment,
 } from "@squaresdk/core";
-import { createAgent, type Agent, type Listening } from "../src/index.js";
+import { createAgent, MIN_SETTLEMENT_WINDOW, settlementWindowOf, type Agent, type Listening } from "../src/index.js";
 
 /**
  * The acceptance criterion of square#79, on a local chain: an A2A task is
@@ -113,6 +114,50 @@ describe.skipIf(!reachable)("an agent takes a funded task, delivers it on chain,
     expect(res.error).toMatchObject({ code: -32004, message: `job ${open.jobId} is Open, not Funded` });
     expect(seen).toEqual([]);
   }, 60_000);
+
+  it("mirrors the kernel's settlement floor", async () => {
+    const floor = await publicClient.readContract({ abi: squareJobAbi, address: deployment.squareJob, functionName: "MIN_SETTLEMENT_WINDOW" });
+    expect(BigInt(floor)).toBe(MIN_SETTLEMENT_WINDOW);
+  });
+
+  // The kernel takes a job's expiry down to now + horizon at createJob and
+  // funds it with no look at the window at all (square#326), while submit
+  // wants the whole settlement window still ahead of expiredAt. A job that
+  // has slipped between the two is Funded and undeliverable (square#334).
+  async function fundedWithWindowLeft(secondsPastTheWindow: bigint): Promise<bigint> {
+    const horizon = BigInt(await client.settlementHorizon());
+    const window = settlementWindowOf(horizon);
+    // The next block's timestamp, not the last one's: anvil's clock may have
+    // been moved ahead of the latest block by an earlier test.
+    const pending = await publicClient.getBlock({ blockTag: "pending" });
+    const { jobId: id } = await client.createJob({ provider: agent.address, expiredAt: pending.timestamp + window + secondsPastTheWindow, spec: { task: "summarise" } });
+    await agent.client.setBudget(id, budget);
+    await client.fund(id, budget);
+    expect((await client.getJobRecord(id)).status).toBe(JobStatus.Funded);
+    return id;
+  }
+
+  it("refuses a funded job whose submit window has closed, with the window in the reason, before any handler runs", async () => {
+    const id = await fundedWithWindowLeft(60n);
+    await testClient.increaseTime({ seconds: 120 });
+    await testClient.mine({ blocks: 1 });
+    const res = await rpc("task/create", { taskId: "closed", capability: "text.summarize", input: "a b c d", callerDid: CALLER, jobId: id.toString() });
+    expect(res.error?.code).toBe(-32004);
+    expect(res.error?.message).toMatch(new RegExp(`^job ${id} cannot be submitted: it expires at \\d+, \\d+s from now, and submit needs \\d+s before expiry`));
+    expect(seen).toEqual([]);
+    // What the kernel says of the same job: the agent's answer is the chain's.
+    await expect(agent.client.submit({ jobId: id, deliverable: hashDeliverable("a b c"), agentId: 1n })).rejects.toThrow(/ExpiryTooShort/);
+  }, 60_000);
+
+  it("delivers a funded job with just its window left", async () => {
+    const id = await fundedWithWindowLeft(120n);
+    const res = await rpc("task/create", { taskId: "narrow", capability: "text.summarize", input: "just in time for this", callerDid: CALLER, jobId: id.toString() });
+    expect(res.result).toMatchObject({ state: "WORKING" });
+    const done = await untilTerminal("narrow");
+    expect(done).toMatchObject({ state: "DELIVERED", deliverable: hashDeliverable("just in time"), job: { status: JobStatus.Submitted } });
+    expect(seen).toEqual([id.toString()]);
+    seen.length = 0;
+  }, 120_000);
 
   it("delivers a funded task through submit, bound to the agent, and the status reads the chain", async () => {
     const block = await publicClient.getBlock();

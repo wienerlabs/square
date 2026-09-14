@@ -48,7 +48,7 @@ replace. Nothing carries an assurance claim.
 | Identity: `did:aip` v2, agent card, CLI, Universal Resolver driver | live against ERC-8004 on Arc Testnet ([docs/smoke](docs/smoke/)) |
 | Settlement: `SquareJob`, `KeeperEvaluator`, `Arbitration`, `ClaimMarket`, `SquareHook` | deployed on Arc Testnet, covered by the Foundry suite including a bond-solvency invariant, the five settlement paths run on the testnet with real USDC and the deployed ERC-8004 registries ([docs/deploy/lifecycle-5042002-2026-09-09.md](docs/deploy/lifecycle-5042002-2026-09-09.md)) |
 | Services: indexer, keeper, sanctions screener, x402 gateway, data layer, observability | implemented and tested against the local stack; the screener also against TRM's sanctions API (#35) |
-| Compliance: circuit, prover, Groth16 verifier, `ComplianceHook` | circuit, prover and verifier live (#14, #18, #17); the hook slot is open (#27) |
+| Compliance: circuit, prover, Groth16 verifier, `ComplianceModule`, the institution's side | circuit, prover and verifier live (#14, #18, #17); the module exists (#27) and the shared hook's slot is empty; the institution's side, `@squaresdk/policy`, the `square policy` commands, `square_hire`, the hosted agent and the app, commits policies and keeps proofs bound to jobs (#335, #338), tested against a local stack with the module installed |
 | Website (`site/`) | live at [square-protocol.vercel.app](https://square-protocol.vercel.app), adapted from an MIT template with Square's own copy and surfaces, every button leads to the app |
 | App: reference web application (`app/`) | live at [square-wienerlabs.vercel.app](https://square-wienerlabs.vercel.app), a static Next.js export that reads the deployed contracts through `@squaresdk/core` and drives every lifecycle action from a connected wallet; no mocked data ([app/README.md](app/README.md)) |
 
@@ -139,7 +139,11 @@ packages/    did-resolver, cli, did-aip-driver, core (SDK, embedded ABIs), data 
              failover, signed actions), observability (logs, metrics, health, alerts),
              x402 (payment gateway), aa (ERC-4337 smart accounts), a2a (task protocol),
              agent (an agent in a few lines: card, A2A tasks paid through escrow, x402),
-             mcp (agents calling MCP tools; Square as an MCP server for Claude Desktop)
+             mcp (agents calling MCP tools; Square as an MCP server for Claude Desktop),
+             hosted (an institution's agent run from a configuration: Claude with MCP
+             tools per capability, delegation to other agents under its on-chain policy),
+             policy (the institution's side of the compliance gate: commit a policy,
+             keep the proof bound to each job current, release)
 services/    prover, indexer, keeper, screener (sanctions screening, #35)
 app/         Next.js reference application (static export, wagmi, Open Runde design system)
 site/        The website at https://square-protocol.vercel.app: what Square is, and the door to the app

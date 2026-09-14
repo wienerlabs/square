@@ -46,11 +46,16 @@ The A2A tasks are the ones the escrow pays for, and the chain has a say at two m
 (square#79):
 
 1. **Admission.** `task/create` names a `jobId`. Before the handler runs, the agent reads
-   the job record and requires it `Funded`, for this wallet, not expired, and funded with
-   at least the capability's `price`. Anything else is refused with `-32004` and the
-   reason (`job 12 is Open, not Funded`, `job 12 is funded for provider 0x…, not this
-   agent`, `job 12 is funded with 49999 but text.summarize costs 50000`). No handler runs
-   for a job that will not pay.
+   the job record and requires four things of it: `Funded`; for this wallet; still
+   submittable, meaning at least the job's settlement window, `max(settlementHorizon,
+   15 minutes)`, is left before `expiredAt` on the chain's clock (the latest block), since
+   `submit` refuses anything shorter with `ExpiryTooShort` and the kernel funds such jobs
+   regardless (square#334); and funded with at least the capability's `price`. Anything
+   else is refused with `-32004` and the reason (`job 12 is Open, not Funded`, `job 12 is
+   funded for provider 0x…, not this agent`, `job 12 cannot be submitted: it expires at
+   1791140894, 349128s from now, and submit needs 349200s before expiry (settlement horizon
+   349200s, floor 900s)`, `job 12 is funded with 49999 but text.summarize costs 50000`). No
+   handler runs for a job that will not pay, and none for one that cannot be delivered.
 2. **Delivery.** The handler's return value is the delivered content. Its
    `hashDeliverable` goes on chain with `submit(jobId, hash, agentId)`, which takes the job
    `Funded → Submitted` and binds it to the agent's ERC-8004 id (the hook checks the wallet

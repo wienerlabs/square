@@ -14,6 +14,7 @@ import {
   type TransactionReceipt,
   type Transport,
   type WalletClient,
+  zeroAddress,
 } from "viem";
 import {
   arbitrationAbi,
@@ -21,6 +22,7 @@ import {
   erc20Abi,
   keeperEvaluatorAbi,
   policyRegistryAbi,
+  complianceModuleAbi,
   squareHookAbi,
   squareJobAbi,
 } from "./abi/index.js";
@@ -576,21 +578,21 @@ export class SquareClient {
     });
   }
 
-  async finalize(jobId: bigint, complianceProof: Hex = "0x"): Promise<TransactionResult> {
+  async finalize(jobId: bigint): Promise<TransactionResult> {
     return this.write({
       abi: keeperEvaluatorAbi,
       address: this.deployment.keeperEvaluator,
       functionName: "finalize",
-      args: [jobId, complianceProof],
+      args: [jobId],
     });
   }
 
-  async finalizeDecided(jobId: bigint, complianceProof: Hex = "0x"): Promise<TransactionResult> {
+  async finalizeDecided(jobId: bigint): Promise<TransactionResult> {
     return this.write({
       abi: keeperEvaluatorAbi,
       address: this.deployment.keeperEvaluator,
       functionName: "finalizeDecided",
-      args: [jobId, complianceProof],
+      args: [jobId],
     });
   }
 
@@ -619,6 +621,10 @@ export class SquareClient {
 
   async lapse(jobId: bigint): Promise<TransactionResult> {
     return this.write({ abi: arbitrationAbi, address: this.deployment.arbitration, functionName: "lapse", args: [jobId] });
+  }
+
+  async settleBond(jobId: bigint): Promise<TransactionResult> {
+    return this.write({ abi: arbitrationAbi, address: this.deployment.arbitration, functionName: "settleBond", args: [jobId] });
   }
 
   async withdrawBond(): Promise<TransactionResult> {
@@ -688,6 +694,113 @@ export class SquareClient {
       address: await this.policyRegistry(),
       functionName: "setBuyerRoot",
       args: [root],
+    });
+  }
+
+  /**
+   * This poster's policy as the registry holds it: the commitment the
+   * compliance module compares a proof against, the daily ceiling in USDC
+   * atomic units, and the epoch that counts rotations. A zero commitment is
+   * no policy, and the registry treats no policy as authorising nothing.
+   */
+  async policyOf(poster: Address) {
+    return this.publicClient.readContract({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "policyOf",
+      args: [poster],
+    });
+  }
+
+  /**
+   * What the registry has counted against this poster's ceiling today: the
+   * releases from escrow the compliance module recorded, on the UTC day the
+   * chain is in. Funded but unreleased escrow is not in it; the counter moves
+   * at release (square#26).
+   */
+  async spentToday(poster: Address): Promise<bigint> {
+    return this.publicClient.readContract({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "spentToday",
+      args: [poster],
+    });
+  }
+
+  /**
+   * Commit this account's policy: the circuit's Poseidon commitment (below
+   * the BN254 scalar field, or the registry refuses it) and the daily
+   * ceiling in USDC atomic units, at most `uint64`. Every call starts a new
+   * epoch.
+   */
+  async setPolicy(commitment: Hex, dailyLimit: bigint): Promise<TransactionResult> {
+    return this.write({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "setPolicy",
+      args: [commitment, dailyLimit],
+    });
+  }
+
+  /**
+   * The compliance module in the hook's slot, or null while the slot is
+   * empty. With a module in place every release out of escrow is checked
+   * against the client's policy and the proof the client bound to the job;
+   * without one no release is proof gated (docs/design/compliance-gate.md).
+   */
+  async complianceModule(): Promise<Address | null> {
+    const module = await this.read({
+      abi: squareHookAbi,
+      address: this.deployment.squareHook,
+      functionName: "complianceModule",
+    });
+    return module === zeroAddress ? null : module;
+  }
+
+  /**
+   * How far the proof's timestamp may sit from the block that releases the
+   * escrow, in seconds, as the installed module has it; null with no module.
+   * A proof older than this at release is refused, which is why binding one
+   * is a duty timed to the release, not a step of funding (square#335).
+   */
+  async complianceTolerance(): Promise<bigint | null> {
+    const module = await this.complianceModule();
+    if (module === null) return null;
+    const tolerance = await this.publicClient.readContract({ abi: complianceModuleAbi, address: module, functionName: "timestampTolerance" });
+    return BigInt(tolerance);
+  }
+
+  /**
+   * Bind a compliance proof to a job this account is the client of, while
+   * the job is Funded or Submitted (square#245): the hook reads it from the
+   * job at release and hands it to the module unchanged. Rebinding replaces
+   * it, which is how a proof is kept current as the payee, the net or the
+   * day's counter move. At most `MAX_COMPLIANCE_PROOF` bytes.
+   */
+  async setComplianceProof(jobId: bigint, proof: Hex): Promise<TransactionResult> {
+    return this.write({ abi: squareJobAbi, address: this.deployment.squareJob, functionName: "setComplianceProof", args: [jobId, proof] });
+  }
+
+  /** The proof bound to the job, `0x` when none is. */
+  async complianceProofOf(jobId: bigint): Promise<Hex> {
+    return this.read({ abi: squareJobAbi, address: this.deployment.squareJob, functionName: "complianceProofOf", args: [jobId] });
+  }
+
+  /**
+   * What the module would say to a release, without moving anything: the
+   * same eight bindings `checkRelease` applies at release, as a view. The
+   * payee and the amount are the hook's to resolve; `payeeOf` and
+   * `netPayout` are what it will pass. Null when no module is installed,
+   * since then nothing is asked.
+   */
+  async previewRelease(params: { jobId: bigint; payee: Address; amount: bigint; client: Address; proof: Hex }): Promise<boolean | null> {
+    const module = await this.complianceModule();
+    if (module === null) return null;
+    return this.publicClient.readContract({
+      abi: complianceModuleAbi,
+      address: module,
+      functionName: "previewRelease",
+      args: [params.jobId, params.payee, params.amount, this.deployment.usdc, params.client, params.proof],
     });
   }
 

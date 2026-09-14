@@ -608,7 +608,9 @@ The method defines no `did:aip`-specific properties and no new JSON-LD terms.
 
 [w3c/did-extensions#704](https://github.com/w3c/did-extensions/pull/704) was **merged on
 2026-05-31** and added `methods/aip.json`. A merged PR cannot be amended; the update is a
-new pull request against `w3c/did-extensions`.
+new pull request against `w3c/did-extensions`:
+[w3c/did-extensions#750](https://github.com/w3c/did-extensions/pull/750), which carries the
+entry below and passed the registry's automated checklist review against this document.
 
 The registry entry itself is small — name, contact, specification URL — so the substantive
 change is that the specification URL points at this document. The v1 specification stays
@@ -639,15 +641,17 @@ Two fields change substantively:
 `contactWebsite` also points at a repository that is being archived, so it needs to move
 with the rest.
 
-Checklist for the new PR:
+Checklist for the new PR, as #750 carries it:
 
-- [ ] `methods/aip.json`: `verifiableDataRegistry`, `specification`, `contactWebsite`
-- [ ] Keep the v1 document reachable at a stable URL and link it from §9 — a resolver
+- [x] `methods/aip.json`: `verifiableDataRegistry`, `specification`, `contactWebsite`
+      (and `contactName`, to Wiener Labs)
+- [x] Keep the v1 document reachable at a stable URL and link it from §9 — a resolver
       author implementing v1 support has to be able to read what they are implementing,
-      and archiving `aip-beta` must not break that link
-- [ ] State in the PR description that this is a substrate change (Solana → ERC-8004), not
+      and archiving `aip-beta` must not break that link (an archived repository stays
+      readable at the same URL)
+- [x] State in the PR description that this is a substrate change (Solana → ERC-8004), not
       an editorial clarification, so reviewers do not skim it
-- [ ] Cross-reference ERC-8004 as the underlying registry
+- [x] Cross-reference ERC-8004 as the underlying registry
 
 ### 13.1 What the registry checks
 
