@@ -212,7 +212,9 @@ const finalPath = () => path.join(CEREMONY, 'payment_final.zkey');
 const vkPath = () => path.join(CEREMONY, 'payment_vk.json');
 
 /**
- * The highest `payment_NNNN.zkey` on disk, or -1 when there is none.
+ * The `payment_NNNN.zkey` keys on disk, against the transcript: the highest
+ * index (-1 when there is none), the indices missing below it, and how many
+ * contributions the transcript records.
  *
  * The chain and the transcript are two states, updated one after the other and
  * not atomically, and the transcript used to be the only thing consulted about
@@ -225,38 +227,56 @@ const vkPath = () => path.join(CEREMONY, 'payment_vk.json');
  * already published a hash that appears in no artefact, and `verify-chain` saw
  * a key and a transcript that agreed with each other.
  *
- * So the tip is read from the directory, and the two states are compared before
- * anything irreversible runs.
+ * So the chain is read from the directory, and the two states are compared
+ * before anything irreversible runs. The whole directory, not only its highest
+ * key: each key descends from the one before it, so `payment_0000` and
+ * `payment_0002` with no `payment_0001` is a broken chain even when the highest
+ * index matches the transcript.
  */
-function chainTipOnDisk() {
-  if (!fs.existsSync(CEREMONY)) return -1;
-  let tip = -1;
-  for (const entry of fs.readdirSync(CEREMONY)) {
-    const match = /^payment_(\d{4})\.zkey$/.exec(entry);
-    if (match) tip = Math.max(tip, Number(match[1]));
+function chainState(transcript) {
+  const keys = [];
+  if (fs.existsSync(CEREMONY)) {
+    for (const entry of fs.readdirSync(CEREMONY)) {
+      const match = /^payment_(\d{4})\.zkey$/.exec(entry);
+      if (match) keys.push(Number(match[1]));
+    }
   }
-  return tip;
+  const tip = keys.length > 0 ? Math.max(...keys) : -1;
+  const present = new Set(keys);
+  const missing = [];
+  for (let i = 0; i <= tip; i += 1) {
+    if (!present.has(i)) missing.push(i);
+  }
+  return { tip, missing, recorded: transcript.contributions.length };
 }
 
 /**
  * Refuse to go on when the chain on disk and the transcript disagree.
  *
  * `init` writes `payment_0000.zkey` with an empty contribution list, so the
- * agreement is `tip === contributions.length` at every step. A higher tip is a
- * contribution nobody recorded; a lower one is a key that was deleted or never
- * arrived. Both need a person, not a retry — the remedy depends on which key
+ * agreement is every key from `payment_0000` to `tip` present, and
+ * `tip === contributions.length`, at every step. A higher tip is a contribution
+ * nobody recorded; a lower one, or a gap, is a key that was deleted or never
+ * arrived. Each needs a person, not a retry — the remedy depends on which key
  * the contributor published a hash for, and this script cannot know that.
  */
 function assertChainAgreesWithTranscript(transcript) {
-  const tip = chainTipOnDisk();
-  const recorded = transcript.contributions.length;
-  if (tip === recorded) return tip;
+  const { tip, missing, recorded } = chainState(transcript);
   if (tip < 0) {
     throw new Error(
       `no payment_NNNN.zkey in ${path.relative(ROOT, CEREMONY)}, but the transcript records\n`
       + `${recorded} contribution(s). The chain is missing; do not start over on top of it.`,
     );
   }
+  if (missing.length > 0) {
+    throw new Error(
+      `the chain on disk has a gap: ${missing.map((i) => path.relative(ROOT, keyPath(i))).join(', ')} `
+      + `${missing.length === 1 ? 'is' : 'are'} missing below ${path.relative(ROOT, keyPath(tip))}.\n`
+      + 'Each key descends from the one before it, so the chain cannot go on past a missing\n'
+      + 'link. Restore it before continuing.',
+    );
+  }
+  if (tip === recorded) return tip;
   throw new Error(
     `the chain on disk and the transcript disagree.\n`
     + `  highest key    ${path.relative(ROOT, keyPath(tip))}\n`
@@ -346,15 +366,9 @@ async function contribute(name) {
   const from = keyPath(index);
   const to = keyPath(index + 1);
   if (!fs.existsSync(from)) throw new Error(`${path.relative(ROOT, from)} is missing`);
-  if (fs.existsSync(to)) {
-    throw new Error(
-      `${path.relative(ROOT, to)} already exists.\n`
-      + 'Refusing to overwrite it: a key the transcript does not record is either an\n'
-      + 'interrupted contribution whose contributor has already published its hash, or\n'
-      + 'a file that does not belong in this directory. Look at it with\n'
-      + 'scripts/inspect-zkey-setup.mjs and decide by hand.',
-    );
-  }
+  // No separate check that `to` is absent: the agreement above means the keys on
+  // disk end at `from`, so a `to` already there has been refused by it, with the
+  // reason.
 
   // No -e. snarkjs prompts for entropy on stdin and the contributor types
   // something only they ever see.
@@ -395,8 +409,9 @@ async function contribute(name) {
   writeTranscript(transcript);
 
   // Then the two fields that come from reading the key back. A failure here
-  // leaves them null, which `verify-chain` reports as uncheckable rather than
-  // as agreement, and the contribution itself is already recorded.
+  // leaves them null, and the contribution itself is already recorded.
+  // `verify-chain` reports a contribution with either field null as a failure,
+  // because nothing can check it against the key, not as agreement.
   let last;
   try {
     const report = await inspect(to);
@@ -425,7 +440,10 @@ async function contribute(name) {
 
 async function verify() {
   const transcript = readTranscript();
-  const index = transcript.contributions.length;
+  // The chain so far is the chain on disk, and only once it agrees with the
+  // transcript (square#234): a verify that indexed by the transcript passed the
+  // recorded key while an unrecorded one sat beside it.
+  const index = assertChainAgreesWithTranscript(transcript);
   const key = fs.existsSync(finalPath()) ? finalPath() : keyPath(index);
   const ptau = path.join(BUILD, ADOPTED.file);
   verifyPtau(ptau);
@@ -453,13 +471,6 @@ async function beacon(roundArg) {
   // divergent directory is told immediately rather than after two round trips
   // to drand.
   const index = assertChainAgreesWithTranscript(transcript);
-  if (fs.existsSync(keyPath(index + 1))) {
-    throw new Error(
-      `${path.relative(ROOT, keyPath(index + 1))} exists, so the chain goes further than\n`
-      + 'the transcript records. Sealing here would leave that contribution out of the\n'
-      + 'final key. Reconcile the transcript before applying the beacon.',
-    );
-  }
 
   // Confirm we are talking to the chain the announcement named. The round
   // number is only meaningful relative to a chain's genesis and period, so all
@@ -602,6 +613,46 @@ async function verifyChain() {
   }
 
   process.stdout.write('\nchain\n');
+
+  // The keys on disk against the transcript, first, and whether or not there is
+  // a final key yet (square#234). Mid-ceremony is when the two diverge, and there
+  // is no final key then; and the final key cannot speak for the intermediate
+  // ones anyway. A contribution that finished without being recorded leaves a
+  // payment_NNNN.zkey the transcript does not mention; if the chain was then
+  // sealed one link short, the final key and the transcript agree with each
+  // other and both leave that contributor out.
+  const onDisk = chainState(transcript);
+  if (onDisk.tip < 0 && fs.existsSync(finalPath())) {
+    ok('no intermediate keys kept beside the final one');
+  } else if (onDisk.tip < 0) {
+    bad(`no payment_NNNN.zkey on disk and no final key, while the transcript records ${onDisk.recorded} contribution(s)`);
+  } else if (onDisk.missing.length > 0) {
+    bad(
+      `the keys on disk skip ${onDisk.missing.map((i) => path.basename(keyPath(i))).join(', ')} `
+      + `below ${path.basename(keyPath(onDisk.tip))}`,
+    );
+  } else if (onDisk.tip === onDisk.recorded) {
+    ok(`the keys on disk end at ${path.basename(keyPath(onDisk.tip))}, where the transcript ends`);
+  } else {
+    bad(
+      `the keys on disk end at ${path.basename(keyPath(onDisk.tip))} but the transcript records `
+      + `${onDisk.recorded} contribution(s)`,
+    );
+  }
+
+  // A contribution recorded before its read-back finished has no recorded name
+  // and no transcript hash (square#234). Nothing can compare such an entry with
+  // the key, so it is reported rather than passed over as agreement.
+  for (const entry of transcript.contributions) {
+    const unread = ['recorded_name', 'transcript_hash'].filter((field) => entry[field] == null);
+    if (unread.length > 0) {
+      bad(
+        `contribution ${entry.index} (${entry.name}) has no ${unread.join(' and no ')}, so it cannot `
+        + 'be checked against the key; fill it in from scripts/inspect-zkey-setup.mjs',
+      );
+    }
+  }
+
   if (!fs.existsSync(finalPath())) {
     bad('no final key');
   } else {
@@ -622,22 +673,6 @@ async function verifyChain() {
       bad(`key holds ${contributions.length} contribution(s), transcript claims ${transcript.contributions.length}`);
     }
 
-    // And the intermediate keys, which the final key cannot speak for
-    // (square#234). A contribution that finished without being recorded leaves
-    // a payment_NNNN.zkey the transcript does not mention; if the chain was then
-    // sealed one link short, the final key and the transcript agree with each
-    // other and both leave that contributor out.
-    const tip = chainTipOnDisk();
-    if (tip < 0) {
-      ok('no intermediate keys kept beside the final one');
-    } else if (tip === transcript.contributions.length) {
-      ok(`the keys on disk end at ${path.basename(keyPath(tip))}, where the transcript ends`);
-    } else {
-      bad(
-        `the keys on disk end at ${path.basename(keyPath(tip))} but the transcript records `
-        + `${transcript.contributions.length} contribution(s)`,
-      );
-    }
     if (contributions.length < 2) {
       bad('fewer than two independent contributions — this is not a multi-party ceremony');
     }

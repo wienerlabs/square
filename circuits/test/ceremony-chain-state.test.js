@@ -150,6 +150,46 @@ describe('a chain that has moved further than the transcript', () => {
   });
 });
 
+describe('a chain with a link missing', () => {
+  // The highest key matches the transcript, so a comparison of the tip alone
+  // passed; the key in between is gone.
+  it('stops `contribute` and names the missing key', () => {
+    writeTranscript(2);
+    writeKeys(0, 2);
+
+    const result = run(['contribute', 'Someone']);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('has a gap');
+    expect(result.stderr).toContain('payment_0001.zkey');
+    expect(readTranscript().contributions).toHaveLength(2);
+  });
+
+  it('stops `beacon` before it reaches drand', () => {
+    writeTranscript(2);
+    writeKeys(0, 2);
+
+    const result = run(['beacon', '31968374']);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('has a gap');
+    expect(fs.existsSync(path.join(ceremony, 'payment_final.zkey'))).toBe(false);
+  });
+});
+
+describe('`verify`, on a chain that has moved further than the transcript', () => {
+  // It indexed by the transcript and passed the recorded key while the
+  // unrecorded one sat beside it.
+  it('stops instead of verifying the key the transcript ends at', () => {
+    writeTranscript(1);
+    writeKeys(0, 1, 2);
+
+    const result = run(['verify']);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('disagree');
+    expect(result.stderr).toContain('payment_0002.zkey');
+    expect(result.stdout).not.toContain('verifies against the circuit');
+  });
+});
+
 describe('a chain that is behind the transcript', () => {
   it('stops rather than starting over on top of it', () => {
     writeTranscript(2);
@@ -246,6 +286,46 @@ describe.skipIf(!HAVE_ZKEY)('verify-chain, against the keys on disk', () => {
     prepare(1, [0, 1]);
     const result = run(['verify-chain'], { timeout: 300_000 });
     expect(result.stdout).toContain('the keys on disk end at payment_0001.zkey, where the transcript ends');
+  }, 600_000);
+});
+
+// Before there is a final key, which is when the two diverge. These need no
+// circuit: every check that does reports its absence and the run goes on.
+describe('verify-chain, mid-ceremony', () => {
+  it('reports keys the transcript does not account for, with no final key yet', () => {
+    writeTranscript(1);
+    writeKeys(0, 1, 2);
+    const result = run(['verify-chain'], { timeout: 300_000 });
+    expect(result.stdout).toContain('the keys on disk end at payment_0002.zkey but the transcript records 1 contribution(s)');
+    expect(result.stdout).toContain('no final key');
+    expect(result.code).toBe(1);
+  }, 600_000);
+
+  it('reports a missing link below the highest key', () => {
+    writeTranscript(2);
+    writeKeys(0, 2);
+    const result = run(['verify-chain'], { timeout: 300_000 });
+    expect(result.stdout).toContain('the keys on disk skip payment_0001.zkey below payment_0002.zkey');
+    expect(result.code).toBe(1);
+  }, 600_000);
+
+  // What a read-back failure leaves behind. The disk and the transcript agree,
+  // so only the empty fields are left to say anything.
+  it('reports a contribution recorded without the fields read back from its key', () => {
+    writeTranscript(2);
+    const transcript = readTranscript();
+    transcript.contributions[1].recorded_name = null;
+    transcript.contributions[1].transcript_hash = null;
+    fs.writeFileSync(transcriptPath(), `${JSON.stringify(transcript, null, 2)}\n`);
+    writeKeys(0, 1, 2);
+
+    const result = run(['verify-chain'], { timeout: 300_000 });
+    expect(result.stdout).toContain('the keys on disk end at payment_0002.zkey, where the transcript ends');
+    expect(result.stdout).toContain(
+      'contribution 2 (contributor 2) has no recorded_name and no transcript_hash, so it cannot be checked against the key',
+    );
+    expect(result.stdout).not.toContain('contribution 1 (contributor 1) has no');
+    expect(result.code).toBe(1);
   }, 600_000);
 });
 
