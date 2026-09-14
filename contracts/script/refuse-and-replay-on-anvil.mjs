@@ -175,7 +175,12 @@ function writeVerifierForThisBuild() {
   fs.writeFileSync(
     GENERATED,
     (source.slice(0, first) + constants + '\n' + source.slice(end))
-      .replace('contract Groth16Verifier {', 'contract VerifierForThisBuild {'),
+      .replace('contract Groth16Verifier {', 'contract VerifierForThisBuild {')
+      // The copy lands one directory deeper than the original, so its imports
+      // have to climb one further. square#231 moved SCALAR_FIELD into
+      // IGroth16Verifier.sol, where PolicyRegistry can read the same value, and
+      // this line is what keeps the generated copy compiling.
+      .replace(/from "\.\/interfaces\//g, 'from "../interfaces/'),
   );
 }
 
@@ -221,11 +226,12 @@ const VERIFIED = cast(['keccak', 'ReleaseVerified(uint256,address,uint256,bytes3
 // Finalizes and reports what happened: who was paid, what the counter did, and
 // which of the module's two events it emitted — with the refusal's reason.
 function finalize(stack, jobId, encodedProof) {
+  send(CLIENT, stack.kernel, 'setComplianceProof(uint256,bytes)', jobId, encodedProof);
   const provider = BigInt(read(stack.kernel, 'withdrawable(address)(uint256)', PROVIDER));
   const client = BigInt(read(stack.kernel, 'withdrawable(address)(uint256)', CLIENT));
   const spent = BigInt(read(stack.registry, 'spentToday(address)(uint256)', CLIENT));
 
-  const receipt = send(CRANKER, stack.keeper, 'finalize(uint256,bytes)', jobId, encodedProof);
+  const receipt = send(CRANKER, stack.keeper, 'finalize(uint256)', jobId);
 
   const moduleLogs = receipt.logs.filter((l) => l.address.toLowerCase() === stack.module.toLowerCase()
     && BigInt(l.topics[1] ?? 0) === jobId);

@@ -145,8 +145,14 @@ scope per call, in `input.scope`, so the same executor serves every caller.
 2. answers `{ status: 409, body: { error: "idempotency_key_reused" } }` when the key is known with a different hash
 3. otherwise runs the handler and stores the result with `putIfAbsent`
 
-Responses the `shouldStore` policy rejects (default: anything 5xx) are not stored, so a failed attempt can be retried
-with the same key. Duplicates that arrive while the first one is still running inside the same process wait for it
+Responses the `shouldStore` policy rejects are not stored, so a failed attempt can be retried with the same key. The
+default rejects anything 5xx and the three statuses that mean "not now" rather than "not this": 408, 425 and 429. A
+client that waits out `Retry-After` and comes back with the same key is doing what an idempotency key exists for, so
+it reaches the handler again instead of collecting the stored refusal for the rest of the TTL. `defaultShouldStore`
+and `TRANSIENT_REJECTION_STATUSES` are exported, so a stricter policy can be built on top of the default rather than
+beside it. A response marked with `markTransientRejection(c)` is never stored whatever the policy says, and
+`rateLimitMiddleware` marks its own 429, so this package cannot store a refusal it produced itself. Duplicates that
+arrive while the first one is still running inside the same process wait for it
 and then replay. Across processes the store decides: `putIfAbsent` is atomic, the first writer wins, and the second
 caller receives the first writer's response. A handler that is not safe to run twice concurrently across processes
 should additionally take a per-key lock; the store interface deliberately does not hide that.
@@ -177,6 +183,16 @@ The Hono middleware reads `Idempotency-Key` (configurable `header`), applies to 
 and returns 400 when `required` is set and the header is missing. It takes `ttlMs` and `shouldStore` and passes both to
 `withIdempotency`, so a route that should not remember a 4xx can say
 `shouldStore: (response) => response.status < 400` instead of reaching for the lower layer.
+
+**A replay carries the first response's headers, not only its status and body.** `Location`, `ETag`, `Set-Cookie` and
+everything else the handler set come back as the first caller saw them, so a client that lost the connection to
+`POST /orders` still learns the address of the resource it created, and a `POST` that opened a session still receives
+its cookie. Several `Set-Cookie` headers are captured through `getSetCookie()` and replayed one `append` at a time, so
+two cookies are never folded into one line. Ten headers are regenerated rather than replayed, because they describe
+this response and not the stored one: `Date`, `Content-Length`, and the hop-by-hop set (`Connection`, `Keep-Alive`,
+`Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`). The headers ride in the
+`response` column beside the body text, inside the JSON document the store already held, so this costs no schema
+change, and a row written before this shape existed still replays with the content type it recorded.
 
 ## Rate limiting
 
@@ -231,13 +247,21 @@ const receipt = await withRpcRetry(() => client.getTransactionReceipt({ hash }),
 ```
 
 The transport is viem's `fallback([...http(url)])` with health tracking around each endpoint. An endpoint that fails
-`failureThreshold` times in a row (default 1) enters a cooldown of `baseCooldownMs * 2^n` capped at `maxBackoffMs`,
-where `n` grows with every further consecutive failure and resets on the first success. Endpoints keep their
+`failureThreshold` logical requests in a row (default 1) enters a cooldown of `baseCooldownMs * 2^n` capped at
+`maxBackoffMs`, where `n` grows with every further consecutive failure and resets on the first success. Endpoints keep their
 configured priority; a cooling endpoint is skipped as long as a healthier one follows it in the list, and once the
 cooldown ends it is tried again. If every endpoint is cooling down the request is still sent to them in order, so a
 brief outage degrades the client instead of failing it closed. `onFailover(from, to, error)` fires each time a request
 moves from a failed endpoint to the next one, with the error the failed endpoint produced. `getHealth()` returns a
 snapshot per endpoint: healthy flag, consecutive failures, cooldown deadline, last error and timestamps.
+
+**One logical request is one upstream call per endpoint.** The `fallback` wrapper is built with `retryCount: 0`
+unless the caller asks for more, so a request walks the endpoint list once: two dead endpoints cost two upstream
+calls, not the eight that viem's own default of three retries would add, and the three-endpoint shape above under
+`withRpcRetry({ attempts: 4 })` costs twelve calls rather than forty-eight. Retrying belongs to `withRpcRetry`, where
+it is visible, countable and applied only after the whole list has been tried once. Health is counted on the same
+unit: an endpoint that fails inside one logical request adds one to `consecutiveFailures` however many times the
+transport called it, so one bad request leaves it cooling for `baseCooldownMs` rather than for `baseCooldownMs * 8`.
 
 `transportFactory` swaps `http(url)` for anything else, which is how the tests use `custom()` transports.
 
@@ -277,18 +301,39 @@ which happens last so a rejected message never burns a nonce. It never throws fo
 `{ ok: false, reason }` with one of `invalid_signature`, `actor_mismatch`, `unexpected_actor`, `not_yet_valid`,
 `expired`, `nonce_reused`, `chain_mismatch`, `missing_expected_chain_id`, `malformed_message`.
 
+`verifyAction` also caps how long a message may live: `expiresAt - issuedAt` may not exceed `maxLifetimeSeconds`
+(default `DEFAULT_MAX_ACTION_LIFETIME_SECONDS`, 300). Without a cap the signer decides how long the verifier has to
+remember its nonce, and a message that expires in a thousand years is a nonce no store can ever drop. The cap is
+checked before the signature is recovered, and a message that exceeds it is refused with `malformed_message` without
+burning a nonce.
+
 `expectedChainId` is required. A `SquareAction` carries its own `chainId` and the domain is built from it, so a
 signature made for one chain recovers correctly on any verifier that does not say which chain it is: the check exists
 only if the caller asks for it, so the caller is not allowed to leave it out. A call that reaches `verifyAction`
 without one is refused with `missing_expected_chain_id` before the signature is recovered and without burning a nonce.
 
 `memoryNonceStore` is per process; back the interface with your database for anything that runs on more than one
-instance. It holds one entry per actor and one nonce per entry, expires both lazily, and prunes the whole map every
-`pruneEvery` calls (default `MEMORY_NONCE_PRUNE_EVERY`, 64), dropping actors whose nonces have all expired so an actor
-that never returns is not carried for the life of the process. `prune()` runs that pass on demand and returns the
-number of actors it dropped; `size()` reports how many actors are held. `canonicalJson(value)` is the RFC 8785-style serialiser used by `hashRequest`, exported for reuse: sorted
+instance. It holds one entry per actor and one entry per nonce, and `consume` is a single map lookup: it reads the
+expiry recorded for that one nonce and never walks the actor's other nonces, so the cost of a verification does not
+grow with the number of nonces the actor is holding. Expired entries are dropped by a sweep that runs at most once
+every `pruneIntervalSeconds` (default `MEMORY_NONCE_PRUNE_INTERVAL_SECONDS`, 60) instead of every n calls, so a burst
+cannot turn the hot path into a full scan. The sweep drops actors whose nonces have all expired, so an actor that
+never returns is not carried for the life of the process, and the lifetime cap above bounds what one actor can pile
+up between two sweeps. `prune()` runs that pass on demand and returns the number of actors it dropped; `size()`
+reports how many actors are held.
+
+`canonicalJson(value)` is the RFC 8785-style serialiser used by `hashRequest`, exported for reuse: sorted
 keys, no whitespace, numbers exactly as JSON prints them, `toJSON` honoured, and it refuses `NaN`, `Infinity`, bigint
 and top-level `undefined` rather than producing a form that could collide.
+
+**Only a plain object carries its whole state in its own enumerable keys, so only a plain object is serialised.** A
+`Map`, a `Set`, and an instance of a class that keeps its state in private fields or accessors all answer
+`Object.keys` with nothing, which would make every one of them the same `{}` and hand two unrelated requests one
+hash. A typed array is the other half of the same problem: its indices are own keys, so it would serialise as the
+plain object with those indices and collide with it. Each is refused with a `TypeError` that names what it saw. The
+escape hatch is the one JSON already defines: give the class a `toJSON` method and it is serialised through that,
+before the check runs. Objects created with `Object.create(null)` are serialised, because all of their state is own
+enumerable keys too.
 
 ## Tests
 

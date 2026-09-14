@@ -45,7 +45,9 @@ async function main(): Promise<void> {
   const metrics = createMetrics({ service: "square-keeper" });
   const databaseUrl = process.env["DATABASE_URL"];
   const ephemeralMirror = !databaseUrl;
-  const db = databaseUrl ? pgDatabase(databaseUrl) : await pgliteDatabase();
+  const db = databaseUrl
+    ? pgDatabase(databaseUrl, { onPoolError: (error) => logger.error("keeper.pool_error", { error: error.message }) })
+    : await pgliteDatabase();
   if (ephemeralMirror) {
     await migrate(db, MIGRATIONS_DIR, "up");
     logger.warn("keeper.ephemeral_mirror", {

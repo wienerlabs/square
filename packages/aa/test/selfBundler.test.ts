@@ -36,7 +36,7 @@ import {
   intrinsicCalldataGas,
   INTRINSIC_TRANSACTION_GAS,
 } from "../src/callGasLimit.js";
-import { SIMPLE_ACCOUNT_IMPLEMENTATION_V07 } from "../src/constants.js";
+import { SIMPLE_ACCOUNT_FACTORY_V07, SIMPLE_ACCOUNT_IMPLEMENTATION_V07 } from "../src/constants.js";
 import { createSelfBundler, type SelfBundler } from "../src/selfBundler.js";
 import {
   CallSimulationRevertedError,
@@ -46,6 +46,7 @@ import {
 import {
   toSimpleSmartAccount,
   SIMPLE_ACCOUNT_PROXY_DISPATCH_GAS,
+  SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT,
   type SimpleSmartAccount,
 } from "../src/simpleAccount.js";
 
@@ -271,6 +272,54 @@ describe("an agent smart account accepts and submits a job through the self-bund
     expect(decoded.errorName).toBe("WrongStatus");
     expect((await readJob(env, openJob)).status).toBe(JobStatus.Open);
     expect(await bundler.getDeposit(account.address)).toBe(depositBefore - result.actualGasCost);
+  });
+
+  // The override on the operation that deploys the account, which is every
+  // account's first. Before #274 the account's gas hint simulated the call
+  // before the override was consulted, so this was the one operation the
+  // documented way past a simulated revert could not reach.
+  describe("callGasLimit given explicitly reaches the first operation too", () => {
+    let fresh: SimpleSmartAccount;
+    let openJob: bigint;
+    let calls: { to: Hex; data: Hex }[];
+
+    beforeAll(async () => {
+      fresh = await toSimpleSmartAccount({ client: publicClient, owner, salt: 13n });
+      openJob = await createJob(env, client, fresh.address);
+      calls = [{ to: deployment.SquareJob, data: encodeSubmit(openJob, deliverable) }];
+    });
+
+    it("without it the reverting call is refused on the undeployed account, as it is on a deployed one", async () => {
+      expect(await fresh.isDeployed()).toBe(false);
+      await expect(bundler.prepareUserOperation(fresh, calls, fees)).rejects.toBeInstanceOf(CallSimulationRevertedError);
+    });
+
+    it("with it the operation is prepared: the call is not simulated, the deployment is still priced", async () => {
+      const unsigned = await bundler.prepareUserOperation(fresh, calls, { ...fees, callGasLimit: 150_000n });
+
+      expect(unsigned.callGasLimit).toBe(150_000n);
+      expect(unsigned.factory).toBe(SIMPLE_ACCOUNT_FACTORY_V07);
+      expect(unsigned.factoryData).toBe((await fresh.getFactoryArgs()).factoryData);
+      expect(unsigned.verificationGasLimit).toBeGreaterThan(SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT);
+      expect(unsigned.preVerificationGas).toBeGreaterThan(0n);
+      expect(await fresh.isDeployed()).toBe(false);
+    });
+
+    it("and submitted: the account is deployed by it and the call's revert is reported, not hidden", async () => {
+      await bundler.depositTo(fresh.address, parseEther("1"));
+      const depositBefore = await bundler.getDeposit(fresh.address);
+
+      const result = await bundler.sendUserOperation(fresh, calls, { ...fees, callGasLimit: 150_000n });
+
+      expect(result.success).toBe(false);
+      expect(result.receipt.status).toBe("success");
+      const decoded = decodeErrorResult({ abi: squareJobAbi, data: result.revertReason as Hex });
+      expect(decoded.errorName).toBe("WrongStatus");
+      expect(await fresh.isDeployed()).toBe(true);
+      expect(await fresh.getNonce()).toBe(1n);
+      expect((await readJob(env, openJob)).status).toBe(JobStatus.Open);
+      expect(await bundler.getDeposit(fresh.address)).toBe(depositBefore - result.actualGasCost);
+    });
   });
 
   it("refuses an account that targets a different EntryPoint", async () => {

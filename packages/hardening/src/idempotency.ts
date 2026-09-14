@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Context, MiddlewareHandler } from "hono";
 import { idempotencyKeys, type Database, type Json } from "@squaresdk/data";
 import { canonicalJson } from "./canonicalJson.js";
+import { isTransientRejection, TRANSIENT_REJECTION_STATUSES } from "./transient.js";
 
 export interface RequestFingerprint {
   method: string;
@@ -23,6 +24,11 @@ export function hashRequest(request: RequestFingerprint): string {
 export interface HandlerResponse {
   status: number;
   body: unknown;
+  transient?: boolean | undefined;
+}
+
+export function defaultShouldStore(response: HandlerResponse): boolean {
+  return response.status < 500 && !TRANSIENT_REJECTION_STATUSES.has(response.status);
 }
 
 export interface StoredResponse {
@@ -154,7 +160,7 @@ export function withIdempotency<Input extends IdempotencyRequest>(
   options: WithIdempotencyOptions = {}
 ): (input: Input) => Promise<IdempotentOutcome> {
   const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
-  const shouldStore = options.shouldStore ?? ((response: HandlerResponse) => response.status < 500);
+  const shouldStore = options.shouldStore ?? defaultShouldStore;
   const inFlight = new Map<string, Promise<IdempotentOutcome>>();
   const execute = async (input: Input): Promise<IdempotentOutcome> => {
     const id = entryId(input.scope, input.key);
@@ -167,7 +173,9 @@ export function withIdempotency<Input extends IdempotencyRequest>(
       const existing = await store.get(input.scope, input.key);
       if (existing !== undefined) return outcomeFromStored(existing, input.requestHash);
       const response = await handler(input);
-      if (!shouldStore(response)) return { source: "handler", status: response.status, body: response.body };
+      if (response.transient === true || !shouldStore(response)) {
+        return { source: "handler", status: response.status, body: response.body };
+      }
       const put = await store.putIfAbsent(input.scope, input.key, input.requestHash, response, ttlMs);
       if (put.status === "exists") return outcomeFromStored(put.stored, input.requestHash);
       return { source: "handler", status: response.status, body: response.body };
@@ -192,10 +200,23 @@ export interface IdempotencyMiddlewareOptions {
   methods?: readonly string[] | undefined;
 }
 
-interface CapturedBody {
-  contentType: string | null;
+interface CapturedResponse {
+  headers: [string, string][];
   text: string;
 }
+
+const REGENERATED_HEADERS: ReadonlySet<string> = new Set([
+  "connection",
+  "content-length",
+  "date",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
 
 interface MiddlewareInput extends IdempotencyRequest {
   respond: () => Promise<HandlerResponse>;
@@ -233,16 +254,45 @@ async function parsedRequestBody(c: Context): Promise<unknown> {
   }
 }
 
-async function captureBody(response: Response): Promise<CapturedBody> {
-  return { contentType: response.headers.get("content-type"), text: await response.clone().text() };
+function setCookies(headers: Headers): string[] {
+  const readAll = (headers as { getSetCookie?: () => string[] }).getSetCookie;
+  if (typeof readAll === "function") return readAll.call(headers);
+  const combined = headers.get("set-cookie");
+  return combined === null ? [] : [combined];
 }
 
-function asCapturedBody(body: unknown): CapturedBody {
-  if (typeof body === "object" && body !== null && typeof (body as CapturedBody).text === "string") {
-    const contentType = (body as CapturedBody).contentType;
-    return { contentType: typeof contentType === "string" ? contentType : null, text: (body as CapturedBody).text };
+function replayableHeaders(headers: Headers): [string, string][] {
+  const captured: [string, string][] = [];
+  headers.forEach((value, name) => {
+    const lowercased = name.toLowerCase();
+    if (lowercased === "set-cookie" || REGENERATED_HEADERS.has(lowercased)) return;
+    captured.push([lowercased, value]);
+  });
+  for (const cookie of setCookies(headers)) captured.push(["set-cookie", cookie]);
+  return captured;
+}
+
+async function captureResponse(response: Response): Promise<CapturedResponse> {
+  return { headers: replayableHeaders(response.headers), text: await response.clone().text() };
+}
+
+function isHeaderPair(entry: unknown): entry is [string, string] {
+  return Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string" && typeof entry[1] === "string";
+}
+
+function storedHeaders(stored: { headers?: unknown; contentType?: unknown }): [string, string][] {
+  if (Array.isArray(stored.headers)) {
+    return stored.headers.filter(isHeaderPair).map(([name, value]): [string, string] => [name.toLowerCase(), value]);
   }
-  return { contentType: "application/json", text: JSON.stringify(body ?? null) };
+  return typeof stored.contentType === "string" ? [["content-type", stored.contentType]] : [];
+}
+
+function asCapturedResponse(body: unknown): CapturedResponse {
+  if (typeof body === "object" && body !== null && typeof (body as CapturedResponse).text === "string") {
+    const stored = body as { headers?: unknown; contentType?: unknown; text: string };
+    return { headers: storedHeaders(stored), text: stored.text };
+  }
+  return { headers: [["content-type", "application/json"]], text: JSON.stringify(body ?? null) };
 }
 
 function replayResponse(outcome: Exclude<IdempotentOutcome, { source: "handler" }>): Response {
@@ -252,9 +302,10 @@ function replayResponse(outcome: Exclude<IdempotentOutcome, { source: "handler" 
       headers: { "content-type": "application/json" },
     });
   }
-  const captured = asCapturedBody(outcome.body);
-  const headers = new Headers({ "idempotent-replayed": "true" });
-  if (captured.contentType !== null) headers.set("content-type", captured.contentType);
+  const captured = asCapturedResponse(outcome.body);
+  const headers = new Headers();
+  for (const [name, value] of captured.headers) headers.append(name, value);
+  headers.set("idempotent-replayed", "true");
   const body = NULL_BODY_STATUSES.has(outcome.status) || captured.text === "" ? null : captured.text;
   return new Response(body, { status: outcome.status, headers });
 }
@@ -298,7 +349,7 @@ export function idempotencyMiddleware(
       requestHash,
       respond: async () => {
         await next();
-        return { status: c.res.status, body: await captureBody(c.res) };
+        return { status: c.res.status, body: await captureResponse(c.res), transient: isTransientRejection(c) };
       },
     });
     if (outcome.source === "handler") return;

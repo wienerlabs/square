@@ -8,7 +8,8 @@ import {
   type TaskCreateParams,
   type TaskStatusParams,
 } from "./messages.js";
-import { TaskState } from "./states.js";
+import type { TaskSettlement } from "./settlement.js";
+import { JOB_STATUS_NAMES, TaskState } from "./states.js";
 import { TaskMachine, TaskTransitionError, type TaskRecord } from "./task-machine.js";
 
 /**
@@ -32,6 +33,12 @@ import { TaskMachine, TaskTransitionError, type TaskRecord } from "./task-machin
 
 /**
  * Runs the actual work. Resolving means delivered; throwing means failed.
+ *
+ * What it resolves with depends on how the server was composed. Without a
+ * settlement the value is the deliverable itself, the reference that
+ * DELIVERED carries. With one, it is the delivered content: the settlement
+ * hashes it, puts the hash on chain with `submit`, and DELIVERED carries
+ * what went on chain.
  *
  * `signal` aborts when the task is timed out (`handlerTimeoutMs`). A handler
  * that keeps going after it is not counted against the provider any more and
@@ -60,6 +67,13 @@ export interface A2AServerOptions {
    * with Busy.
    */
   handlerTimeoutMs?: number;
+  /**
+   * How tasks reach the chain. With it, `task/create` refuses a job the chain
+   * does not show as funded for this provider, DELIVERED is produced by the
+   * on-chain `submit`, and `task/status` reports the job's status as the chain
+   * has it. Without it the server is the pure protocol, as before.
+   */
+  settlement?: TaskSettlement;
 }
 
 /**
@@ -91,6 +105,7 @@ export class A2AServer {
   private readonly handlers: Record<string, CapabilityHandler>;
   private readonly maxConcurrent: number;
   private readonly handlerTimeoutMs: number | undefined;
+  private readonly settlement: TaskSettlement | undefined;
   private running = 0;
 
   constructor(options: A2AServerOptions) {
@@ -98,6 +113,7 @@ export class A2AServer {
     this.handlers = options.handlers;
     this.maxConcurrent = options.maxConcurrent ?? 5;
     this.handlerTimeoutMs = options.handlerTimeoutMs;
+    this.settlement = options.settlement;
   }
 
   capabilities(): string[] {
@@ -133,7 +149,7 @@ export class A2AServer {
     }
   }
 
-  private create(id: JsonRpcId, raw: Record<string, unknown>, context: CallContext): JsonRpcResponse {
+  private async create(id: JsonRpcId, raw: Record<string, unknown>, context: CallContext): Promise<JsonRpcResponse> {
     for (const field of REQUIRED_CREATE_FIELDS) {
       if (typeof raw[field] !== "string" || !(raw[field] as string)) {
         return rpcError(id, RpcErrorCode.InvalidParams, `missing or empty ${field}`);
@@ -171,6 +187,19 @@ export class A2AServer {
     }
     if (this.running >= this.maxConcurrent) {
       return rpcError(id, RpcErrorCode.Busy, "at capacity; retry shortly");
+    }
+
+    // The chain's say, before any work is done. A job that is not Funded, or
+    // is funded for another provider, gets no handler run: the work would be
+    // unpaid, and the provider's one on-chain action, submit, would revert at
+    // the end of it. Asked after the cheap refusals above, so a request the
+    // server would refuse anyway costs no chain read.
+    if (this.settlement) {
+      const verdict = await this.settlement.admit(params.jobId, {
+        capability: params.capability,
+        callerDid: params.callerDid,
+      });
+      if (!verdict.ok) return rpcError(id, RpcErrorCode.JobNotFunded, verdict.reason);
     }
 
     let task: TaskRecord;
@@ -224,8 +253,16 @@ export class A2AServer {
                 expire(new Error(`handler timed out after ${this.handlerTimeoutMs}ms`));
               }, this.handlerTimeoutMs);
             });
-      const deliverable = deadline === undefined ? await work : await Promise.race([work, deadline]);
-      this.machine.deliver(taskId, deliverable);
+      const output = deadline === undefined ? await work : await Promise.race([work, deadline]);
+      if (this.settlement) {
+        // DELIVERED is produced by the chain, not reported to it: the
+        // settlement's submit either lands, and the task carries what
+        // landed, or throws, and the task fails with the chain's reason.
+        const delivery = await this.settlement.deliver(params.jobId, output, { taskId, capability: params.capability });
+        this.machine.deliver(taskId, delivery.deliverable, delivery.reference);
+      } else {
+        this.machine.deliver(taskId, output);
+      }
     } catch (err) {
       try {
         this.machine.fail(taskId, err instanceof Error ? err.message : String(err));
@@ -238,7 +275,7 @@ export class A2AServer {
     }
   }
 
-  private status(id: JsonRpcId, params: TaskStatusParams, context: CallContext): JsonRpcResponse {
+  private async status(id: JsonRpcId, params: TaskStatusParams, context: CallContext): Promise<JsonRpcResponse> {
     if (typeof params.taskId !== "string" || !params.taskId) {
       return rpcError(id, RpcErrorCode.InvalidParams, "missing taskId");
     }
@@ -249,11 +286,17 @@ export class A2AServer {
     if (!task || (context.callerDid !== undefined && task.callerDid !== context.callerDid)) {
       return rpcError(id, RpcErrorCode.TaskNotFound, `no such task: ${params.taskId}`);
     }
+    // The job's status is read now and returned, not kept: whether the
+    // evaluator has completed or rejected the job is the chain's to say, and
+    // a copy of it here would be a second ledger that could disagree.
+    const job = this.settlement?.jobStatus ? await this.settlement.jobStatus(task.jobId) : undefined;
     return rpcResult(id, {
       taskId: task.id,
       state: task.state,
       ...(task.deliverable !== undefined ? { deliverable: task.deliverable } : {}),
       ...(task.reason !== undefined ? { reason: task.reason } : {}),
+      ...(task.reference !== undefined ? { reference: task.reference } : {}),
+      ...(job !== undefined ? { job: { status: job, name: JOB_STATUS_NAMES[job] ?? String(job) } } : {}),
       updatedAt: task.updatedAt,
     });
   }

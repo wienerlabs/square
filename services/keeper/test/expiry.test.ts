@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Hex } from "viem";
 import { JobStatus, deploymentFor, type SquareClient } from "@squaresdk/core";
-import { jobs, keeperActions, migrate, MIGRATIONS_DIR, pgliteDatabase, type Database } from "@squaresdk/data";
+import { jobs, keeperActions, keeperJobState, migrate, MIGRATIONS_DIR, pgliteDatabase, type Database } from "@squaresdk/data";
 import { createMetrics, type Metrics } from "@squaresdk/observability";
 import { Keeper } from "../src/run.js";
 
@@ -155,7 +155,7 @@ describe("the near-expiry warning", () => {
   it("says nothing about a job whose expiry already passed", async () => {
     const db = await openDatabase();
     try {
-      await jobs.upsert(db, job({ jobId: 1n }));
+      await jobs.upsert(db, job({ jobId: 1n, expiredAt: NOW - 2_592_000n }));
       const chain = newChain({ expiredAt: NOW - 2_592_000n });
       const { keeper, logs } = build(db, chain);
 
@@ -229,7 +229,7 @@ describe("the expiry sweep", () => {
     }
   });
 
-  it("leaves a failed attempt in the set and counts it", async () => {
+  it("backs a failed attempt off, gives up after the policy's count, and lets the operator reopen it", async () => {
     const db = await openDatabase();
     try {
       await jobs.upsert(db, expiredJob(1n));
@@ -241,14 +241,60 @@ describe("the expiry sweep", () => {
           throw new Error("execution reverted: NoAgentBound");
         },
       } as unknown as SquareClient;
-      const { keeper, metrics } = build(db, chain, { client: failing });
+      const { keeper, metrics, logs } = build(db, chain, {
+        client: failing,
+        retryPolicy: { baseDelaySeconds: 60n, maxDelaySeconds: 600n, giveUpAfter: 3, maxJournalRowsPerJob: 3 },
+      });
 
-      const first = await keeper.sweepExpiries();
-      expect(first).toMatchObject({ scanned: 1, recorded: [], failed: [1n] });
+      const first = await keeper.sweepExpiries(NOW);
+      expect(first).toMatchObject({ scanned: 1, recorded: [], failed: [1n], gaveUp: [] });
       expect(metrics.snapshot().keeperFailures).toBeGreaterThan(0);
 
-      const second = await keeper.sweepExpiries();
+      expect((await keeper.sweepExpiries(NOW + 30n)).scanned).toBe(0);
+      expect((await keeper.sweepExpiries(NOW + 60n)).failed).toEqual([1n]);
+      expect((await keeper.sweepExpiries(NOW + 120n)).scanned).toBe(0);
+      const third = await keeper.sweepExpiries(NOW + 180n);
+      expect(third).toMatchObject({ scanned: 1, failed: [], gaveUp: [1n] });
+      expect((await keeper.sweepExpiries(NOW + 86_400n)).scanned).toBe(0);
+      expect(logs.filter((entry) => entry.event === "keeper.record_expiry_gave_up")).toHaveLength(1);
+
+      const journaled = (await keeperActions.recent(db, CHAIN, 100)).filter((row) => row.action === "recordExpiry");
+      expect(journaled).toHaveLength(3);
+      expect(journaled.some((row) => row.gaveUp && row.reason?.startsWith("gave up after 3 attempts"))).toBe(true);
+
+      expect(await keeperJobState.clearExpiryGiveUp(db, CHAIN, 1n)).toBe(1);
+      expect((await keeper.sweepExpiries(NOW + 86_400n)).failed).toEqual([1n]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("records the twenty sixth expiry while twenty five jobs keep reverting", async () => {
+    const db = await openDatabase();
+    try {
+      for (let id = 1n; id <= 26n; id += 1n) await jobs.upsert(db, expiredJob(id));
+      const chain = newChain();
+      const client = fakeClient(chain);
+      const mostlyFailing = {
+        ...client,
+        recordExpiry: async (jobId: bigint) => {
+          if (jobId <= 25n) throw new Error("execution reverted: NoAgentBound");
+          chain.recordCalls.push(jobId);
+          return { hash: txHash, receipt: { gasUsed: 47_953n }, events: [] };
+        },
+      } as unknown as SquareClient;
+      const { keeper } = build(db, chain, { client: mostlyFailing, expiryBatchSize: 25 });
+
+      const first = await keeper.sweepExpiries(NOW);
+      expect(first.scanned).toBe(25);
+      expect(first.failed).toHaveLength(25);
+      expect(first.recorded).toEqual([]);
+
+      const second = await keeper.sweepExpiries(NOW + 1n);
+
       expect(second.scanned).toBe(1);
+      expect(second.recorded).toEqual([26n]);
+      expect(chain.recordCalls).toEqual([26n]);
     } finally {
       await db.close();
     }
