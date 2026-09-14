@@ -214,5 +214,5 @@ describe.skipIf(!reachable)("keeper against anvil", () => {
     expect((await disputes.get(db, 31337, jobId))?.closed).toBe(true);
     const again = await keeper.tick((await publicClient.getBlock()).timestamp);
     expect(again.bondsSettled).not.toContain(jobId);
-  });
+  }, 120_000);
 });
