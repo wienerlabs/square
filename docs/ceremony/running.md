@@ -102,7 +102,10 @@ node scripts/ceremony.mjs verify-chain
 
 It checks the phase-1 file by hash, the compiled circuit against the hash the
 ceremony started from, the final key against circuit and ptau, the contribution
-count against the transcript, and the beacon three ways: the value drand
+count against the transcript, the keys on disk against the transcript — none
+missing from the chain and none the transcript does not record, checked before
+there is a final key as well as after (square#234) — any contribution recorded
+without the hash and name read back from its key, and the beacon three ways: the value drand
 publishes for that round, fetched live rather than read from the transcript; the
 round's BLS signature against **the group public key pinned in `ceremony.mjs`**;
 and that the round lands after the last contribution. Then the verifying key: it
