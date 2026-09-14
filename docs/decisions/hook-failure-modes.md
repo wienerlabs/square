@@ -76,6 +76,21 @@ the module inside `try/catch`; a revert reads as "not verified", emits
 validation response on the ERC-8004 registry when a module is installed.
 Compliance is a signal on the release, not a lock on the escrow.
 
+That is only safe while the check cannot fail after the preview passed, because
+by then the kernel has paid on the preview. [#225][i225] found three ways it
+could: the module no longer a registered spender, the job's hook not the one
+the module authorises, and a `hookGasLimit` between what the preview and the
+check cost. Each was a payment with nothing booked and the same proof good for
+the next job. The module's preview now refuses the first two and its
+constructor refuses the third ([compliance-gate.md](../design/compliance-gate.md#when-the-preview-said-yes-and-the-check-could-not)).
+Should the two still disagree, `afterAction` reports what the kernel paid as
+`ReleaseUnconfirmed(jobId, payee, amount)`, and that event has its reader too:
+the indexer counts it into
+`square_hook_write_failures_total{kind="complianceCheck"}` under the same
+`hookWriteFailures` alert.
+
+[i225]: https://github.com/wienerlabs/square/issues/225
+
 ## What this fixes for #27
 
 A gating module cannot lock money by reverting, because the kernel no longer
