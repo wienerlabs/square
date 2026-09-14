@@ -146,7 +146,9 @@ describe.skipIf(!hasArtifacts)('POST /prove, real proof', () => {
     }
   });
 
-  it('reports a malformed blocked address without echoing it', async () => {
+  // A malformed address is the caller's mistake, so it is refused at the gate
+  // with 400 and logged as a rejection, not as a proof that failed (square#251).
+  it('refuses a malformed blocked address with 400, without echoing it', async () => {
     const malformed = { ...NON_COMPLIANT_REQUEST, blocked_addresses: ['not-base58-!!!'] };
 
     capture();
@@ -154,10 +156,13 @@ describe.skipIf(!hasArtifacts)('POST /prove, real proof', () => {
     console.log = original.log;
     console.error = original.error;
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(400);
     expect(response.body.error).toContain('blocked_addresses');
     expect(response.body.error).not.toContain('not-base58-!!!');
-    expect(captured.join('\n')).not.toContain('not-base58-!!!');
+    const logs = captured.join('\n');
+    expect(logs).not.toContain('not-base58-!!!');
+    expect(logs).toContain('"event":"request_rejected"');
+    expect(logs).not.toContain('"event":"proof_failed"');
   });
 });
 

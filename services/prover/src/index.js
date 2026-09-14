@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { ARTIFACT_PATHS, generateProof, validateRequest } from './prover.js';
-import { logEntriesForProof, proofFailedLogEntry, requestRejectedLogEntry } from './logging.js';
+import { logEntriesForProof, proofFailedLogEntry, requestFailedLogEntry, requestRejectedLogEntry } from './logging.js';
 import { openapiSpec } from './openapi.js';
 import { accessSync, constants } from 'node:fs';
 import { createHealth, createMetrics, mountObservability } from '@squaresdk/observability';
@@ -22,7 +22,9 @@ app.use(
     methods: ['GET', 'POST'],
   }),
 );
-app.use(express.json({ limit: '256kb' }));
+// One value, so the limit and the message that reports it cannot disagree.
+const BODY_LIMIT = '256kb';
+app.use(express.json({ limit: BODY_LIMIT }));
 
 app.get('/api-docs.json', (_req, res) => {
   res.json(openapiSpec);
@@ -127,6 +129,45 @@ app.post('/prove', async (req, res) => {
     console.error(JSON.stringify(entry));
     res.status(500).json({ error: entry.error });
   }
+});
+
+// A body the service could not read, answered the way every other refusal is.
+//
+// square#252. With no four-argument handler, what express.json raises -- a body
+// that is not JSON, one over the limit, a charset it will not decode -- went to
+// Express's default handler: an HTML page, with the stack trace in development,
+// and `<pre>Bad Request</pre>` in production with the stack written to stderr as
+// bare lines. The OpenAPI spec promises JSON on the error path, the log pipeline
+// reads one JSON object per line, and the stack carried the first bytes of the raw
+// body, because body-parser's SyntaxError quotes them ("max_daily_"... is not
+// valid JSON).
+//
+// So the status body-parser chose is kept, the message is picked here by the kind
+// of error rather than read off it, and the log line has the shape of every other
+// one. No part of the request reaches either.
+const UNREADABLE_BODY = Object.freeze({
+  'entity.parse.failed': 'the request body is not valid JSON',
+  'entity.too.large': `the request body is larger than the ${BODY_LIMIT} this service accepts`,
+  'request.aborted': 'the request body ended before it was complete',
+  'request.size.invalid': 'the request body is not the length its Content-Length declares',
+  'charset.unsupported': 'the request body is in a charset this service does not read',
+  'encoding.unsupported': 'the request body uses a content encoding this service does not read',
+});
+
+app.use((error, _req, res, _next) => {
+  const declared = Number(error?.status ?? error?.statusCode);
+  const status = Number.isInteger(declared) && declared >= 400 && declared < 600 ? declared : 500;
+  if (status < 500) {
+    const entry = requestRejectedLogEntry(UNREADABLE_BODY[error?.type] ?? 'the request could not be read');
+    console.error(JSON.stringify(entry));
+    res.status(status).json({ error: entry.error });
+    return;
+  }
+  // Not the caller's mistake, and not a proof that failed: the route catches its
+  // own. Named as neither, and still without anything the error carried.
+  const entry = requestFailedLogEntry('the request could not be handled');
+  console.error(JSON.stringify(entry));
+  res.status(500).json({ error: entry.error });
 });
 
 // Exported for the tests, which drive the route through supertest rather than
