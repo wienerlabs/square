@@ -102,6 +102,24 @@ describe("reducer", () => {
     expect(job?.reason).toBe("0x" + "22".repeat(32));
   });
 
+  it("closes a dispute whose job expired once its bond is settled, with no decision applied", () => {
+    const state = reduce([
+      ...lifecycle(),
+      ev("Arbitration", "ArbitersUpdated", { version: 1, arbiters: [buyer, client, provider], threshold: 2 }),
+      ev("KeeperEvaluator", "DisputeRaised", { jobId: 1n, disputer: client, disputedAt: 1_000_300, challengeEnd: 1_086_600 }),
+      ev("Arbitration", "DisputeOpened", { jobId: 1n, disputer: client, bond: 10_000_000n, disputedAt: 1_000_300, setVersion: 1, resolveBy: 1_259_500 }),
+      ev("SquareJob", "Refunded", { jobId: 1n, client, amount: 100_000_000n }),
+      ev("SquareJob", "JobExpired", { jobId: 1n }),
+    ]);
+    expect(state.jobs.get(1n)?.status).toBe(5);
+    expect(state.disputes.get(1n)?.closed).toBe(false);
+
+    applyEvent(state, ev("Arbitration", "BondSettled", { jobId: 1n, to: client, amount: 10_000_000n }));
+
+    expect(state.disputes.get(1n)?.closed).toBe(true);
+    expect(state.ledger.get(ledgerKey("Arbitration", client))).toBe(10_000_000n);
+  });
+
   it("tracks disputes, votes, decisions and bond settlement", () => {
     const hash = ("0x" + "33".repeat(32)) as `0x${string}`;
     const state = reduce([

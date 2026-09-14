@@ -110,3 +110,19 @@ state rather than a surprise:
   deployed hook, which carries no compliance module.
 - `PolicyRegistry` is not deployed on Arc Testnet; `recordSpend` answers with a
   verdict instead of reverting (#180).
+- `KeeperEvaluator`: `finalize(uint256)` and `finalizeDecided(uint256)` carry
+  no compliance proof, since the hook reads the proof the client bound to the
+  job (#245, #307). The deployed 2026-09-09 evaluator still exposes
+  `finalize(uint256,bytes)`, and `packages/core` on main calls the new selector,
+  so the app and the keeper must not be deployed from main against that stack:
+  their finalize would revert on a function the old contract does not have.
+  Redeploy the stack first, then the app and the services, in that order.
+- `Arbitration`: `settleBond` routes an expired job's bond by the decision
+  rather than always to the disputer (#265), and `vote` refuses a terminal job
+  (#266). The keeper on main cranks `settleBond` for expired disputed jobs
+  (#311), which works against the deployed contract as well.
+- `SquareJob`: `setComplianceProof`, `skim`, `unaccounted`, the fee notice
+  (`setFees` applies after `FEE_NOTICE`) and the fifteen minute floor on the
+  submit window (#240, #244, #245, #248). The app on main reads
+  `scheduledFees` and `complianceProofOf` only where the deployment exposes
+  them; a stack redeploy is what makes them live.
