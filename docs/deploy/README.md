@@ -35,6 +35,23 @@ Other places that carry an address and have to be updated by hand:
 - `site/src/lib/links.ts`, the explorer link of the kernel
 - `contracts/src/PolicyRegistry.sol`, the docstring that names the deployed hook
 
+### The balance a redeploy has to reach zero
+
+`redeploy-2026-09-09.md` records the success condition for the stack it
+replaced: `totalWithdrawable` and the kernel's USDC balance both read zero
+afterwards. That is the right condition and the current stack can no longer
+meet it by the runbook's three steps alone, because `0x76E8690cEa9d94df810eE6b1F453866f0ee68c7B`
+holds 0.009602 USDC that arrived as a plain ERC-20 transfer in block 61250488
+and belongs to no ledger entry and no escrow.
+
+`unaccounted()` names that balance and `skim(to)` moves it, and neither can
+touch the ledger: `skim` transfers `balanceOf(this) - totalWithdrawable -
+totalEscrowed` and nothing else. The live kernel predates both, so its
+0.009602 USDC stays where it is until the stack is superseded by one that
+carries them. The supersede checklist in
+[contracts/README.md](../../contracts/README.md) now reads the balance to zero
+rather than assuming the withdrawals got there.
+
 ### The block, and who needs it
 
 The deploy script also writes `"block"` into `contracts/deployments/<chainId>.json`,
@@ -93,3 +110,19 @@ state rather than a surprise:
   deployed hook, which carries no compliance module.
 - `PolicyRegistry` is not deployed on Arc Testnet; `recordSpend` answers with a
   verdict instead of reverting (#180).
+- `KeeperEvaluator`: `finalize(uint256)` and `finalizeDecided(uint256)` carry
+  no compliance proof, since the hook reads the proof the client bound to the
+  job (#245, #307). The deployed 2026-09-09 evaluator still exposes
+  `finalize(uint256,bytes)`, and `packages/core` on main calls the new selector,
+  so the app and the keeper must not be deployed from main against that stack:
+  their finalize would revert on a function the old contract does not have.
+  Redeploy the stack first, then the app and the services, in that order.
+- `Arbitration`: `settleBond` routes an expired job's bond by the decision
+  rather than always to the disputer (#265), and `vote` refuses a terminal job
+  (#266). The keeper on main cranks `settleBond` for expired disputed jobs
+  (#311), which works against the deployed contract as well.
+- `SquareJob`: `setComplianceProof`, `skim`, `unaccounted`, the fee notice
+  (`setFees` applies after `FEE_NOTICE`) and the fifteen minute floor on the
+  submit window (#240, #244, #245, #248). The app on main reads
+  `scheduledFees` and `complianceProofOf` only where the deployment exposes
+  them; a stack redeploy is what makes them live.

@@ -20,33 +20,41 @@ pull request.
 | `prover (real proving key)` | The prover agrees with the circuit, and its Solidity calldata matches `snarkjs`. |
 | `end-to-end (policy → proof → Arc)` | A policy, a proof built from it, and Arc accepting that proof — not from a fixture. **Not required**, see below. |
 | `refuse and replay (policy → proof → anvil)` | A payment over the policy's ceiling is proved, verified, and still pays the provider nothing; a compliant payment is released once and then refused on replay — as the same bytes and as a re-randomised copy. Every refusal is asserted by the module's own reason. **Not required**, see below. |
+| `six refusal scenarios (policy → proof → anvil)` | The six scenarios of #28 against a stack the run deploys itself, waiting out a real challenge window: a compliant payment is released, and a payment over the daily cap, to a blocked recipient, against a replaced policy, outside its time window, or carrying another job's proof is refused, each by the module's own reason. The same script runs on Arc; see `six refusal scenarios (Arc Testnet, funded key)` below. **Not required**, see below. |
 | `services/prover (hermetic)` | The rule evaluator and the encoding with no artifacts — a contributor's `npm test`. |
-| `packages/data`, `packages/hardening`, `packages/observability` | Hermetic package suites. |
+| `packages/data`, `packages/hardening`, `packages/observability`, `packages/policy` | Hermetic package suites. The policy package's includes the commitment held to the prover's own construction whenever the prover is installed beside it, which the compliance path job is. |
 | `packages/x402 (anvil)`, `services/indexer (anvil)`, `services/keeper (anvil)` | Against a local chain the job starts itself: anvil plus `DeployLocal.s.sol`, asserted before the suites run. |
 | `app (static export)`, `site (static export)` | The reference application and the site still build. |
 | `a2a` | `@squaresdk/a2a` typechecks and builds, and an agent still cannot pay itself. |
-| `cli` | The resolver and the CLI build; the CLI's exit codes are unchanged. Hermetic. |
+| `agent (anvil)` | `@squaresdk/agent`: the card against the schema, admission and delivery against a stub chain, and the whole loop on anvil with `DeployLocal.s.sol`: a funded job, `task/create`, `DELIVERED` by the on-chain `submit`, the crank's `finalize`, the provider's withdrawal. **Not required** until it has run without flaking. |
+| `mcp (anvil)` | `@squaresdk/mcp`: the tool pool against a real MCP server over Streamable HTTP, the Square MCP server through an in-memory MCP client, and on anvil both directions at once: an agent whose capability is a bridged MCP tool, hired through `square-mcp` spawned over stdio. **Not required** until it has run without flaking. |
+| `hosted (anvil)` | `@squaresdk/hosted`: sealing, the configuration, the model loop against a scripted model, the allowance over a Map of a chain, the handlers with a real MCP server; and on anvil a hosted agent taking a funded job, delegating a subtask under escrow from its own wallet within its committed policy, refused past it, with `square-hosted` sealing a key and serving a configuration. **Not required** until it has run without flaking. |
+| `cli` | The resolver, the policy package and the CLI build; the CLI's exit codes are unchanged; `square policy init` and `buyers entry` without a chain. Hermetic. |
+| `policy → proof → release (anvil, every surface)` | The institution's side of the compliance gate (#335, #338) on one stack the job builds itself: `DeployLocal.s.sol`, a `ComplianceModule` keyed to the proving key the job just built (`packages/policy/scripts/install-module-for-this-build.mjs`), and the prover beside it, asserted before anything runs. Then `@squaresdk/policy` binds a real proof the module verifies and the escrow goes to the provider, to the buyer of a sold receivable, and nowhere on a release the policy refuses; `square policy` commits, approves buyers, proves, reads back and releases; `square-mcp` keeps a hire's proof current and releases it; `square-hosted` does the same for a delegated job; and the lifecycle runner proves every release over its five paths. **Not required** until it has run without flaking. |
 | `did-aip-driver (unit)` | The driver's config parsing and envelope construction. |
 | `did-aip-driver image` | The container answers, and a malformed DID is still a 400 rather than a 500. On `main` it then publishes `:<version>` and `:sha-<commit>` to GHCR; the version tag is written once and never overwritten, so a version that already exists is left as it is and only the sha tag is pushed. |
 | `did-aip-driver version` | Pull requests only. If anything the Dockerfile copies into the image changed (the driver's and the resolver's sources, manifests and tsconfigs), `packages/did-aip-driver/package.json` must carry a new version, because the version tag is written once and a change without a bump would never be published under a version. **Not required**, see below. |
-| `local stack (make up)` | The four Dockerfiles build, the whole stack comes up on a runner, and every service answers `/health` with a passing status. Also asserts the contracts have bytecode on the chain and that the prover returns a real proof. **Listed in `branch-protection.json` but not required yet:** that file is applied by hand after a merge, so this one starts gating when the command below is next run. |
+| `local stack (make up)` | The four Dockerfiles build, the whole stack comes up on a runner, and every service answers `/health` with a passing status. Also asserts the contracts have bytecode on the chain and that the prover returns a real proof. Required since 2026-09-14, when the payload was applied with the review gate of [docs/decisions/review-gate.md](decisions/review-gate.md); its last five runs on `main` were green. |
 | `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. A red `secret scan` names the rule, the file and the line in the job log: gitleaks runs with `--verbose`, and with `--redact` beside it the value itself is never printed. It walks the git history, so the finding can sit in a commit the diff no longer shows. |
 
-Six are **not** required to merge. Four of them are not required because their
+Eight are **not** required to merge. Five of them are not required because their
 red is a statement about Arc Testnet being reachable, or about a funded account,
 rather than about the change, and a young testnet having a bad afternoon should
-not block unrelated work. The other two, `refuse and replay` and
-`did-aip-driver version`, reach no network and are not required only because
-they are new.
+not block unrelated work. The other three, `refuse and replay`, `six refusal
+scenarios (policy → proof → anvil)` and `did-aip-driver version`, reach no
+network and are not required only because they are new.
 
 | Check | Why it is not required |
 |---|---|
 | `end-to-end (Arc Testnet)` | Resolves the permanent smoke agents against the live registry. |
 | `end-to-end (policy → proof → Arc)` | New, and it reaches Arc. Promote it once it has run without flaking, the way `verifies on Arc Testnet` was. Adding it to the required set means re-applying `branch-protection.json`, in the same order: merge first, then the command. |
 | `refuse and replay (policy → proof → anvil)` | New. Unlike the row above it reaches no network beyond the ptau fetch every circuit job makes, so its red is a statement about the change — which makes it the better candidate for promotion. Same rule: once it has run without flaking, merge first, then re-apply `branch-protection.json`. |
+| `six refusal scenarios (policy → proof → anvil)` | New, and hermetic like the row above apart from the same ptau fetch. Promote it the same way. |
 | `did-aip-driver version` | New, and hermetic: a `git diff` against the base branch and two `package.json` reads. Its red means an image input changed without a version bump. Promote it the same way once it has run a while. |
+| `policy → proof → release (anvil, every surface)` | New. Hermetic apart from the ptau fetch every circuit job makes, and a Groth16 proof per release, so a long job. Promote it once it has run without flaking, merge first, then re-apply `branch-protection.json`. |
 | `packages/aa (anvil)` | Named for a local chain, but `test/globalSetup.ts` calls `startAnvilFork()`, which defaults to `https://rpc.testnet.arc.io` (`scripts/fork.ts:144`) with no override and no fallback, and rethrows on failure. Arc being down would block a documentation pull request. |
 | `acceptance (Arc Testnet, funded key)` | Spends real testnet gas, needs a secret, does not run on fork pull requests, and lives in its own path-filtered workflow. |
+| `six refusal scenarios (Arc Testnet, funded key)` | #28's six scenarios on Arc itself. Spends real testnet USDC: the first run on Arc was 26.2M gas and cost its funder 0.588 USDC. Needs `SCENARIO_FUNDER_PRIVATE_KEY` and refuses to start without it or on a short balance. Lives in its own workflow (`arc-refusal-scenarios.yml`) and runs on pushes to `main`, by hand, and on same-repository pull requests that change the script or the workflow, one run at a time. |
 
 `verifies on Arc Testnet` also depends on Arc's RPC, but it is cheap, read-only
 and defends a claim the README makes, so it is required. If it turns out to
@@ -76,6 +84,8 @@ next instance of this hides:
 | `!forkUrl` | `packages/core/test/fork.test.ts` | `@squaresdk/core against anvil` | **not satisfied.** `ARC_FORK_RPC_URL` is set by no workflow, so the lifecycle has never been exercised against the real ERC-8004 registries in CI. Named on the run summary so the gap is visible. |
 | `!configured` | `packages/x402/test/live.test.ts` | `packages/x402 (anvil)` | **not satisfied.** Needs `ARC_TESTNET_RPC_URL` and two funded keys. |
 | `!process.env.LIVE` | `packages/did-resolver/test/integration.test.ts` | `cli` | **not satisfied, by design.** `cli` is hermetic; the live reads run in `end-to-end (Arc Testnet)`. |
+| `!("stack" in ready)`, `notReady !== null` | `packages/policy/test/anvil.test.ts`, `packages/cli/test/policy.anvil.test.ts`, `packages/mcp/test/compliance.test.ts`, `packages/hosted/test/compliance.test.ts` | `policy → proof → release (anvil, every surface)` | satisfied — the job installs the module and starts the prover, and asserts both before the suites run. In `mcp (anvil)`, `hosted (anvil)` and `cli` the two compliance suites skip by design: those stacks hold no module. |
+| `!proverInstalled` | `packages/policy/test/commitment.test.ts` (the cross-check against the prover) | `packages/policy`, `policy → proof → release` | satisfied in the second, where the prover is installed; skipped in the first, by design. |
 
 Four further guards are *inverse* — `skipIf(HAVE_BUILD)` and the prover's three
 `skipIf(HAVE_*)`. They fire only when the artifact is **absent** and exist to say
@@ -206,12 +216,13 @@ number chosen here would be an invented one.
 
 ## Secrets and variables
 
-Nothing in the required set needs either. Both are optional and both are read
-only by jobs already restricted to this repository.
+Nothing in the required set needs any of these. All are optional and all are
+read only by jobs already restricted to this repository.
 
 | Name | Kind | Used by | Effect when unset |
 |---|---|---|---|
 | `SQUARE_PRIVATE_KEY` | secret | `acceptance (Arc Testnet, funded key)` | The reads and the `eth_call` dry run still execute; the registration suite skips itself and the run summary names it. |
+| `SCENARIO_FUNDER_PRIVATE_KEY` | secret | `six refusal scenarios (Arc Testnet, funded key)` | The script refuses to start and says why, so the run is red rather than green over nothing. It is the account that deploys, owns, funds and cranks the run; it needs roughly the gas of one run plus the jobs' budgets, and the script checks that before it spends anything. |
 | `ARC_VERIFIER_ADDRESS` | variable | `verifies on Arc Testnet` | The deployed verifier is not checked. The state-override check, which needs no deployment, still runs. |
 
 `ARC_VERIFIER_ADDRESS` is a variable rather than a line in the workflow because
@@ -220,8 +231,9 @@ produces a new proving key, and therefore a new verifier at a new address.
 
 ### Fork pull requests
 
-`acceptance (Arc Testnet, funded key)` is the only job that needs a secret, and
-it is guarded so it does not run on a pull request from a fork:
+`acceptance (Arc Testnet, funded key)` and `six refusal scenarios (Arc Testnet,
+funded key)` are the jobs that need a secret, and both are guarded so they do
+not run on a pull request from a fork:
 
 ```yaml
 if: >-
@@ -284,6 +296,13 @@ gh api -X PUT repos/wienerlabs/square/branches/main/protection \
 `strict: true` means a branch has to be up to date with `main` before it can
 merge, so the checks that gate a merge are the ones that ran against the code
 that will actually land.
+
+`required_pull_request_reviews` is the review gate of
+[docs/decisions/review-gate.md](decisions/review-gate.md): a pull request that
+touches `contracts/` or `circuits/` needs an approving review from a code owner
+in `.github/CODEOWNERS` who did not author it; any other pull request needs
+none. After applying the payload, confirm both: a documentation pull request
+shows no review requirement, a contracts pull request shows one.
 
 Renaming a job renames its check. A required check that no longer reports blocks
 every merge, so the list above and the job names in the workflows have to move

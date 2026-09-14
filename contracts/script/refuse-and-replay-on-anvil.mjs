@@ -226,11 +226,12 @@ const VERIFIED = cast(['keccak', 'ReleaseVerified(uint256,address,uint256,bytes3
 // Finalizes and reports what happened: who was paid, what the counter did, and
 // which of the module's two events it emitted — with the refusal's reason.
 function finalize(stack, jobId, encodedProof) {
+  send(CLIENT, stack.kernel, 'setComplianceProof(uint256,bytes)', jobId, encodedProof);
   const provider = BigInt(read(stack.kernel, 'withdrawable(address)(uint256)', PROVIDER));
   const client = BigInt(read(stack.kernel, 'withdrawable(address)(uint256)', CLIENT));
   const spent = BigInt(read(stack.registry, 'spentToday(address)(uint256)', CLIENT));
 
-  const receipt = send(CRANKER, stack.keeper, 'finalize(uint256,bytes)', jobId, encodedProof);
+  const receipt = send(CRANKER, stack.keeper, 'finalize(uint256)', jobId);
 
   const moduleLogs = receipt.logs.filter((l) => l.address.toLowerCase() === stack.module.toLowerCase()
     && BigInt(l.topics[1] ?? 0) === jobId);

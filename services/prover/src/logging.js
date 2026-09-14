@@ -129,6 +129,20 @@ export function requestShedLogEntry({ active, queued, limit }) {
   };
 }
 
+// A request that reached the error handler for a reason of the service's own.
+//
+// Not request_rejected, which is the caller's mistake, and not proof_failed,
+// because /prove catches its own failures and no proof was attempted. The handler
+// in index.js passes a fixed message, never the error's, so nothing the request
+// carried can reach this line (square#252).
+export function requestFailedLogEntry(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    event: 'request_failed',
+    error: message,
+  };
+}
+
 // Every log entry a single successful /prove call produces, in order.
 //
 // The whole logging decision lives here rather than inline in the route so it

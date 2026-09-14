@@ -17,7 +17,7 @@ const client = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" as const;
 const provider = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC" as const;
 const buyer = "0x90F79bf6EB2c4f870365E785982E1f101E93b906" as const;
 const evaluator = "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707" as const;
-const hook = "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6" as const;
+const hook = "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318" as const;
 const zero = "0x0000000000000000000000000000000000000000" as const;
 
 let index = 0;
@@ -100,6 +100,24 @@ describe("reducer", () => {
     expect(job?.payee).toBe(buyer);
     expect(job?.providerBps).toBe(5_000);
     expect(job?.reason).toBe("0x" + "22".repeat(32));
+  });
+
+  it("closes a dispute whose job expired once its bond is settled, with no decision applied", () => {
+    const state = reduce([
+      ...lifecycle(),
+      ev("Arbitration", "ArbitersUpdated", { version: 1, arbiters: [buyer, client, provider], threshold: 2 }),
+      ev("KeeperEvaluator", "DisputeRaised", { jobId: 1n, disputer: client, disputedAt: 1_000_300, challengeEnd: 1_086_600 }),
+      ev("Arbitration", "DisputeOpened", { jobId: 1n, disputer: client, bond: 10_000_000n, disputedAt: 1_000_300, setVersion: 1, resolveBy: 1_259_500 }),
+      ev("SquareJob", "Refunded", { jobId: 1n, client, amount: 100_000_000n }),
+      ev("SquareJob", "JobExpired", { jobId: 1n }),
+    ]);
+    expect(state.jobs.get(1n)?.status).toBe(5);
+    expect(state.disputes.get(1n)?.closed).toBe(false);
+
+    applyEvent(state, ev("Arbitration", "BondSettled", { jobId: 1n, to: client, amount: 10_000_000n }));
+
+    expect(state.disputes.get(1n)?.closed).toBe(true);
+    expect(state.ledger.get(ledgerKey("Arbitration", client))).toBe(10_000_000n);
   });
 
   it("tracks disputes, votes, decisions and bond settlement", () => {

@@ -33,7 +33,7 @@ export interface ReplayStore {
   insertAccepted(entry: ReplayEntry): Promise<boolean>;
   markPending(key: ReplayKey, txHash: Hex): Promise<boolean>;
   markSettled(key: ReplayKey, txHash: Hex | null, reason?: string): Promise<boolean>;
-  markFailed(key: ReplayKey, reason: string): Promise<boolean>;
+  markFailed(key: ReplayKey, reason: string, txHash?: Hex): Promise<boolean>;
   markChecked(key: ReplayKey): Promise<boolean>;
   has(key: ReplayKey): Promise<boolean>;
   listUnsettled(limit?: number): Promise<UnsettledPayment[]>;
@@ -85,11 +85,12 @@ export function memoryReplayStore(): MemoryReplayStore {
       if (reason !== undefined) record.reason = reason;
       return true;
     },
-    async markFailed(key, reason) {
+    async markFailed(key, reason, txHash) {
       const record = accepted(key);
       if (record === undefined) return false;
       record.status = "failed";
       record.reason = reason;
+      if (txHash !== undefined) record.txHash = txHash;
       return true;
     },
     async markChecked(key) {
@@ -137,8 +138,8 @@ export function postgresReplayStore(db: Database): ReplayStore {
     markSettled(key, txHash, reason) {
       return x402Payments.markSettled(db, key, txHash, reason);
     },
-    markFailed(key, reason) {
-      return x402Payments.markFailed(db, key, { reason });
+    markFailed(key, reason, txHash) {
+      return x402Payments.markFailed(db, key, { reason, ...(txHash === undefined ? {} : { txHash }) });
     },
     markChecked(key) {
       return x402Payments.markChecked(db, key);

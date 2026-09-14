@@ -7,26 +7,6 @@ const configured = (process.env.NEXT_PUBLIC_INDEXER_URL ?? "").trim().replace(/\
 
 export const indexerUrl: string | null = configured.length > 0 ? configured : null;
 
-export interface IndexerJob {
-  chainId: number;
-  jobId: string;
-  client: string;
-  provider: string | null;
-  evaluator: string;
-  hook: string | null;
-  description: string;
-  budget: string;
-  status: number;
-  expiredAt: string;
-  createdAt: string;
-  fundedAt: string | null;
-  submittedAt: string | null;
-  challengeEnd: string | null;
-  disputed: boolean;
-  agentId: string | null;
-  updatedBlock: string;
-}
-
 export interface IndexerStatus {
   chainId: number;
   lastIndexedBlock: string | null;
@@ -34,11 +14,14 @@ export interface IndexerStatus {
   jobs: number;
 }
 
-export interface IndexerOverview {
-  status: IndexerStatus;
-  open: IndexerJob[];
-  inWindow: IndexerJob[];
-  finalizable: IndexerJob[];
+export interface IndexerCounts {
+  open: number;
+  inWindow: number;
+  finalizable: number;
+}
+
+export interface IndexerOverview extends IndexerStatus {
+  counts: IndexerCounts;
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -53,15 +36,7 @@ export function useIndexerOverview() {
     queryKey: ["indexer", "overview", indexerUrl],
     enabled: indexerUrl !== null,
     refetchInterval: POLL_MS,
-    queryFn: async (): Promise<IndexerOverview> => {
-      const [status, open, inWindow, finalizable] = await Promise.all([
-        fetchJson<IndexerStatus>("/status"),
-        fetchJson<IndexerJob[]>("/jobs/open"),
-        fetchJson<IndexerJob[]>("/jobs/in-window"),
-        fetchJson<IndexerJob[]>("/jobs/finalizable"),
-      ]);
-      return { status, open, inWindow, finalizable };
-    },
+    queryFn: () => fetchJson<IndexerOverview>("/overview"),
   });
 }
 

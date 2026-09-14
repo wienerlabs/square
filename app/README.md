@@ -15,8 +15,9 @@ The reference web application for Square, the compliance-gated settlement protoc
 |---|---|
 | `/` | Landing page with live numbers (jobs opened, USDC escrowed, settled, last activity), the three settlement layers, the lifecycle and a live network strip. |
 | `/dashboard` | Metric tiles, the escrow flow and pipeline charts, a jobs table with phase filters, a search by id or address and a button that reads 50 older jobs at a time, and, with a wallet connected, the pull-payment balances with Withdraw buttons plus an inbox of the jobs waiting on that wallet: deliverable to submit before the expiry less the job's settlement horizon, escrow to fund, budget to agree, challenge window open, ready to finalize, refund available. |
-| `/job?id=N` | The full job record, a timeline built from the record's timestamps, listing and dispute details, a box that checks a pasted spec against the hash on chain, and every lifecycle action the connected wallet may take: set provider, set budget, fund (with automatic USDC approval), submit, finalize, dispute, vote, apply a decision, lapse, list, buy or cancel a claim, reject, claim refund, withdraw, record expiry. |
+| `/job?id=N` | The full job record, a timeline built from the record's timestamps, listing and dispute details, a box that checks a pasted spec against the hash on chain, where the job stands with the compliance gate when the hook holds a module (the proof bound to it, current or stale and why, and for the client with a policy in this browser and `NEXT_PUBLIC_PROVER_URL` set, a button that binds one), and every lifecycle action the connected wallet may take: set provider, set budget, fund (with automatic USDC approval), submit, finalize, dispute, vote, apply a decision, lapse, list, buy or cancel a claim, reject, claim refund, withdraw, record expiry. |
 | `/new` | Create a job: provider, expiry (at least twice the settlement horizon away, so the job is still submittable after it is funded), a JSON spec hashed to `spec:0x...` that can be copied or downloaded and stays on screen after the job is created, and an optional budget set right after creation. |
+| `/policy` | The institution's side of the compliance gate (square#338): what `PolicyRegistry` holds for the connected wallet (commitment, daily limit, today's counter, buyer root, whether the hook holds a module), a form that writes a policy and commits it with `setPolicy`, and the approved-buyer list: publish its root with `setBuyerRoot`, copy each buyer the entry the purchase form takes. The policy, secret included, lives in this browser's storage under the wallet and can be copied out for `square policy`, `square-mcp` and `square-hosted`. |
 | `/network` | Keeper windows, fees and treasury, the arbiter set and threshold, bond parameters, registry addresses, the read path and links to the design notes. |
 
 Static export means there are no dynamic route segments, so the job page reads its id from the query string. All data is fetched on the client with React Query and refreshed every ten seconds.
@@ -42,7 +43,8 @@ Paid to payees is the provider share of the net that each completed job settled 
 |---|---|---|
 | `NEXT_PUBLIC_CHAIN_ID` | `5042002` | `5042002` for Arc Testnet or `31337` for a local anvil. Anything else falls back to Arc Testnet. |
 | `NEXT_PUBLIC_RPC_URL` | chain default | Overrides the RPC endpoint (`https://rpc.testnet.arc.io` or `http://127.0.0.1:8545`). |
-| `NEXT_PUBLIC_INDEXER_URL` | unset | Base URL of the indexer read API. When set, the dashboard counts open and in-window jobs from `/jobs/open` and `/jobs/in-window`, and the network page shows `/status`. When unset, everything is read directly from the chain. |
+| `NEXT_PUBLIC_INDEXER_URL` | unset | Base URL of the indexer read API. When set, the dashboard reads the open and in-window counts from `/overview`, which counts them in the database rather than listing the rows, and the network page shows `/status`. When unset, everything is read directly from the chain. |
+| `NEXT_PUBLIC_PROVER_URL` | unset | The prover service the job page may send the policy's secret to (`services/prover`, which has to allow this origin in `CORS_ORIGINS`). When set, the client of a job binds a compliance proof from the job page; when unset, the page shows the proof's state and says which tool binds one. |
 
 The variables are inlined at build time. Copy `.env.example` to `.env.local` and rebuild after changing them.
 
@@ -100,6 +102,7 @@ src/lib/clock.ts    The offset between the chain and the browser clock, and the 
 src/lib/spec.ts     Checking a pasted spec against the spec: hash on chain
 src/lib/address.ts  Reading an address input: valid, checksum only, or malformed
 src/lib/indexer.ts  Optional indexer read API client
+src/lib/policy.ts   The policy and buyer list kept in the browser, the form that writes one, and the gate reads
 src/lib/format.ts   USDC, address, timestamp and duration formatting
 src/lib/tx.tsx      Transaction runner and toast state
 ```

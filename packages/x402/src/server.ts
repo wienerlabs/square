@@ -39,6 +39,8 @@ export interface GatewayAppOptions {
   settlement?: SettlementMode;
 }
 
+const HEAD_METHOD = "HEAD";
+
 export const BEFORE_HANDLER_UNSUPPORTED =
   'settlement: "before-handler" is not supported. The upfront payment flow makes the resource server accept the payload ' +
   "without calling the facilitator's verify, and every replay-ledger operation this package owns lives in the verify hooks: " +
@@ -57,8 +59,9 @@ export function createPaidRoutes(options: PaidRoutesOptions): MiddlewareHandler 
     new ExactEvmScheme()
   );
   const routes: Record<string, RouteConfig> = {};
+  const declared = new Set(Object.keys(options.routes).map((pattern) => routePatternKey(parseRoutePattern(pattern))));
   for (const [pattern, route] of Object.entries(options.routes)) {
-    routes[pattern] = {
+    const config: RouteConfig = {
       accepts: {
         scheme: "exact",
         payTo,
@@ -69,6 +72,14 @@ export function createPaidRoutes(options: PaidRoutesOptions): MiddlewareHandler 
       mimeType: route.mimeType ?? "application/json",
       ...(route.description !== undefined ? { description: route.description } : {}),
     };
+    routes[pattern] = config;
+    const parsed = parseRoutePattern(pattern);
+    if (parsed.method === "GET") {
+      const headKey = routePatternKey({ method: HEAD_METHOD, path: parsed.path });
+      if (!declared.has(headKey)) {
+        routes[headKey] = config;
+      }
+    }
   }
   return paymentMiddleware(routes, server);
 }

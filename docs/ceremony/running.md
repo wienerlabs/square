@@ -101,11 +101,20 @@ node scripts/ceremony.mjs verify-chain
 ```
 
 It checks the phase-1 file by hash, the compiled circuit against the hash the
-ceremony started from, the final key against circuit and ptau, the contribution
-count against the transcript, and the beacon three ways: the value drand
+ceremony started from, the final key against circuit and ptau, the keys on disk
+against the transcript — none missing from the chain and none the transcript
+does not record, checked before there is a final key as well as after
+(square#234) — every contribution's hash and recorded name against the
+transcript in order — the values each contributor published, so a chain re-run
+with different contributors fails here (square#229) — and the transcript's
+readable name against the one it recorded, any contribution recorded without
+the hash and name read back from its key, and the beacon three ways: the value drand
 publishes for that round, fetched live rather than read from the transcript; the
 round's BLS signature against **the group public key pinned in `ceremony.mjs`**;
-and that the round lands after the last contribution. It exits non-zero if
+and that the round lands after the last contribution. Then the verifying key: it
+exports one from the final key and compares it with the `payment_vk.json`
+`finalize` wrote and with the repository's `build/payment_vk.json`, and checks
+the ceremony's file against the digest in the transcript. It exits non-zero if
 anything fails, and it reports every failure rather than stopping at the first.
 
 The pinned key is what separates "matches what drand told me" from "is what
@@ -125,9 +134,13 @@ That is the better instinct and the reason both exist.
 
 ## What it looks like when it works
 
-From a rehearsal against the real drand chain, with throwaway contributions.
-This is not the ceremony — it is the evidence that the machinery does what this
-document says.
+From a rehearsal against the real drand chain, with two throwaway contributions
+and quicknet round 32206349 as the beacon. This is not the ceremony — it is the
+evidence that the machinery does what this document says. Re-recorded on the
+merge of square#227, #228, #229 and #234, so every line below is one of their
+checks. After `finalize`, the ceremony's verifying key was copied to
+`build/payment_vk.json`, which is what installing it as the repository's key
+comes to:
 
 ```console
 $ node scripts/ceremony.mjs verify-chain
@@ -136,20 +149,43 @@ phase 1
 
 circuit
   ok    the compiled circuit matches the one the ceremony started from
+  ok    compiled with circom compiler 2.2.3, as the ceremony was
+  ok    circomlib 2.0.5, as the ceremony had
+  ok    payment.circom is byte-identical to the ceremony's
+  ok    lib/timestamp.circom is byte-identical to the ceremony's
 
 chain
+  ok    the keys on disk end at payment_0002.zkey, where the transcript ends
   ok    the final key verifies against the circuit and the adopted ptau
-  ok    2 contribution(s), matching the transcript
+  ok    2 contribution(s), as many as the transcript records
+  ok    every contribution in the key is the one the transcript records, in order
 
 beacon
-  ok    beacon is drand quicknet round 31968374, matching the public chain
-  ok    the round's BLS signature verifies against quicknet's group key
-  ok    round 31968374 corresponds to 2026-09-06T15:28:06.000Z
+  ok    beacon is drand quicknet round 32206349, matching the public chain
+  ok    the round's BLS signature verifies against quicknet's pinned group key
+  ok    the recorded round and time are consistent (arithmetic, not a timing check)
+  ok    the beacon round lands after the last contribution (2026-09-14T21:45:39.964Z)
 
 keys
-  ok    the verifying key is the one the transcript records
+  ok    the verifying key is the one the final key exports
+  ok    and it is unchanged since the transcript recorded it
+  ok    the repository's verifying key, build/payment_vk.json, is the one the final key exports
 
 All checks passed. The chain is what the transcript says it is.
+```
+
+The same rehearsal before that copy, with the development key still in
+`build/payment_vk.json`, fails on one line, and it is the line that should fail:
+until [#16][i16] installs the ceremony's key, the repository's key is not this
+ceremony's output.
+
+```console
+keys
+  ok    the verifying key is the one the final key exports
+  ok    and it is unchanged since the transcript recorded it
+  FAIL  the repository's verifying key, build/payment_vk.json, is not the one the final key exports: payment_vk.json is not what payment_final.zkey exports
+
+1 check(s) failed.
 ```
 
 And when it does not. A transcript claiming a different round than the key
@@ -170,9 +206,29 @@ A chain with a single contributor is rejected as well, whatever else is in
 order:
 
 ```console
-  ok    1 contribution(s), matching the transcript
+  ok    1 contribution(s), as many as the transcript records
   FAIL  fewer than two independent contributions — this is not a multi-party ceremony
 ```
+
+And a transcript that names contributors the key does not hold. From the same
+rehearsal, with the two records renamed and their hashes replaced — the shape of
+a chain re-run privately after the public one (square#229; the hashes are
+abbreviated here, the tool prints them whole):
+
+```console
+chain
+  ok    the final key verifies against the circuit and the adopted ptau
+  ok    2 contribution(s), as many as the transcript records
+  FAIL  contribution 1 (Alice): the key's transcript hash c336ec06…46360d is not the transcript's 11111111…11111111
+  FAIL  contribution 1: the key records "Alice (rehearsal)", the transcript "Alice"
+  FAIL  contribution 2 (Bob): the key's transcript hash 541ee4ee…c33688 is not the transcript's 22222222…22222222
+  FAIL  contribution 2: the key records "Bob (rehearsal)", the transcript "Bob"
+
+4 check(s) failed.
+```
+
+Before square#229 that transcript printed `ok 2 contribution(s), matching the
+transcript` and the run ended with "All checks passed".
 
 ## Publishing
 

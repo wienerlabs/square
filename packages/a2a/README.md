@@ -85,6 +85,26 @@ comes back; without it a handler that never settles holds its slot for the life
 of the process, and `maxConcurrent` of those (five by default) turn every honest
 caller away with `Busy`.
 
+**`settlement`** is how the chain gets its say without this package holding a
+wallet (square#79). It is three functions on strings, `admit`, `deliver` and
+`jobStatus`, and `@squaresdk/agent` implements them over `@squaresdk/core`:
+
+- before a handler runs, `admit(jobId, { capability, callerDid })` answers
+  whether the job is funded for this provider; a `{ ok: false, reason }` is
+  returned to the caller as `-32004` with that reason, and no handler runs;
+- when the handler resolves, its return value is the delivered *content*, and
+  `deliver(jobId, content, …)` puts it on chain: DELIVERED carries the
+  `deliverable` that went on chain and, as `reference`, the transaction. A
+  `deliver` that throws fails the task with its message;
+- `task/status` carries `job: { status, name }` from `jobStatus(jobId)`, read at
+  answer time. Whether the evaluator has completed or rejected the job is the
+  chain's to say; the task machine keeps no ledger of it.
+
+Without a settlement the server is the protocol alone: the handler's return
+value is the deliverable, and nothing is read from or written to a chain. The
+guard in `test/no-self-settlement.test.ts` holds either way, because the
+package still contains no client, no wallet and no chain library.
+
 ## What it will not do
 
 The agent's own report cannot move money. There is no settlement callback, no

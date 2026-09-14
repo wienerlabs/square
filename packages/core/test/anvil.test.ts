@@ -3,9 +3,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createPublicClient, createTestClient, createWalletClient, http, parseUnits } from "viem";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { foundry } from "viem/chains";
 import { anvilAccount } from "./anvil.js";
 import {
+  approveBuyers,
+  buyerLeaf,
+  claimMarketAbi,
   createSquareClient,
   deploymentFor,
   deploymentFromJson,
@@ -146,8 +150,10 @@ describe.skipIf(!reachable)("lifecycle on anvil through the SDK", () => {
     const jobId = await submittedJob();
     const price = parseUnits("90", 6);
     await provider.listClaim(jobId, price);
+    const approved = approveBuyers([buyer.account]);
+    await client.setBuyerRoot(approved.root);
     const providerBefore = await provider.usdcBalance(provider.account);
-    await buyer.buyClaim(jobId);
+    await buyer.buyClaim(jobId, approved.eligibilityOf(buyer.account));
     expect((await provider.usdcBalance(provider.account)) - providerBefore).toBe(price);
     expect(await buyer.payeeOf(jobId)).toBe(buyer.account);
 
@@ -158,6 +164,60 @@ describe.skipIf(!reachable)("lifecycle on anvil through the SDK", () => {
     expect(released?.args.provider).toBe(buyer.account);
     expect((await buyer.withdrawable(buyer.account)) - buyerBefore).toBe(net);
     expect(await provider.agentOf(jobId)).toBe(1n);
+  });
+
+  it("buyer list: the chain rebuilds the SDK's leaf, and refuses whoever is not on the list", async () => {
+    const jobId = await submittedJob();
+    await provider.listClaim(jobId, parseUnits("90", 6));
+    const others = [privateKeyToAccount(generatePrivateKey()).address, privateKeyToAccount(generatePrivateKey()).address];
+    const approved = approveBuyers([buyer.account, ...others]);
+    await client.setBuyerRoot(approved.root);
+    expect(await client.buyerRootOf(client.account)).toBe(approved.root);
+
+    const eligibility = approved.eligibilityOf(buyer.account);
+    const onChain = await publicClient.readContract({
+      abi: claimMarketAbi,
+      address: deployment.claimMarket,
+      functionName: "buyerLeaf",
+      args: [buyer.account, eligibility.salt],
+    });
+    expect(onChain).toBe(buyerLeaf(buyer.account, eligibility.salt));
+
+    await expect(cranker.buyClaim(jobId, eligibility, { autoApprove: false })).rejects.toThrow(/BuyerNotEligible/);
+    await buyer.buyClaim(jobId, eligibility);
+    expect(await buyer.payeeOf(jobId)).toBe(buyer.account);
+  });
+
+  it("policy: the ceiling reads back as committed, the day's spend starts at zero, and a commitment outside the proof range is refused", async () => {
+    const commitment = `0x${"00".repeat(31)}2a` as const; // a small field element, the way a Poseidon output is
+    const dailyLimit = parseUnits("50", 6);
+    const before = await client.policyOf(client.account);
+    await client.setPolicy(commitment, dailyLimit);
+    const policy = await client.policyOf(client.account);
+    expect(policy.commitment).toBe(commitment);
+    expect(policy.dailyLimit).toBe(dailyLimit);
+    expect(policy.epoch).toBe(before.epoch + 1n);
+    expect(await client.spentToday(client.account)).toBe(0n);
+    await expect(client.setPolicy(`0x${"ff".repeat(32)}`, dailyLimit)).rejects.toThrow(/CommitmentOutsideProofRange/);
+  });
+
+  it("compliance proof: the client binds bytes to its job while Funded or Submitted, and reads them back; the slot says whether anything checks them", async () => {
+    const jobId = await submittedJob();
+    expect(await client.complianceProofOf(jobId)).toBe("0x");
+    const proof = `0x${"ab".repeat(64)}` as const;
+    await client.setComplianceProof(jobId, proof);
+    expect(await client.complianceProofOf(jobId)).toBe(proof);
+    // Only the job's client writes it (square#245).
+    await expect(provider.setComplianceProof(jobId, proof)).rejects.toThrow(/Unauthorized|OnlyClient/);
+    // The default local stack installs no module, so no release is gated and there is no tolerance to read.
+    const module = await client.complianceModule();
+    if (module === null) {
+      expect(await client.complianceTolerance()).toBeNull();
+      expect(await client.previewRelease({ jobId, payee: provider.account, amount: 1n, client: client.account, proof })).toBeNull();
+    } else {
+      expect(await client.complianceTolerance()).toBeGreaterThan(0n);
+      expect(await client.previewRelease({ jobId, payee: provider.account, amount: 1n, client: client.account, proof })).toBe(false);
+    }
   });
 
   it("spec hash written on chain matches the SDK", async () => {

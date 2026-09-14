@@ -23,11 +23,11 @@ contract KeeperEvaluatorTest is BaseTest {
         assertEq(end, block.timestamp + CHALLENGE_WINDOW);
         vm.expectRevert(abi.encodeWithSelector(IKeeperEvaluator.WindowOpen.selector, end));
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         vm.warp(end - 1);
         vm.expectRevert(abi.encodeWithSelector(IKeeperEvaluator.WindowOpen.selector, end));
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
     }
 
     function test_finalize_isPermissionlessAndPaysTheCaller() public {
@@ -41,7 +41,7 @@ contract KeeperEvaluatorTest is BaseTest {
         vm.expectEmit(true, true, false, true);
         emit IKeeperEvaluator.Finalized(jobId, cranker, evaluatorFee);
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
 
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));
         assertEq(usdc.balanceOf(cranker), evaluatorFee, "the keeper that paid the gas holds the fee");
@@ -53,16 +53,16 @@ contract KeeperEvaluatorTest is BaseTest {
     function test_finalize_twiceReverts() public {
         uint256 jobId = submittedHookedJob(BUDGET);
         pastWindow(jobId);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         vm.expectRevert(IKeeperEvaluator.NotSubmitted.selector);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
     }
 
     function test_finalize_refusesJobsWithAnotherEvaluator() public {
         vm.prank(client);
         uint256 jobId = kernel.createJob(provider, client, expiry(), "", address(0));
         vm.expectRevert(IKeeperEvaluator.NotOurJob.selector);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
     }
 
     function test_claimRefund_cannotRaceAFinalizableJob() public {
@@ -75,7 +75,7 @@ contract KeeperEvaluatorTest is BaseTest {
         vm.prank(client);
         kernel.claimRefund(jobId);
         vm.prank(provider);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed), "long after expiry the provider still finalizes alone");
         assertEq(kernel.withdrawable(provider), netOf(BUDGET));
         assertSolvent();
@@ -102,7 +102,7 @@ contract KeeperEvaluatorTest is BaseTest {
         vm.prank(client);
         kernel.claimRefund(jobId);
         vm.prank(cranker);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
         assertEq(kernel.withdrawable(provider), netOf(BUDGET), "the provider who delivered is paid");
         assertEq(arbitration.withdrawable(client), d.bond, "a lapse returns the bond");
         assertSolvent();
@@ -156,7 +156,7 @@ contract KeeperEvaluatorTest is BaseTest {
 
         pastWindow(jobId);
         vm.expectRevert(IKeeperEvaluator.Disputed.selector);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Submitted), "a dispute does not change status");
     }
 
@@ -178,11 +178,11 @@ contract KeeperEvaluatorTest is BaseTest {
     function test_finalizeDecided_requiresADecision() public {
         uint256 jobId = submittedHookedJob(BUDGET);
         vm.expectRevert(IKeeperEvaluator.NotDisputed.selector);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
         vm.prank(client);
         keeper.dispute(jobId, bytes32(0));
         vm.expectRevert(IKeeperEvaluator.NotDecided.selector);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
     }
 
     function test_applyRejection_onlyArbitration() public {
@@ -225,7 +225,7 @@ contract KeeperEvaluatorTest is BaseTest {
         pastWindow(jobId);
         vm.prank(cranker);
         uint256 before = gasleft();
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         uint256 used = before - gasleft();
         emit log_named_uint("finalize gas (hooked, reputation + validation written)", used);
         assertLt(used, 600_000);
@@ -269,7 +269,7 @@ contract KeeperEvaluatorTest is BaseTest {
             abi.encode(IArbitration.Outcome.Complete, uint16(4_000), hash)
         );
         vm.expectRevert(IKeeperEvaluator.SplitNeedsAPayoutResolver.selector);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
         vm.clearMockedCalls();
     }
 }

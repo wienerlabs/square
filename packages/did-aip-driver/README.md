@@ -91,5 +91,7 @@ Two rules carried over from the v1 driver, and a third added here:
   version in `package.json`, and the `did-aip-driver version` check says so on the pull
   request.
 
-After the first successful run the GHCR package has to be made public once, by hand —
-the Universal Resolver pulls anonymously.
+The GHCR package is public (#64): the Universal Resolver pulls anonymously, and so does
+`docs/smoke/universal-resolver.compose.yml`. The upstream driver entry,
+[decentralized-identity/universal-resolver#561](https://github.com/decentralized-identity/universal-resolver/pull/561),
+names this image and the v2 specification.

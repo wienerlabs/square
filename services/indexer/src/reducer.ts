@@ -353,9 +353,15 @@ function applyArbitration(state: IndexerState, event: Extract<SquareEvent, { con
       dispute.updatedBlock = block;
       return;
     }
-    case "BondSettled":
+    case "BondSettled": {
       credit(state, "Arbitration", event.args.to, event.args.amount);
+      const dispute = state.disputes.get(event.args.jobId);
+      if (dispute) {
+        dispute.closed = true;
+        dispute.updatedBlock = block;
+      }
       return;
+    }
     case "BondWithdrawn":
       credit(state, "Arbitration", event.args.account, -event.args.amount);
       return;
