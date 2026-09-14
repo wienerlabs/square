@@ -11,6 +11,7 @@ import { AmountUsdc } from "@/components/AmountUsdc";
 import { SegmentBar } from "@/components/charts/SegmentBar";
 import { SettlementClock } from "@/components/charts/SettlementClock";
 import { Chip } from "@/components/Chip";
+import { CompliancePanel } from "@/components/CompliancePanel";
 import { EmptyState } from "@/components/EmptyState";
 import { Field, inputClass } from "@/components/Field";
 import { GhostButton } from "@/components/GhostButton";
@@ -735,6 +736,8 @@ export function JobView() {
       </div>
 
       {specHash ? <SpecCheck description={record.description} /> : null}
+
+      {hookIsSquare ? <CompliancePanel jobId={id} status={record.status} client={record.client} address={address} now={now} /> : null}
 
       {listing.status !== 0 || detail.dispute.disputedAt !== 0 ? (
         <div className={`grid gap-4 ${listing.status !== 0 && detail.dispute.disputedAt !== 0 ? "lg:grid-cols-2" : ""}`}>

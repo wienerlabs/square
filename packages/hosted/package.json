@@ -32,6 +32,7 @@
     "@squaresdk/core": "file:../core",
     "@squaresdk/did-resolver": "file:../did-resolver",
     "@squaresdk/mcp": "file:../mcp",
+    "@squaresdk/policy": "file:../policy",
     "viem": "^2.48.0",
     "zod": "^3.25.76"
   },

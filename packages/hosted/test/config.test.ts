@@ -25,6 +25,15 @@ describe("parseHostedConfig", () => {
     expect(config.tools?.[0]?.headers).toEqual({ authorization: "Bearer x" });
   });
 
+  it("takes a compliance block beside a delegation block, and refuses one without", () => {
+    const delegation = { allow: ["https://scribe.example"] };
+    const compliance = { policyFile: "policy.json", proverUrl: "http://127.0.0.1:3003", intervalMs: 5000 };
+    expect(parseHostedConfig({ ...base, delegation, compliance }).compliance).toEqual(compliance);
+    expect(() => parseHostedConfig({ ...base, compliance })).toThrow(/compliance: names a policy and a prover, but the config delegates nothing/);
+    expect(() => parseHostedConfig({ ...base, delegation, compliance: { ...compliance, proverUrl: "nowhere" } })).toThrow(/compliance.proverUrl/);
+    expect(() => parseHostedConfig({ ...base, delegation, compliance: { ...compliance, intervalMs: 10 } })).toThrow(/compliance.intervalMs/);
+  });
+
   it("names what is wrong, by path", () => {
     const cases: Array<[unknown, RegExp]> = [
       [{ ...base, agentId: "seven" }, /agentId: a decimal ERC-8004 id/],

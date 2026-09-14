@@ -11,5 +11,5 @@ export type { AgentCapability, AgentProfile, DidResolverLike, LookupOptions } fr
 export { hire, HireRefusedError } from "./hire.js";
 export type { HireOptions, HireResult, HireTransactions } from "./hire.js";
 export { createSquareMcpServer } from "./server.js";
-export type { SquareMcpServerOptions } from "./server.js";
+export type { ComplianceOptions, SquareMcpServerOptions } from "./server.js";
 export type { JsonSchemaObject, McpServerConfig, McpTool, ToolFailed, ToolFailure, ToolResult, ToolSuccess } from "./types.js";

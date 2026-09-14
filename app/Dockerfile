@@ -10,7 +10,8 @@ WORKDIR /src
 
 COPY packages/did-resolver packages/did-resolver
 COPY packages/core packages/core
-RUN for p in packages/did-resolver packages/core; do \
+COPY packages/policy packages/policy
+RUN for p in packages/did-resolver packages/core packages/policy; do \
       (cd $p && npm install --install-links --omit=dev --ignore-scripts \
         && npm install --install-links --include=dev typescript \
         && npm run build); \

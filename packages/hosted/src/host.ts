@@ -5,6 +5,7 @@ import type { SquareDeployment, SquareWalletClient } from "@squaresdk/core";
 import { AipDidResolver } from "@squaresdk/did-resolver";
 import { ToolPool, toolsForAnthropic, type DidResolverLike, type McpTool } from "@squaresdk/mcp";
 import { parseUnits, type PublicClient } from "viem";
+import { ComplianceDuty, type DutyEvent, type Policy, type Prover } from "@squaresdk/policy";
 import { PolicyAllowance } from "./allowance.js";
 import type { HostedAgentConfig } from "./config.js";
 import { DELEGATE_TOOL, delegate, delegateTool, type DelegationDeps, type DelegationInput } from "./delegation.js";
@@ -40,6 +41,20 @@ export interface HostDeps {
   handlerTimeoutMs?: number | undefined;
   /** Where a run's outcome is reported, per task. */
   onRun?: ((event: { taskId: string; capability: string; outcome: RunOutcome }) => void) | undefined;
+  /**
+   * The policy and the prover for the jobs this agent delegates, resolved
+   * from the config's `compliance` block by the binary, or given here. The
+   * host runs a `ComplianceDuty` over every delegated job for as long as it
+   * lives (square#335).
+   */
+  compliance?: ComplianceDeps | undefined;
+}
+
+export interface ComplianceDeps {
+  policy: Policy;
+  prover: Prover;
+  intervalMs?: number | undefined;
+  onEvent?: ((event: DutyEvent) => void) | undefined;
 }
 
 export interface HostedAgent {
@@ -49,6 +64,8 @@ export interface HostedAgent {
   readonly tools: ToolPool | undefined;
   /** The delegation allowance, when the config delegates. */
   readonly allowance: PolicyAllowance | undefined;
+  /** The release duty over the delegated jobs, when the host was given a policy and a prover. */
+  readonly duty: ComplianceDuty | undefined;
   readonly model: ModelClient;
   close(): Promise<void>;
 }
@@ -90,13 +107,34 @@ export async function hostAgent(config: HostedAgentConfig, deps: HostDeps): Prom
   // in the pool's status at start; every run reads the pool again.
   if (tools) await tools.tools();
 
+  // Delegations run one at a time across the agent: two hires signed from
+  // one wallet in the same instant can take the same nonce, and the
+  // allowance is asked and told around each hire, which two at once would
+  // interleave. The release duty signs from the same wallet, so its ticks
+  // take the same queue.
+  const serially = serialQueue();
+
   let allowance: PolicyAllowance | undefined;
   let delegation: DelegationDeps | undefined;
+  let duty: ComplianceDuty | undefined;
+  const dutyStop = new AbortController();
+  let dutyRun: Promise<void> | undefined;
   if (config.delegation) {
     allowance = new PolicyAllowance({
       client: agent.client,
       maxPerJob: config.delegation.maxPerJob !== undefined ? parseUnits(config.delegation.maxPerJob, 6) : undefined,
     });
+    if (deps.compliance) {
+      const compliance = deps.compliance;
+      duty = new ComplianceDuty({ client: agent.client, policy: compliance.policy, prover: compliance.prover, onEvent: compliance.onEvent, serialize: serially });
+      // For as long as the host lives: a delegated job outlives its task by
+      // the challenge window, and the proof it carries has to be current
+      // when that window closes.
+      dutyRun = duty.run(dutyStop.signal, { intervalMs: compliance.intervalMs }).catch((error: unknown) => {
+        compliance.onEvent?.({ type: "error", jobId: null, error: error instanceof Error ? error : new Error(String(error)) });
+      });
+    }
+    const tracked = duty;
     const resolver = deps.resolver ?? resolverFor(deps, agent);
     delegation = {
       client: agent.client,
@@ -110,10 +148,11 @@ export async function hostAgent(config: HostedAgentConfig, deps: HostDeps): Prom
       pollIntervalMs: deps.pollIntervalMs,
       jobDays: deps.jobDays,
       resolveDeliverable: deps.resolveDeliverable,
+      ...(tracked ? { onFunded: (jobId: bigint, capability: string) => tracked.track(jobId, capability) } : {}),
     };
   }
 
-  const handlers = hostedHandlers(config, { model, modelName, tools, delegation, onRun: deps.onRun });
+  const handlers = hostedHandlers(config, { model, modelName, tools, delegation, onRun: deps.onRun, serially });
   for (const [id, options] of handlers) agent.capability(id, options);
 
   return {
@@ -121,8 +160,11 @@ export async function hostAgent(config: HostedAgentConfig, deps: HostDeps): Prom
     agent,
     tools,
     allowance,
+    duty,
     model,
     close: async () => {
+      dutyStop.abort();
+      await dutyRun;
       await tools?.close();
     },
   };
@@ -133,6 +175,8 @@ export interface HandlerContext {
   modelName: string;
   tools?: ToolPool | undefined;
   delegation?: DelegationDeps | undefined;
+  /** The queue every transaction from the agent's wallet goes through; the host shares its own with the release duty. */
+  serially?: (<T>(work: () => Promise<T>) => Promise<T>) | undefined;
   onRun?: HostDeps["onRun"];
 }
 
@@ -144,20 +188,9 @@ export interface HandlerContext {
  */
 export function hostedHandlers(config: HostedAgentConfig, context: HandlerContext): Map<string, CapabilityOptions> {
   const { tools, delegation } = context;
-
-  // Delegations run one at a time across the agent: two hires signed from
-  // one wallet in the same instant can take the same nonce, and the
-  // allowance is asked and told around each hire, which two at once would
-  // interleave.
-  let queue: Promise<unknown> = Promise.resolve();
-  const serially = <T>(work: () => Promise<T>): Promise<T> => {
-    const next = queue.then(work, work);
-    queue = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
-  };
+  // The host's queue when it has one (see `hostAgent`); a queue of this
+  // handler set's own otherwise, so delegations still run one at a time.
+  const serially = context.serially ?? serialQueue();
 
   const handlers = new Map<string, CapabilityOptions>();
   for (const capability of config.capabilities) {
@@ -228,4 +261,17 @@ function resolverFor(deps: HostDeps, agent: Agent): DidResolverLike {
     allowedRegistries: [deployment.identityRegistry],
     onNetworkError: (context, cause) => console.error(`[square-hosted] ${context}:`, cause),
   });
+}
+
+/** A queue that runs one unit of work at a time, in the order they were queued, whatever each one's outcome. */
+function serialQueue(): <T>(work: () => Promise<T>) => Promise<T> {
+  let queue: Promise<unknown> = Promise.resolve();
+  return <T>(work: () => Promise<T>): Promise<T> => {
+    const next = queue.then(work, work);
+    queue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  };
 }
