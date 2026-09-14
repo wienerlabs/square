@@ -293,6 +293,13 @@ gh api -X PUT repos/wienerlabs/square/branches/main/protection \
 merge, so the checks that gate a merge are the ones that ran against the code
 that will actually land.
 
+`required_pull_request_reviews` is the review gate of
+[docs/decisions/review-gate.md](decisions/review-gate.md): a pull request that
+touches `contracts/` or `circuits/` needs an approving review from a code owner
+in `.github/CODEOWNERS` who did not author it; any other pull request needs
+none. After applying the payload, confirm both: a documentation pull request
+shows no review requirement, a contracts pull request shows one.
+
 Renaming a job renames its check. A required check that no longer reports blocks
 every merge, so the list above and the job names in the workflows have to move
 together — including the `matrix.package` entries in `packages.yml`, whose check
