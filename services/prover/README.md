@@ -35,6 +35,9 @@ PROVER_ARTIFACTS_DIR=/path/to/artifacts npm start
 | `PROVER_SERVICE_PORT` | `3003` | Listen port. |
 | `PROVER_ARTIFACTS_DIR` | `services/prover/artifacts` | Directory holding `payment.wasm` and `payment.zkey`. The default is relative to this package, not to the working directory, so the service finds the same files wherever it is started from — and `/health` inspects exactly the paths the prover opens. |
 | `CORS_ORIGINS` | — | Comma-separated extra origins; `localhost` on any port is always allowed. |
+| `PROVER_MAX_CONCURRENCY` | `2` | Proofs allowed to run at once. Not a core count: the proving system runs on the main thread, so more of them share one event loop rather than one core each. Measured on this circuit, sixteen proofs cost about ten seconds at every ceiling from 1 to 8, while peak memory rose from 975 MB to 1 269 MB — roughly 42 MB per extra slot, because each proof in flight holds its own read of the proving key. Two is where throughput stops improving. |
+| `PROVER_MAX_QUEUE` | the ceiling above | Requests allowed to wait for a slot. Beyond it, `POST /prove` answers `503` with `Retry-After` rather than queueing behind an unbounded backlog. |
+| `PROVER_PROOF_TIMEOUT_MS` | `30000` | How long one request may take, counted from when it arrives rather than from when it reaches the front of the queue — waiting for a slot is part of what the caller is waiting for. Past it the request is answered `504`. A proof already under way is not stopped, because the proving system takes no abort signal, so it keeps its slot until it finishes and the ceiling keeps counting it. One proof measured about 700 ms on this circuit, so the default is generous; a slower machine or a larger circuit is what it is there for. |
 
 ## Circuit artifacts
 

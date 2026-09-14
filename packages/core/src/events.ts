@@ -1,8 +1,21 @@
 import { parseEventLogs, type Address, type Log, type ParseEventLogsReturnType } from "viem";
-import { arbitrationAbi, claimMarketAbi, keeperEvaluatorAbi, squareHookAbi, squareJobAbi } from "./abi/index.js";
+import {
+  arbitrationAbi,
+  claimMarketAbi,
+  complianceModuleAbi,
+  keeperEvaluatorAbi,
+  squareHookAbi,
+  squareJobAbi,
+} from "./abi/index.js";
 import type { SquareDeployment } from "./deployments.js";
 
-export type SquareContract = "SquareJob" | "KeeperEvaluator" | "Arbitration" | "ClaimMarket" | "SquareHook";
+export type SquareContract =
+  | "SquareJob"
+  | "KeeperEvaluator"
+  | "Arbitration"
+  | "ClaimMarket"
+  | "SquareHook"
+  | "ComplianceModule";
 
 type Decoded<TAbi extends readonly unknown[]> = ParseEventLogsReturnType<TAbi, undefined, true>[number];
 
@@ -11,13 +24,15 @@ export type KeeperEvaluatorEvent = { contract: "KeeperEvaluator" } & Decoded<typ
 export type ArbitrationEvent = { contract: "Arbitration" } & Decoded<typeof arbitrationAbi>;
 export type ClaimMarketEvent = { contract: "ClaimMarket" } & Decoded<typeof claimMarketAbi>;
 export type SquareHookEvent = { contract: "SquareHook" } & Decoded<typeof squareHookAbi>;
+export type ComplianceModuleEvent = { contract: "ComplianceModule" } & Decoded<typeof complianceModuleAbi>;
 
 export type SquareEvent =
   | SquareJobEvent
   | KeeperEvaluatorEvent
   | ArbitrationEvent
   | ClaimMarketEvent
-  | SquareHookEvent;
+  | SquareHookEvent
+  | ComplianceModuleEvent;
 
 const sameAddress = (a: Address, b: Address): boolean => a.toLowerCase() === b.toLowerCase();
 
@@ -44,6 +59,11 @@ export function decodeSquareLogs(logs: Log[], deployment: SquareDeployment): Squ
     ...decodeFor("Arbitration", arbitrationAbi, deployment.arbitration, logs),
     ...decodeFor("ClaimMarket", claimMarketAbi, deployment.claimMarket, logs),
     ...decodeFor("SquareHook", squareHookAbi, deployment.squareHook, logs),
+    // Only when the record names a module (#250); a stack without one has no
+    // address to attribute these logs to.
+    ...(deployment.complianceModule
+      ? decodeFor("ComplianceModule", complianceModuleAbi, deployment.complianceModule, logs)
+      : []),
   ] as SquareEvent[];
   return events.sort((a, b) => {
     const [blockA, indexA] = position(a);

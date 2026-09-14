@@ -32,6 +32,19 @@ export const complianceModuleAbi = [
   },
   {
     "type": "function",
+    "name": "MIN_HOOK_GAS_LIMIT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "acceptOwnership",
     "inputs": [],
     "outputs": [],
@@ -375,6 +388,12 @@ export const complianceModuleAbi = [
         "internalType": "uint256"
       },
       {
+        "name": "statement",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
         "name": "reason",
         "type": "bytes32",
         "indexed": false,
@@ -445,6 +464,22 @@ export const complianceModuleAbi = [
       }
     ],
     "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "HookGasLimitTooLow",
+    "inputs": [
+      {
+        "name": "hookGasLimit",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "required",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",

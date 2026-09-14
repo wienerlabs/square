@@ -11,7 +11,8 @@ proves it by comparing the rebuilt state with the chain field by field.
 - `reducer.ts` is a pure function from the event stream to state: jobs,
   disputes, listings, the two pull-payment ledgers, arbiter sets and the
   evaluator windows. It is what `docs/design/storage-and-events.md` specifies.
-- `sync.ts` fetches logs for the five contracts in block batches, journals
+- `sync.ts` fetches logs for the five contracts, and for `ComplianceModule` when
+  the deployment record names one, in block batches, journals
   every log in `job_events` keyed by `(chain_id, block_number, log_index)`,
   applies the ones it has not seen, persists the touched rows and advances the
   checkpoint, all in one transaction. On start it replays the journal from the
@@ -40,7 +41,10 @@ proves it by comparing the rebuilt state with the chain field by field.
   address in the deployment file. A mismatch means the checkpoint belongs to an
   earlier deployment on the same chain and resuming from it would silently skip
   every event of the new contracts, so the indexer refuses to start unless
-  `ON_DEPLOYMENT_CHANGE=restart` tells it to reindex from `START_BLOCK`.
+  `ON_DEPLOYMENT_CHANGE=restart` tells it to reindex from `START_BLOCK`. A
+  contract the record names that no earlier run indexed, such as a compliance
+  module added to the record of a running indexer, counts as a change too:
+  resuming would skip every log it emitted before the checkpoint.
 - `ON_DEPLOYMENT_CHANGE=restart` is destructive on purpose: before it reindexes
   it deletes every derived row of that chain (`jobs`, `disputes`,
   `claim_listings`, `ledger_balances`, `arbiter_sets` and the `job_events`
@@ -52,6 +56,13 @@ proves it by comparing the rebuilt state with the chain field by field.
   deployment is written again from its own logs. The alternative that keeps both
   deployments side by side is a deployment-keyed row, recorded as deferred in
   `docs/design/data-layer.md`.
+- A `ReleaseRefused` from the compliance module changes no mirror row, because
+  what the verdict did to the money arrives as the kernel's `PayoutRouted`. It
+  is journaled with its `statement` decoded, so a refusal and the
+  `ReleaseVerified` that spent the same statement are one `job_events` query
+  apart, and it is logged as `indexer.release_refused` with the reason and the
+  statement, or with a note that the proof could not be read when the statement
+  is zero (#250).
 - No reorg handling. Arc has deterministic finality: a block is either final or
   absent, so `latest` is safe to index.
 - `api.ts` serves the query surface tabled under [Endpoints](#endpoints). Every

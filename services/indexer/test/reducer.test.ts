@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { stringToHex } from "viem";
 import type { SquareEvent } from "@squaresdk/core";
 import {
   applyEvent,
@@ -11,6 +12,7 @@ import {
   payeeOf,
   reduce,
   windowFor,
+  type ReducerNotice,
 } from "../src/reducer.js";
 
 const client = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" as const;
@@ -154,6 +156,24 @@ describe("reducer", () => {
     expect(state.listings.get(1n)?.status).toBe(2);
     const other = reduce([...lifecycle(), ev("ClaimMarket", "ClaimListed", { jobId: 1n, seller: provider, price: 1n, faceValue: 2n }), ev("ClaimMarket", "ClaimCancelled", { jobId: 1n, seller: provider })]);
     expect(payeeOf(other, 1n)).toBe(provider);
+  });
+
+  // #250: a refusal is reported with the statement it refused, and neither of the
+  // module's verdicts moves a mirror row; the payout they produced arrives as the
+  // kernel's own events.
+  it("reports a compliance refusal with its statement and leaves the mirror as it was", () => {
+    const state = reduce(lifecycle());
+    const job = state.jobs.get(1n);
+    const notices: ReducerNotice[] = [];
+    const statement = `0x${"5a".repeat(32)}`;
+    const reason = stringToHex("proof already used", { size: 32 });
+
+    applyEvent(state, ev("ComplianceModule", "ReleaseRefused", { jobId: 1n, statement, reason }), (notice) => notices.push(notice));
+    applyEvent(state, ev("ComplianceModule", "ReleaseVerified", { jobId: 1n, payee: provider, amount: 1n, statement }), (notice) => notices.push(notice));
+
+    expect(notices).toEqual([{ code: "releaseRefused", jobId: 1n, statement, reason }]);
+    expect(state.jobs.get(1n)?.status).toBe(job?.status);
+    expect(state.jobs.get(1n)?.updatedBlock).toBe(job?.updatedBlock);
   });
 
   it("refuses an event for a job it has never seen", () => {

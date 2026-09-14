@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { getAddress } from "viem";
 import {
   ARC_TESTNET_CHAIN_ID,
   deploymentFor,
@@ -41,5 +42,25 @@ describe(`the Arc Testnet constant and contracts/deployments/${ARC_TESTNET_CHAIN
     const covered = [...FIELDS].sort();
     expect(Object.keys(constant).sort()).toEqual(covered);
     expect(Object.keys(fromFile).sort()).toEqual(covered);
+  });
+});
+
+// #250. `DeployLocal` writes a ComplianceModule and the Arc record carries none,
+// so the field is read when it is there and left out, not set to undefined,
+// when it is not.
+describe("deploymentFromJson and the compliance module", () => {
+  const record = JSON.parse(readFileSync(deploymentPath, "utf8")) as Record<string, unknown>;
+  const module = "0x00000000000000000000000000000000000000c0";
+
+  it("reads ComplianceModule when the record names one", () => {
+    expect(deploymentFromJson({ ...record, ComplianceModule: module }).complianceModule).toBe(getAddress(module));
+  });
+
+  it("leaves the field out when the record names none", () => {
+    expect("complianceModule" in deploymentFromJson(record)).toBe(false);
+  });
+
+  it("refuses a ComplianceModule that is not an address", () => {
+    expect(() => deploymentFromJson({ ...record, ComplianceModule: "0x1234" })).toThrow("ComplianceModule is not an address");
   });
 });
