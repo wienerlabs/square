@@ -401,3 +401,5 @@ a different circuit does not verify:
 PROVER_ARTIFACTS_DIR=/path/to/artifacts node script/regenerate-fixtures.mjs
 script/verifier-constants.mjs   verifying-key constants from verification_key.json (for #16)
 ```
+
+<!-- probe: does a change under contracts/ ask for a code owner's review (docs/decisions/review-gate.md)? closed without merging -->
