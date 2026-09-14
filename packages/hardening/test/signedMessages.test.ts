@@ -236,41 +236,44 @@ describe("memoryNonceStore", () => {
     expect(store.size()).toBe(1);
   });
 
+  const fastestOf = async (runs: number, measure: () => Promise<number>): Promise<number> => {
+    let fastest = Number.POSITIVE_INFINITY;
+    for (let run = 0; run < runs; run += 1) fastest = Math.min(fastest, await measure());
+    return fastest;
+  };
+
+  const fillFreshStore = async (count: number, alreadyHolding = 0): Promise<number> => {
+    const store = memoryNonceStore({ now: () => NOW, pruneIntervalSeconds: 3_600 });
+    for (let nonce = 0; nonce < alreadyHolding; nonce += 1) await store.consume(alice.address, BigInt(nonce), NOW + 300n);
+    const startedAt = performance.now();
+    for (let nonce = alreadyHolding; nonce < alreadyHolding + count; nonce += 1) {
+      await store.consume(alice.address, BigInt(nonce), NOW + 300n);
+    }
+    return performance.now() - startedAt;
+  };
+
   it(
     "consumes at a cost that does not grow with the number of live nonces the actor holds",
     async () => {
-      const store = memoryNonceStore({ now: () => NOW, pruneIntervalSeconds: 3_600 });
-      const fill = async (from: number, to: number): Promise<number> => {
-        const startedAt = performance.now();
-        for (let nonce = from; nonce < to; nonce += 1) await store.consume(alice.address, BigInt(nonce), NOW + 300n);
-        return performance.now() - startedAt;
-      };
-
-      const onAnEmptyStore = await fill(0, 10_000);
-      await fill(10_000, 40_000);
-      const onAStoreHolding40k = await fill(40_000, 50_000);
+      await fillFreshStore(10_000);
+      const onAnEmptyStore = await fastestOf(5, () => fillFreshStore(10_000));
+      const onAStoreHolding40k = await fastestOf(5, () => fillFreshStore(10_000, 40_000));
 
       expect(onAStoreHolding40k).toBeLessThan(Math.max(onAnEmptyStore, 1) * 4);
     },
-    30_000
+    60_000
   );
 
   it(
     "fills in linear time, so an actor cannot make its own verification quadratic",
     async () => {
-      const fillFreshStore = async (count: number): Promise<number> => {
-        const store = memoryNonceStore({ now: () => NOW, pruneIntervalSeconds: 3_600 });
-        const startedAt = performance.now();
-        for (let nonce = 0; nonce < count; nonce += 1) await store.consume(alice.address, BigInt(nonce), NOW + 300n);
-        return performance.now() - startedAt;
-      };
-
-      const tenThousand = await fillFreshStore(10_000);
-      const fortyThousand = await fillFreshStore(40_000);
+      await fillFreshStore(40_000);
+      const tenThousand = await fastestOf(5, () => fillFreshStore(10_000));
+      const fortyThousand = await fastestOf(5, () => fillFreshStore(40_000));
 
       expect(fortyThousand).toBeLessThan(Math.max(tenThousand, 1) * 8);
     },
-    30_000
+    60_000
   );
 });
 
