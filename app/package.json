@@ -13,6 +13,7 @@
   "dependencies": {
     "@squaresdk/core": "file:../packages/core",
     "@squaresdk/did-resolver": "file:../packages/did-resolver",
+    "@squaresdk/policy": "file:../packages/policy",
     "@tanstack/react-query": "^5.90.0",
     "canonicalize": "^2.1.0",
     "next": "^15.5.0",

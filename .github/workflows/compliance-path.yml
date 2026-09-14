@@ -1,0 +1,162 @@
+name: compliance path
+
+# The institution's side of the compliance gate, end to end (square#335,
+# square#338): a policy committed from @squaresdk/policy, a real Groth16
+# proof from the prover, a module keyed to that prover's key verifying it at
+# release, and the escrow going to whoever the proof names. Through every
+# surface that carries the duty: the package itself, the square policy
+# commands, square_hire over stdio, the hosted agent's delegation, and the
+# lifecycle runner over the five settlement paths.
+#
+# One stack for all of them: DeployLocal, then
+# packages/policy/scripts/install-module-for-this-build.mjs, which compiles
+# the repository's verifier with the constants of the key the circuit job just
+# built (DeployLocal's own verifier comes from another key), deploys a module
+# and installs it on the hook; and the prover beside it. The other packages'
+# anvil suites stay on a stack without a module, where nothing is gated.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/policy/**"
+      - "packages/cli/**"
+      - "packages/mcp/**"
+      - "packages/hosted/**"
+      - "packages/core/**"
+      - "packages/agent/**"
+      - "packages/a2a/**"
+      - "services/prover/**"
+      - "circuits/**"
+      - "contracts/**"
+      - ".github/workflows/compliance-path.yml"
+  # No path filter on pull_request, deliberately: a required status check that
+  # a filter skips never reports, and GitHub blocks the merge waiting for it.
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  path:
+    name: policy → proof → release (anvil, every surface)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09  # v1.9.1
+        with:
+          version: stable
+      - uses: ./.github/actions/circom
+      - name: Cache the phase-1 powers of tau
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: circuits/build/ppot_0080_14.ptau
+          key: ptau-${{ hashFiles('circuits/scripts/fetch-ptau.mjs') }}
+      - name: Build the circuit and a development proving key
+        working-directory: circuits
+        run: |
+          npm ci
+          npm run build
+      - name: Put the artifacts where the prover looks for them
+        run: |
+          set -euo pipefail
+          mkdir -p services/prover/artifacts
+          cp circuits/build/payment.zkey services/prover/artifacts/
+          cp circuits/build/payment_vk.json services/prover/artifacts/
+          cp circuits/build/payment_js/payment.wasm services/prover/artifacts/
+      - name: Install the prover
+        working-directory: services/prover
+        run: npm install --install-links
+
+      - name: Build the contracts
+        working-directory: contracts
+        run: forge build
+      - name: Build path dependencies
+        run: |
+          set -euo pipefail
+          for dep in packages/did-resolver packages/core packages/observability packages/data packages/a2a packages/x402 packages/agent packages/policy packages/mcp; do
+            (cd "$dep" && npm install --install-links && npm run build)
+          done
+      - name: Install the surfaces
+        run: |
+          set -euo pipefail
+          for pkg in packages/cli packages/hosted; do
+            (cd "$pkg" && npm install --install-links && npm run build)
+          done
+
+      - name: A local chain, the local stack, a module keyed to this build's key, and the prover
+        run: |
+          set -euo pipefail
+          anvil --port 8545 --chain-id 31337 --silent &
+          for _ in $(seq 1 30); do cast chain-id --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1 && break; sleep 1; done
+          (cd contracts && forge script script/DeployLocal.s.sol --rpc-url http://127.0.0.1:8545 --broadcast)
+          (cd packages/policy && npm run install-module)
+          (cd services/prover && node src/index.js > ../../prover.log 2>&1 &)
+          for _ in $(seq 1 30); do curl -sf http://127.0.0.1:3003/health >/dev/null 2>&1 && break; sleep 1; done
+
+      # The suites below skip themselves, naming the reason, when any of the
+      # three is missing; a green job that ran nothing is the failure this
+      # step exists to catch.
+      - name: The stack the suites refuse to run without
+        run: |
+          set -uo pipefail
+          fail=0
+          if cast chain-id --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1
+          then echo "  ok      anvil answering on 127.0.0.1:8545"
+          else echo "  MISSING anvil is not answering"; fail=1; fi
+          if [ -f contracts/deployments/31337.json ] && grep -q ComplianceModule contracts/deployments/31337.json
+          then echo "  ok      contracts/deployments/31337.json records a ComplianceModule"
+          else echo "  MISSING no ComplianceModule in contracts/deployments/31337.json"; fail=1; fi
+          hook=$(node -e 'console.log(JSON.parse(require("fs").readFileSync("contracts/deployments/31337.json","utf8")).SquareHook)')
+          module=$(cast call "$hook" 'complianceModule()(address)' --rpc-url http://127.0.0.1:8545)
+          if [ "$module" != "0x0000000000000000000000000000000000000000" ]
+          then echo "  ok      the hook holds module $module"
+          else echo "  MISSING the hook's compliance slot is empty"; fail=1; fi
+          if curl -sf http://127.0.0.1:3003/health | grep -q '"status":"healthy"'
+          then echo "  ok      the prover is healthy on 127.0.0.1:3003"
+          else echo "  MISSING the prover is not healthy"; cat prover.log 2>/dev/null; fail=1; fi
+          exit $fail
+
+      - name: "@squaresdk/policy: a real proof, verified at release, to the provider and to a buyer"
+        working-directory: packages/policy
+        run: npm run test:anvil -- --reporter=default --reporter=json --outputFile.json=/tmp/policy.json
+      - name: "square policy: init, commit, show, buyers, prove, status, release"
+        working-directory: packages/cli
+        run: npx vitest run test/policy.anvil.test.ts --reporter=default --reporter=json --outputFile.json=/tmp/cli.json
+      - name: "square_hire: the server keeps the proof current and releases"
+        working-directory: packages/mcp
+        run: npx vitest run test/compliance.test.ts --reporter=default --reporter=json --outputFile.json=/tmp/mcp.json
+      - name: "square-hosted: a delegated job is proved and released"
+        working-directory: packages/hosted
+        run: npx vitest run test/compliance.test.ts --reporter=default --reporter=json --outputFile.json=/tmp/hosted.json
+      - name: The lifecycle runner, every release proved
+        working-directory: packages/core
+        env:
+          ANVIL: "1"
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          LIFECYCLE_REPORT: ${{ runner.temp }}/lifecycle-31337-gated.md
+          LIFECYCLE_PROVER_URL: http://127.0.0.1:3003
+        run: |
+          set -euo pipefail
+          # The lifecycle's client is anvil account 1; its policy pays the runner's one category.
+          node ../cli/dist/index.js policy init --out "$RUNNER_TEMP/lifecycle-policy.json" \
+            --operator 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 --daily 1000 --per-tx 100 --category lifecycle \
+            --rpc http://127.0.0.1:8545 --deployment ../../contracts/deployments/31337.json --json
+          LIFECYCLE_POLICY_FILE="$RUNNER_TEMP/lifecycle-policy.json" npm run lifecycle
+          grep -c setComplianceProof "$LIFECYCLE_REPORT" | xargs -I{} echo "{} proofs bound over the lifecycle"
+
+      - name: How many tests ran
+        if: always()
+        run: |
+          node .github/scripts/vitest-summary.mjs /tmp/policy.json "@squaresdk/policy (anvil, gated)"
+          node .github/scripts/vitest-summary.mjs /tmp/cli.json "square policy (anvil, gated)"
+          node .github/scripts/vitest-summary.mjs /tmp/mcp.json "square_hire (anvil, gated)"
+          node .github/scripts/vitest-summary.mjs /tmp/hosted.json "square-hosted (anvil, gated)"

@@ -30,6 +30,23 @@ export interface DelegationConfig {
   maxPerJob?: string | undefined;
 }
 
+/**
+ * The institution's side of the compliance gate for the jobs this agent
+ * delegates (square#335): the policy the wallet committed on chain, as a
+ * file beside the config, and the prover that policy's secret may be sent
+ * to. With it the host keeps a proof bound to every delegated job and
+ * releases each when its window closes; on a stack whose hook holds a
+ * module, without it every delegated release would pay this wallet back.
+ */
+export interface ComplianceConfig {
+  /** The policy file (`square policy init` writes one), relative to the config file. Holds the policy's secret. */
+  policyFile: string;
+  /** The prover service the policy's secret may be sent to. */
+  proverUrl: string;
+  /** How often the bound proofs are checked, ms; well inside the module's tolerance. Default 15000. */
+  intervalMs?: number | undefined;
+}
+
 export interface HostedAgentConfig {
   name: string;
   description: string;
@@ -42,6 +59,7 @@ export interface HostedAgentConfig {
   /** MCP servers the model may call tools on. */
   tools?: McpServerConfig[] | undefined;
   delegation?: DelegationConfig | undefined;
+  compliance?: ComplianceConfig | undefined;
   /** Most model turns per task. Default 12. */
   maxTurns?: number | undefined;
 }
@@ -90,6 +108,13 @@ const schema = z.object({
       maxPerJob: z.string().regex(USDC).optional(),
     })
     .optional(),
+  compliance: z
+    .object({
+      policyFile: z.string().min(1),
+      proverUrl: z.string().url(),
+      intervalMs: z.number().int().min(1000).optional(),
+    })
+    .optional(),
   maxTurns: z.number().int().min(1).max(100).optional(),
 });
 
@@ -119,6 +144,9 @@ export function parseHostedConfig(json: unknown): HostedAgentConfig {
     if (capability.delegate && config.delegation === undefined) {
       throw new HostedConfigError(`capabilities.${capability.id}: delegates, but the config has no delegation block`);
     }
+  }
+  if (config.compliance && config.delegation === undefined) {
+    throw new HostedConfigError("compliance: names a policy and a prover, but the config delegates nothing; only delegated jobs are this wallet's to prove");
   }
   return config as HostedAgentConfig;
 }
