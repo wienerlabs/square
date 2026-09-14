@@ -28,6 +28,7 @@ export {
   type Hex,
   type Json,
 } from "./codec.js";
+export type { ListPage } from "./pagination.js";
 export type { IndexedContract } from "./contracts.js";
 export * as jobs from "./repositories/jobs.js";
 export * as jobEvents from "./repositories/jobEvents.js";

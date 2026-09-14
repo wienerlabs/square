@@ -110,7 +110,7 @@ export function DashboardView() {
   const indexerData = indexer.data;
   const caption = indexerUrl
     ? indexerData
-      ? `Open and in window come from the indexer at ${indexerUrl} (last indexed block ${indexerData.status.lastIndexedBlock ?? "unknown"}). Completed is counted over the ${scanned} most recent job ids read from the chain.`
+      ? `Open and in window come from the indexer at ${indexerUrl} (last indexed block ${indexerData.lastIndexedBlock ?? "unknown"}). Completed is counted over the ${scanned} most recent job ids read from the chain.`
       : indexer.isError
         ? `The indexer at ${indexerUrl} did not answer (${describeError(indexer.error)}). Counts fall back to the ${scanned} most recent job ids read from the chain.`
         : `Waiting for the indexer at ${indexerUrl}. Counts below are read over the ${scanned} most recent job ids from the chain.`
@@ -166,13 +166,13 @@ export function DashboardView() {
           <MetricCard
             label="Open"
             loading={jobsQuery.isPending && !indexerData}
-            value={indexerData ? indexerData.open.length : jobsQuery.data ? counts.open : "Unavailable"}
+            value={indexerData ? indexerData.counts.open : jobsQuery.data ? counts.open : "Unavailable"}
             hint="Open or funded, not yet submitted"
           />
           <MetricCard
             label="In window"
             loading={jobsQuery.isPending && !indexerData}
-            value={indexerData ? indexerData.inWindow.length : jobsQuery.data ? counts.inWindow : "Unavailable"}
+            value={indexerData ? indexerData.counts.inWindow : jobsQuery.data ? counts.inWindow : "Unavailable"}
             hint="Submitted, undisputed, window still open"
           />
           <MetricCard
