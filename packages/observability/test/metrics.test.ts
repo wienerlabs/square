@@ -56,6 +56,9 @@ describe("metric names", () => {
       "square_hook_write_failures_total",
       "square_alert_dispatch_failures_total",
       "square_indexer_quarantined_events_total",
+      "square_proof_slots_active",
+      "square_proof_slots_queued",
+      "square_proof_slots_limit",
     ]);
   });
 
@@ -65,6 +68,46 @@ describe("metric names", () => {
     const text = await renderMetrics(metrics.registry);
     expect(text).toContain("sq_finalize_pending_total");
     expect(text).not.toContain("square_");
+  });
+});
+
+describe("proof slots", () => {
+  it("publishes what is running, what is waiting and what the ceiling is", async () => {
+    const metrics = createMetrics({ service: "prover", defaultMetrics: false });
+    metrics.setProofSlots({ active: 2, queued: 5, limit: 2 });
+
+    expect(await valueOf(metrics.registry, "square_proof_slots_active")).toBe(2);
+    expect(await valueOf(metrics.registry, "square_proof_slots_queued")).toBe(5);
+    expect(await valueOf(metrics.registry, "square_proof_slots_limit")).toBe(2);
+    expect(metrics.snapshot().proofSlotsActive).toBe(2);
+    expect(metrics.snapshot().proofSlotsQueued).toBe(5);
+  });
+
+  it("keeps the last reading when handed something that is not a number", async () => {
+    // The three come from one reading of the limiter, so a bad value should
+    // leave the gauge saying what it last knew rather than resetting it to
+    // zero and reading as an idle service.
+    const metrics = createMetrics({ service: "prover", defaultMetrics: false });
+    metrics.setProofSlots({ active: 3, queued: 1, limit: 4 });
+    metrics.setProofSlots({
+      active: Number.NaN,
+      queued: Number.POSITIVE_INFINITY,
+      limit: "4" as unknown as number,
+    });
+
+    expect(await valueOf(metrics.registry, "square_proof_slots_active")).toBe(3);
+    expect(await valueOf(metrics.registry, "square_proof_slots_queued")).toBe(1);
+    expect(await valueOf(metrics.registry, "square_proof_slots_limit")).toBe(4);
+  });
+
+  it("counts down as the work drains", async () => {
+    const metrics = createMetrics({ service: "prover", defaultMetrics: false });
+    metrics.setProofSlots({ active: 2, queued: 3, limit: 2 });
+    metrics.setProofSlots({ active: 0, queued: 0, limit: 2 });
+
+    expect(await valueOf(metrics.registry, "square_proof_slots_active")).toBe(0);
+    expect(await valueOf(metrics.registry, "square_proof_slots_queued")).toBe(0);
+    expect(await valueOf(metrics.registry, "square_proof_slots_limit")).toBe(2);
   });
 });
 
