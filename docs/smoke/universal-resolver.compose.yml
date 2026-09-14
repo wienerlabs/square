@@ -1,24 +1,23 @@
 # A Universal Resolver with the did:aip driver wired in, for checking that the
 # driver behaves the same inside the resolver as it does on its own.
 #
-#   docker compose -f docs/smoke/universal-resolver.compose.yml up --build -d
+#   docker compose -f docs/smoke/universal-resolver.compose.yml up -d
 #   curl -s -H 'Accept: application/ld+json' \
 #     http://localhost:8090/1.0/identifiers/did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:892271
 #   docker compose -f docs/smoke/universal-resolver.compose.yml down
 #
-# The driver is built from this repository rather than pulled, so this works
-# before ghcr.io/wienerlabs/driver-did-aip is public (#64) and before the
-# upstream driver entry lands (#65). Once both are done, the same check runs
-# against the real Universal Resolver with no local build.
+# The driver is the published image, pulled anonymously: the GHCR package is
+# public (#64) and the tag is the driver's version in packages/did-aip-driver.
+# This is the image the upstream driver entry names (#65), so what runs here
+# is what the public Universal Resolver will run once that entry lands. To try
+# an unreleased build instead, build it under a tag of your own
+# (`docker build -f did-aip-driver/Dockerfile -t driver-did-aip:dev packages`,
+# the context is packages/ because the driver depends on ../did-resolver by
+# path) and point `image:` at it.
 
 services:
   driver-did-aip:
-    build:
-      # The build context is packages/, not the driver directory: the driver
-      # depends on ../did-resolver by path and Docker cannot reach outside its
-      # context. Same reason as .github/workflows/did-aip-driver.yml.
-      context: ../../packages
-      dockerfile: did-aip-driver/Dockerfile
+    image: ghcr.io/wienerlabs/driver-did-aip:0.2.4
     environment:
       RPC_5042002: https://rpc.testnet.arc.io
     healthcheck:
