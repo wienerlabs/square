@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { encodeAbiParameters, encodeEventTopics, type Abi, type AbiEvent, type Hex, type Log, type PublicClient } from "viem";
-import { deploymentFor, keeperEvaluatorAbi, squareHookAbi, squareJobAbi, type SquareDeployment } from "@squaresdk/core";
+import { encodeAbiParameters, encodeEventTopics, stringToHex, zeroHash, type Abi, type AbiEvent, type Hex, type Log, type PublicClient } from "viem";
+import { complianceModuleAbi, deploymentFor, keeperEvaluatorAbi, squareHookAbi, squareJobAbi, type SquareDeployment } from "@squaresdk/core";
 import { checkpoints, jobs, ledgerBalances, migrate, MIGRATIONS_DIR, pgliteDatabase, type Database } from "@squaresdk/data";
 import { createAlerting, createHealth, createMetrics, hookWriteFailures, type Alert, type Metrics } from "@squaresdk/observability";
 import { createApi } from "../src/api.js";
@@ -331,6 +331,75 @@ describe("a rolled-back batch", () => {
       expect(indexer.state.ledger.get("SquareJob:0x2222222222222222222222222222222222222222")).toBe(5_000_000n);
       const balance = await ledgerBalances.get(db, CHAIN, "SquareJob", "0x2222222222222222222222222222222222222222");
       expect(balance?.amount).toBe(5_000_000n);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+// #250. With the module named in the deployment, its refusals are fetched,
+// journaled with the statement decoded, and reported with it.
+describe("the compliance module, when the deployment names it", () => {
+  const module = "0x00000000000000000000000000000000000000c0" as Hex;
+  const withModule: SquareDeployment = { ...deployment, complianceModule: module };
+  const statement = `0x${"5a".repeat(32)}` as Hex;
+
+  function releaseRefused(jobId: bigint, refused: Hex, reason: string, blockNumber: bigint): StagedLog {
+    return {
+      abi: complianceModuleAbi as Abi,
+      address: module,
+      eventName: "ReleaseRefused",
+      args: { jobId, statement: refused, reason: stringToHex(reason, { size: 32 }) },
+      blockNumber,
+    };
+  }
+
+  it("journals each refusal with its statement and reports it, naming none when the proof could not be read", async () => {
+    const db = await openDatabase();
+    try {
+      const staged = [
+        windowsConfigured(1n),
+        jobCreated(1n, 2n),
+        releaseRefused(1n, statement, "proof already used", 3n),
+        releaseRefused(1n, zeroHash, "malformed proof", 3n),
+      ];
+      const { indexer, logs } = build(db, staged, 3n, { deployment: withModule });
+      await indexer.start();
+      const result = await indexer.syncOnce();
+      expect(result?.applied).toBe(4);
+
+      const { rows } = await db.query<{ args: { decoded: { statement: string } } }>(
+        "select args from job_events where chain_id = $1 and contract = 'ComplianceModule' and name = 'ReleaseRefused' order by log_index",
+        [CHAIN],
+      );
+      expect(rows.map((row) => row.args.decoded.statement)).toEqual([statement, zeroHash]);
+
+      const reported = logs.filter((entry) => entry.event === "indexer.release_refused").map((entry) => entry.fields["reason"]);
+      expect(reported).toEqual([
+        `proof already used; statement ${statement}`,
+        "malformed proof; no signal could be read from the proof, so the refusal names no statement",
+      ]);
+      expect((await checkpoints.get(db, CHAIN, "ComplianceModule"))?.address.toLowerCase()).toBe(module);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("refuses to resume when the module is new to an indexer that already holds a checkpoint", async () => {
+    const db = await openDatabase();
+    try {
+      const current = {
+        SquareJob: deployment.squareJob,
+        KeeperEvaluator: deployment.keeperEvaluator,
+        Arbitration: deployment.arbitration,
+        ClaimMarket: deployment.claimMarket,
+        SquareHook: deployment.squareHook,
+      } as const;
+      for (const [contract, address] of Object.entries(current)) {
+        await checkpoints.set(db, { chainId: CHAIN, contract: contract as keyof typeof current, address, lastBlock: 900n });
+      }
+      const { indexer } = build(db, [], 1_000n, { deployment: withModule });
+      await expect(indexer.start()).rejects.toThrow(/ComplianceModule was never indexed here/);
     } finally {
       await db.close();
     }

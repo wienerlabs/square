@@ -41,6 +41,7 @@ export {
   eventsNamed,
   type ArbitrationEvent,
   type ClaimMarketEvent,
+  type ComplianceModuleEvent,
   type KeeperEvaluatorEvent,
   type SquareContract,
   type SquareEvent,

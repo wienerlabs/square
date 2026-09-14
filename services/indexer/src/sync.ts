@@ -1,4 +1,4 @@
-import type { Address, Hex, Log, PublicClient } from "viem";
+import { hexToString, zeroHash, type Address, type Hex, type Log, type PublicClient } from "viem";
 import { decodeSquareLogs, type SquareDeployment, type SquareEvent } from "@squaresdk/core";
 import {
   arbiterSets,
@@ -15,7 +15,7 @@ import {
 import { waitUnlessAborted, type Logger, type Metrics } from "@squaresdk/observability";
 import { applyEvent, cloneState, emptyState, ledgerKey, type IndexerState, type ReducerNotice } from "./reducer.js";
 
-const CONTRACTS: IndexedContract[] = ["SquareJob", "KeeperEvaluator", "Arbitration", "ClaimMarket", "SquareHook"];
+const BASE_CONTRACTS: IndexedContract[] = ["SquareJob", "KeeperEvaluator", "Arbitration", "ClaimMarket", "SquareHook"];
 
 export const DERIVED_TABLES = [
   "jobs",
@@ -114,6 +114,7 @@ function emptyDirty(): Dirty {
 export class Indexer {
   private current: IndexerState = emptyState();
   private readonly persistedLedger = new Map<string, bigint>();
+  private readonly contracts: IndexedContract[];
   private readonly addresses: Address[];
   private readonly quarantined = new Map<string, QuarantinedEvent>();
   private cursor: bigint | null = null;
@@ -122,8 +123,10 @@ export class Indexer {
   private windowsMissing = 0;
 
   constructor(private readonly options: IndexerOptions) {
-    const d = options.deployment;
-    this.addresses = [d.squareJob, d.keeperEvaluator, d.arbitration, d.claimMarket, d.squareHook];
+    // The compliance module is indexed when the deployment names one (#250): its
+    // refusals carry the statement that turns a replay into one lookup.
+    this.contracts = options.deployment.complianceModule ? [...BASE_CONTRACTS, "ComplianceModule"] : [...BASE_CONTRACTS];
+    this.addresses = this.contracts.map((contract) => this.addressOf(contract));
   }
 
   get state(): IndexerState {
@@ -158,7 +161,11 @@ export class Indexer {
     const redeployed = await this.deploymentChanges();
     if (redeployed.length > 0) {
       const summary = redeployed
-        .map((change) => `${change.contract} checkpointed at ${change.stored} but the deployment says ${change.current}`)
+        .map((change) =>
+          change.stored === null
+            ? `${change.contract} was never indexed here and the deployment now names it at ${change.current}`
+            : `${change.contract} checkpointed at ${change.stored} but the deployment says ${change.current}`,
+        )
         .join("; ");
       if ((this.options.onDeploymentChange ?? "fail") === "fail") {
         throw new Error(
@@ -202,12 +209,20 @@ export class Indexer {
     });
   }
 
-  private async deploymentChanges(): Promise<Array<{ contract: IndexedContract; stored: Address; current: Address }>> {
-    const changes: Array<{ contract: IndexedContract; stored: Address; current: Address }> = [];
-    for (const contract of CONTRACTS) {
+  private async deploymentChanges(): Promise<Array<{ contract: IndexedContract; stored: Address | null; current: Address }>> {
+    const changes: Array<{ contract: IndexedContract; stored: Address | null; current: Address }> = [];
+    const kernel = await checkpoints.get(this.options.db, this.options.chainId, "SquareJob");
+    for (const contract of this.contracts) {
       const checkpoint = await checkpoints.get(this.options.db, this.options.chainId, contract);
-      if (checkpoint === null) continue;
       const current = this.addressOf(contract);
+      if (checkpoint === null) {
+        // A contract the deployment names now that no earlier run indexed: a
+        // compliance module added to the record of a running indexer (#250).
+        // Resuming from the kernel's checkpoint would skip every log it emitted
+        // before it, so it is a change like any other.
+        if (kernel !== null) changes.push({ contract, stored: null, current });
+        continue;
+      }
       if (checkpoint.address.toLowerCase() !== current.toLowerCase()) {
         changes.push({ contract, stored: checkpoint.address as Address, current });
       }
@@ -263,6 +278,19 @@ export class Indexer {
     if (notice.code === "reputationWriteFailed") {
       logger.error("indexer.hook_write_failed", { jobId: notice.jobId.toString(), reason: "reputation" });
       if (counted) metrics?.recordHookWriteFailure("reputation");
+      return;
+    }
+    if (notice.code === "releaseRefused") {
+      // An ordinary outcome of the gate, not a failure: reported so the statement
+      // is in front of whoever reads the log (#250).
+      const reason = hexToString(notice.reason, { size: 32 }).replace(/\0+$/, "");
+      logger.info("indexer.release_refused", {
+        jobId: notice.jobId.toString(),
+        reason:
+          notice.statement === zeroHash
+            ? `${reason}; no signal could be read from the proof, so the refusal names no statement`
+            : `${reason}; statement ${notice.statement}`,
+      });
       return;
     }
     logger.error("indexer.hook_write_failed", { jobId: notice.jobId.toString(), reason: "validation" });
@@ -403,7 +431,7 @@ export class Indexer {
         }
       }
       await this.persist(tx, draft, dirty, toBlock, stagedLedger);
-      for (const contract of CONTRACTS) {
+      for (const contract of this.contracts) {
         await checkpoints.set(tx, { chainId, contract, address: this.addressOf(contract), lastBlock: toBlock });
       }
       for (const failure of failures) {
@@ -430,6 +458,9 @@ export class Indexer {
         return d.claimMarket;
       case "SquareHook":
         return d.squareHook;
+      case "ComplianceModule":
+        if (!d.complianceModule) throw new Error("the deployment names no ComplianceModule");
+        return d.complianceModule;
     }
   }
 

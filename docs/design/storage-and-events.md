@@ -39,6 +39,7 @@ other is implemented. The two questions #6 was asked answer as follows.
 | `ClaimMarket` | receivable listing, purchase, cancellation, payee lookup | no: price moves buyer → seller directly |
 | `SquareHook` | the single whitelisted `IACPHook`: payout routing, compliance slot, reputation and validation writes | no |
 | `PolicyRegistry` | the policy commitment and the daily spend counter the compliance module reads and moves, and each poster's buyer list root | no |
+| `ComplianceModule` | the proof gate `SquareHook` calls: verifies the Groth16 proof, binds its eight signals to the job, marks the statement spent and advances the policy counter | no |
 
 `SquareJob` never reads a live token balance. Every transfer out is computed
 from the stored `budget` and the fee basis points snapshotted at funding.
@@ -269,12 +270,13 @@ do the same.
 `FeesScheduled`, `Skimmed` and `HookWhitelistUpdated` on `SquareJob`; `ArbitrationSet`,
 `WindowsConfigured` and `FinalizeGraceConfigured` on `KeeperEvaluator`;
 `ArbitersUpdated` and `BondParametersUpdated` on `Arbitration`;
-`ComplianceModuleUpdated` and `ReputationPolicyUpdated` on `SquareHook`; and the
-`Ownable2Step` pair below, which five of the six contracts inherit.
+`ComplianceModuleUpdated` and `ReputationPolicyUpdated` on `SquareHook`;
+`HookUpdated` and `TimestampToleranceUpdated` on `ComplianceModule`; and the
+`Ownable2Step` pair below, which six of the seven contracts inherit.
 `PolicyRegistry` is a case of its own, in its section further down: it is keyed
 by the institution throughout and has no `jobId` anywhere.
 
-Every event any of the six contracts declares appears in the tables below, and
+Every event any of the seven contracts declares appears in the tables below, and
 `packages/core/scripts/check-events-documented.mjs` fails the `contracts`
 workflow when one does not.
 
@@ -387,10 +389,27 @@ would have been swallowed and the counter's own advance lost with it. Compliance
 is a signal on the release, never a lock on the escrow
 ([hook-failure-modes.md](../decisions/hook-failure-modes.md)).
 
+### ComplianceModule
+
+The proof gate ([compliance-gate.md](./compliance-gate.md)). Its verdicts are
+keyed by `jobId`. `statement` is `keccak256(abi.encode(publicSignals))`: the
+proof's identity, which a re-randomised copy of the same proof shares, and what
+`isConsumed` is keyed on. The indexer reads these events when the deployment
+record names the module.
+
+| Event | Carries |
+|---|---|
+| `ReleaseVerified(uint256 indexed jobId, address indexed payee, uint256 amount, bytes32 statement)` | a release the proof gated and the module booked: `statement` is spent from here on, and the policy counter has advanced by `amount` |
+| `ReleaseRefused(uint256 indexed jobId, bytes32 indexed statement, bytes32 reason)` | a release the module refused, and why. `statement` is indexed, so one log filter returns every refusal of a statement, and the release that spent it is the `ReleaseVerified` carrying the same value (#250). It is `bytes32(0)` for `malformed proof` and `invalid proof`, the two refusals that come before any signal is read: zero means the proof could not be read, anything else means it was read and did not bind |
+| `VerdictDisagreed(uint256 indexed jobId, IPolicyRegistry.Verdict verdict)` | a proof that passed every binding and still came back `NoPolicy` or `LimitExceeded` from `PolicyRegistry.recordSpend`: the two contracts have drifted apart |
+| `HookUpdated(address indexed hook)` | owner only: the hook whose calls to `checkRelease` this module books |
+| `TimestampToleranceUpdated(uint64 seconds_)` | owner only: how far a proof's timestamp may sit from the block's |
+
 ### Ownership, on every owned contract
 
-`SquareJob`, `KeeperEvaluator`, `Arbitration`, `SquareHook` and `PolicyRegistry`
-inherit OpenZeppelin's `Ownable2Step`, so each of them declares the same pair.
+`SquareJob`, `KeeperEvaluator`, `Arbitration`, `SquareHook`, `PolicyRegistry` and
+`ComplianceModule` inherit OpenZeppelin's `Ownable2Step`, so each of them declares
+the same pair.
 `ClaimMarket` has no owner and declares neither.
 
 | Event | Carries |

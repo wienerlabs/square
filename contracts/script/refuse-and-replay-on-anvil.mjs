@@ -220,7 +220,9 @@ async function proofFor(stack, policy, jobId) {
   return { result, encoded, solidity: result.solidity };
 }
 
-const REFUSED = cast(['keccak', 'ReleaseRefused(uint256,bytes32)']);
+// square#250: the refusal carries the statement it refused, indexed, before its
+// reason. The reason is still the only data word, so it is read the same way.
+const REFUSED = cast(['keccak', 'ReleaseRefused(uint256,bytes32,bytes32)']);
 const VERIFIED = cast(['keccak', 'ReleaseVerified(uint256,address,uint256,bytes32)']);
 
 // Finalizes and reports what happened: who was paid, what the counter did, and

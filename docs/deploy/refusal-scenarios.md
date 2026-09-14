@@ -51,7 +51,7 @@ channel the kernel honours, the payout split
 
 A refusal here is therefore `providerBps = 0`. The job settles, the provider is
 paid nothing, the whole net goes back to the client, and the module emits
-`ReleaseRefused(jobId, reason)`. The run asserts all four in every refused
+`ReleaseRefused(jobId, statement, reason)`. The run asserts all four in every refused
 scenario, and it asserts the reason by name. A job refused for the wrong reason
 fails the run, which is what the negative controls below rely on.
 
