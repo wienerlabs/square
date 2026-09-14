@@ -188,6 +188,19 @@ describe.skipIf(!reachable)("lifecycle on anvil through the SDK", () => {
     expect(await buyer.payeeOf(jobId)).toBe(buyer.account);
   });
 
+  it("policy: the ceiling reads back as committed, the day's spend starts at zero, and a commitment outside the proof range is refused", async () => {
+    const commitment = `0x${"00".repeat(31)}2a` as const; // a small field element, the way a Poseidon output is
+    const dailyLimit = parseUnits("50", 6);
+    const before = await client.policyOf(client.account);
+    await client.setPolicy(commitment, dailyLimit);
+    const policy = await client.policyOf(client.account);
+    expect(policy.commitment).toBe(commitment);
+    expect(policy.dailyLimit).toBe(dailyLimit);
+    expect(policy.epoch).toBe(before.epoch + 1n);
+    expect(await client.spentToday(client.account)).toBe(0n);
+    await expect(client.setPolicy(`0x${"ff".repeat(32)}`, dailyLimit)).rejects.toThrow(/CommitmentOutsideProofRange/);
+  });
+
   it("spec hash written on chain matches the SDK", async () => {
     const spec = { task: "audit", scope: ["a", "b"] };
     const latest = await publicClient.getBlock();

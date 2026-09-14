@@ -1,11 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { A2AClient, A2AError, JOB_STATUS_NAMES, TaskState, WellKnownCache, type TaskStatusResult } from "@squaresdk/a2a";
+import { A2AClient, JOB_STATUS_NAMES, TaskState, WellKnownCache, type TaskStatusResult } from "@squaresdk/a2a";
 import { JobStatus, type JobStatusValue, type SquareClient } from "@squaresdk/core";
 import { createPayingFetch, decodePaymentResponseHeader, networkOf, PAYMENT_RESPONSE_HEADER } from "@squaresdk/x402";
 import { formatUnits, parseUnits, type Hex, type LocalAccount } from "viem";
 import { z } from "zod";
-import { AgentLookupError, lookupAgent, type AgentProfile, type DidResolverLike } from "./agents.js";
+import { lookupAgent, type AgentProfile, type DidResolverLike } from "./agents.js";
+import { hire, HireRefusedError, type HireResult } from "./hire.js";
 
 export interface SquareMcpServerOptions {
   /**
@@ -206,95 +207,60 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
         } catch (error) {
           return failed(error);
         }
-        if (profile.deactivated) return failed(`${profile.did} is deactivated`);
-        if (profile.a2aEndpoint === undefined) return failed(`${profile.did} advertises no A2A endpoint`);
-        const offered = profile.capabilities.find((c) => c.id === capability);
-        if (!offered) {
-          const ids = profile.capabilities.map((c) => c.id);
-          return failed(`${profile.name || profile.did} does not offer ${capability}; it offers ${ids.length ? ids.join(", ") : "nothing"}`);
-        }
-        const price = budget ?? offered.price;
-        if (price === undefined) return failed(`${capability} has no price on the card; pass budget`);
-        const amount = parseUnits(price, 6);
-        if (amount <= 0n) return failed("budget must be above zero");
-        if (offered.price !== undefined && amount < parseUnits(offered.price, 6)) {
-          return failed(`budget ${price} is below the price of ${capability}, ${offered.price} USDC; the agent would refuse the task`);
-        }
-
-        let transactions: Structured = {};
-        let jobId: bigint;
+        let result: HireResult;
         try {
-          const balance = await client.usdcBalance(client.account);
-          if (balance < amount) return failed(`the wallet holds ${formatUnits(balance, 6)} USDC; the job needs ${price}`);
-          const horizon = await client.settlementHorizon();
-          const days = expiresInDays ?? Math.max(options.jobDays ?? 7, Math.ceil((horizon + 86_400) / 86_400));
-          const seconds = days * 86_400;
-          if (seconds < horizon + 3_600) {
-            return failed(
-              `expiresInDays must be at least ${Math.ceil((horizon + 3_600) / 86_400)}: the agent's submit needs the settlement horizon ` +
-                `(${Math.round(horizon / 3_600)} h) ahead of the job's expiry`,
-            );
-          }
-          // From the chain's clock, not this machine's: `createJob` holds
-          // `expiredAt` against `block.timestamp`, and on a local chain whose
-          // time has been advanced the two are days apart.
-          const { timestamp } = await client.publicClient.getBlock();
-          const expiredAt = timestamp + BigInt(seconds);
-          const created = await client.createJob({
-            provider: profile.provider,
-            expiredAt,
-            spec: { agent: profile.did, capability, input },
+          result = await hire({
+            client,
+            a2a,
+            profile,
+            capability,
+            input,
+            budget,
+            expiresInDays,
+            jobDays: options.jobDays,
+            callerDid,
+            taskTimeoutMs,
+            pollIntervalMs,
           });
-          jobId = created.jobId;
-          transactions = { createJob: created.hash };
-          transactions.setBudget = (await client.setBudget(jobId, amount)).hash;
-          transactions.fund = (await client.fund(jobId, amount)).hash;
         } catch (error) {
-          return failed(error, "the job could not be funded", transactions);
+          if (error instanceof HireRefusedError && error.stage === "funding") return failed(error, undefined, { transactions: error.transactions });
+          return failed(error);
         }
-
-        const taskId = `square-job-${jobId}`;
-        const base: Structured = {
+        const { jobId, taskId } = result;
+        const content: Structured = {
           jobId: jobId.toString(),
           taskId,
           agent: profile.did,
-          provider: profile.provider,
+          provider: result.provider,
           capability,
-          budget: price,
-          transactions,
+          budget: formatUnits(result.budget, 6),
+          transactions: result.transactions,
+          ...(result.task ? taskContent(result.task) : {}),
         };
-        const head = `Job ${jobId} funded with ${price} USDC for ${profile.name || profile.did}, capability ${capability}.`;
-        let status: TaskStatusResult;
-        try {
-          status = await a2a.runTask(
-            profile.a2aEndpoint,
-            { taskId, capability, input, callerDid, jobId: jobId.toString() },
-            { pollIntervalMs, maxPolls: Math.max(1, Math.floor(taskTimeoutMs / pollIntervalMs)) },
-          );
-        } catch (error) {
-          if (error instanceof A2AError && error.kind === "timeout") {
+        const head = `Job ${jobId} funded with ${formatUnits(result.budget, 6)} USDC for ${profile.name || profile.did}, capability ${capability}.`;
+        switch (result.dispatch) {
+          case "delivered":
+            return ok(`${head}\n${describeTask(result.task!)}`, content);
+          case "failed":
+            return failed(
+              `${head}\n${describeTask(result.task!)}\nThe escrow stays on job ${jobId}; claimRefund returns it to this wallet once the job expires.`,
+              undefined,
+              content,
+            );
+          case "working":
             return ok(
               `${head}\nTask ${taskId} is still running after ${Math.round(taskTimeoutMs / 1000)} s. Poll it with square_task; ` +
                 `the escrow waits for the agent's submit, and returns to this wallet through claimRefund if the job expires undelivered.`,
-              { ...base, task: { state: TaskState.Working } },
+              { ...content, task: { state: TaskState.Working } },
             );
-          }
-          return failed(
-            error,
-            `${head}\nThe task could not be dispatched. The escrow stays on job ${jobId} until the evaluator settles it or it expires, ` +
-              "when claimRefund returns it to this wallet",
-            base,
-          );
+          case "undispatched":
+            return failed(
+              result.reason ?? "the task could not be dispatched",
+              `${head}\nThe task could not be dispatched. The escrow stays on job ${jobId} until the evaluator settles it or it expires, ` +
+                "when claimRefund returns it to this wallet",
+              content,
+            );
         }
-        const content = { ...base, ...taskContent(status) };
-        if (status.state === TaskState.Failed) {
-          return failed(
-            `${head}\n${describeTask(status)}\nThe escrow stays on job ${jobId}; claimRefund returns it to this wallet once the job expires.`,
-            undefined,
-            content,
-          );
-        }
-        return ok(`${head}\n${describeTask(status)}`, content);
       }),
   );
 

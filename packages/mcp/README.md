@@ -159,7 +159,8 @@ await server.connect(transport); // stdio, or Streamable HTTP behind your own au
 `client` is a `@squaresdk/core` `SquareClient` (with a wallet to hire, without one to
 read); `resolver` an `AipDidResolver`. `a2a`, `cards`, `callerDid`, `jobDays`,
 `taskTimeoutMs` and `pollIntervalMs` are the knobs. `lookupAgent` is the lookup on its
-own.
+own, and `hire` the escrow-and-dispatch on its own, with `admit` and `onFunded` hooks
+for a host that keeps an allowance (`@squaresdk/hosted` does).
 
 ## Tests
 
