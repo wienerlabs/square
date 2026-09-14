@@ -202,11 +202,6 @@ export const keeperEvaluatorAbi = [
         "name": "jobId",
         "type": "uint256",
         "internalType": "uint256"
-      },
-      {
-        "name": "complianceProof",
-        "type": "bytes",
-        "internalType": "bytes"
       }
     ],
     "outputs": [],
@@ -220,11 +215,6 @@ export const keeperEvaluatorAbi = [
         "name": "jobId",
         "type": "uint256",
         "internalType": "uint256"
-      },
-      {
-        "name": "complianceProof",
-        "type": "bytes",
-        "internalType": "bytes"
       }
     ],
     "outputs": [],

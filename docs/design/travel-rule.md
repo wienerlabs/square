@@ -96,10 +96,14 @@ omission.
 ## 3. What goes on chain
 
 An **attestation**, not a bare hash. The distinction is the whole of §3, because a
-bare hash is not a gate: `KeeperEvaluator.finalize(uint256 jobId, bytes calldata
-complianceProof)` is `external` with no access control, forwards its bytes
-straight to the hook, and pays the caller the evaluator fee. Thirty-two random
-bytes would pass, and whoever passed them would be paid for it.
+bare hash is not a gate. The proof reaches the hook through
+`SquareJob.setComplianceProof`, which only the job's client can call, and
+`KeeperEvaluator.finalize(uint256 jobId)` carries nothing: it is `external` with
+no access control and pays the caller the evaluator fee, which is exactly why it
+no longer carries the proof (#245, #307). So the party that writes the proof is
+the mandate holder, and the value inside it still has to be one that party
+cannot invent, because the client is the payer and a bare hash of its own
+choosing would gate nothing.
 
 So the value carries a signature from a party that can be held to it:
 
@@ -230,14 +234,12 @@ retain the payload and the `salt` for their statutory retention period.
 
 ### 5.1 The seam does not change
 
-`docs/design/square-hook.md` already fixes the shape:
-
-```
-optParams = abi.encode(uint16 providerBps, bytes complianceProof)
-```
-
-and states that `complianceProof` is "opaque to the hook and is handed to the
-compliance module unchanged; its inner layout … is #27's."
+`docs/design/square-hook.md` fixes where the proof lives: on the job, written by
+the client through `SquareJob.setComplianceProof(jobId, proof)` while the job is
+`Funded` or `Submitted`, and read by the hook through `complianceProofOf`. The
+`optParams` the evaluator passes to `complete` carry only the split. The proof is
+opaque to the hook and is handed to the compliance module unchanged; its inner
+layout is #27's.
 
 So the attestation rides inside that opaque field as one member of #27's inner
 layout:
@@ -406,7 +408,7 @@ implementer would otherwise have to guess.
 | `salt` | 32 bytes from a CSPRNG, fresh per attestation, never derived from the payload or reused across releases. Retained with the payload; without it the commitment cannot be recomputed. |
 | Commitment | `keccak256(abi.encode(TRAVEL_RULE_DOMAIN, chainId, jobId, payee, amount, payloadHash, salt))` |
 | Who computes it | The attestor — the originator's obliged entity or its named delegate. Not Square, not the keeper, not the agent. |
-| How it reaches the chain | Inside `complianceProof`, through `KeeperEvaluator.finalize`. That path is permissionless by design, which is exactly why the value is signed: the carrier is untrusted and does not need to be trusted. |
+| How it reaches the chain | Inside the proof the client binds to the job with `SquareJob.setComplianceProof`, before anyone finalizes. `KeeperEvaluator.finalize` carries no proof and the crank's identity decides nothing. The value is signed all the same, because the client that binds it is the payer and cannot be trusted to attest against itself. |
 | Attestor set | An allowlist held by the compliance module, maintained by the module's owner. Membership changes are events, so an auditor can establish who was trusted at a given block. |
 | Expiry | `validUntil`, seconds. An attestation with no expiry is a bearer credential for a settlement that has not happened. |
 | Events | `TravelRuleAttested`, `TravelRuleMissing`, `TravelRuleAmended`, signatures in §3 |

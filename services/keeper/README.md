@@ -22,14 +22,21 @@ with a margin.
 4. `finalize`, `finalizeDecided` or `lapse` is sent; the receipt, gas and fee are
    written to `keeper_actions` and the metrics, and the gap between
    `FINALIZE_GAS` and the gas the receipt reports is exported as
-   `square_finalize_gas_gap`.
-5. A send that throws is retried with exponential backoff, `RETRY_BASE_SECONDS`
+   `square_finalize_gas_gap`. Neither finalize carries a compliance proof: the
+   proof is the client's, bound to the job with `setComplianceProof`, and the
+   crank's bytes would decide nothing (#307).
+5. After the finalize loop the tick reads expired jobs whose dispute is still
+   open, checks `bondSettled` on the chain, and sends `Arbitration.settleBond`
+   for each, journaled as `settleBond`. Without that nothing in the stack
+   returned a disputer's bond once the job expired under a dead resolver
+   (#311). It earns no fee; it is the same free duty as `lapse`.
+6. A send that throws is retried with exponential backoff, `RETRY_BASE_SECONDS`
    doubling up to `RETRY_MAX_SECONDS`, and the job is dropped after
    `RETRY_GIVE_UP_AFTER` attempts. Journal rows are deduplicated per job and
    capped at `RETRY_MAX_JOURNAL_ROWS` plus one row for the give-up, so a job that
    reverts on every tick costs a bounded number of rows instead of one per tick.
    A successful send clears the state for that job.
-6. A job whose expiry is inside the next day is warned about once
+7. A job whose expiry is inside the next day is warned about once
    (`keeper.expiry_near`), not once per tick: an unprofitable job stays a
    candidate forever, and the warning is about the deadline approaching, not
    about a state that repeats. The warning is armed again only after the job

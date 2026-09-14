@@ -128,7 +128,7 @@ contract ArbitrationTest is BaseTest {
         vm.expectEmit(true, false, true, true);
         emit IKeeperEvaluator.DecisionApplied(jobId, uint8(IArbitration.Outcome.Complete), FULL_BPS, cranker, evaluatorFee);
         vm.prank(cranker);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
 
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));
         assertEq(kernel.withdrawable(provider), netOf(BUDGET));
@@ -136,7 +136,7 @@ contract ArbitrationTest is BaseTest {
         assertEq(arbitration.withdrawable(client), 0);
         assertEq(usdc.balanceOf(cranker), evaluatorFee);
         vm.expectRevert(IKeeperEvaluator.AlreadyResolved.selector);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
         assertSolvent();
     }
 
@@ -145,7 +145,7 @@ contract ArbitrationTest is BaseTest {
         vote(arb2, jobId, IArbitration.Outcome.Complete, 4_000);
         vote(arb3, jobId, IArbitration.Outcome.Complete, 4_000);
         vm.prank(cranker);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
 
         uint256 net = netOf(BUDGET);
         uint256 providerShare = (net * 4_000) / FULL_BPS;
@@ -171,7 +171,7 @@ contract ArbitrationTest is BaseTest {
         vote(arb1, jobId, IArbitration.Outcome.Reject, 0);
 
         vm.prank(cranker);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
         assertEq(kernel.withdrawable(provider), netOf(BUDGET), "the provider is paid as if never disputed");
         assertEq(arbitration.withdrawable(client), bond, "no ruling, no penalty");
         assertLt(block.timestamp, record(jobId).expiredAt, "and it happens before claimRefund could");
@@ -232,7 +232,7 @@ contract ArbitrationTest is BaseTest {
         vm.prank(stranger);
         arbitration.settleBond(jobId);
         vm.prank(cranker);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
         assertEq(arbitration.withdrawable(provider), bond);
         vm.expectRevert(IArbitration.NothingToSettle.selector);
         vm.prank(stranger);
@@ -255,7 +255,7 @@ contract ArbitrationTest is BaseTest {
         vm.warp(expiry());
         arbitration.lapse(jobId);
         vm.expectRevert(MaliciousHook.HookSaysNo.selector);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
         kernel.claimRefund(jobId);
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Expired));
         vm.prank(stranger);
@@ -280,7 +280,7 @@ contract ArbitrationTest is BaseTest {
         vote(arb2, jobId, IArbitration.Outcome.Complete, FULL_BPS);
         rogue.setMode(MaliciousHook.Mode.ResolverReverts);
         vm.expectRevert(MaliciousHook.HookSaysNo.selector);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
         vm.warp(expiry());
         kernel.claimRefund(jobId);
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Expired));
@@ -337,7 +337,7 @@ contract ArbitrationTest is BaseTest {
         vote(arb1, jobId, IArbitration.Outcome.Complete, FULL_BPS);
         vote(arb3, jobId, IArbitration.Outcome.Complete, FULL_BPS);
         vm.prank(cranker);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
         vm.prank(provider);
         arbitration.withdraw();
         vm.prank(provider);
@@ -356,7 +356,7 @@ contract ArbitrationTest is BaseTest {
         vote(arb1, jobId, IArbitration.Outcome.Complete, FULL_BPS);
         vote(arb2, jobId, IArbitration.Outcome.Complete, FULL_BPS);
         vm.prank(cranker);
-        keeper.finalizeDecided(jobId, "");
+        keeper.finalizeDecided(jobId);
         assertEq(record(jobId).providerBps, FULL_BPS);
         assertEq(kernel.withdrawable(provider), netOf(BUDGET), "a hookless job can only be completed in full or rejected");
     }
@@ -371,7 +371,7 @@ contract ArbitrationTest is BaseTest {
         vote(arb1, full, IArbitration.Outcome.Complete, FULL_BPS);
         vote(arb2, full, IArbitration.Outcome.Complete, FULL_BPS);
         vm.prank(cranker);
-        keeper.finalizeDecided(full, "");
+        keeper.finalizeDecided(full);
         assertEq(arbitration.withdrawable(provider), bond, "full completion: the payee takes the bond");
         assertEq(arbitration.withdrawable(client), bond, "the client lost this one");
 
@@ -379,14 +379,14 @@ contract ArbitrationTest is BaseTest {
         vote(arb1, split, IArbitration.Outcome.Complete, 4_000);
         vote(arb2, split, IArbitration.Outcome.Complete, 4_000);
         vm.prank(cranker);
-        keeper.finalizeDecided(split, "");
+        keeper.finalizeDecided(split);
         assertEq(arbitration.withdrawable(client), 2 * bond, "split: the bond returns to the disputer");
 
         (uint256 lapsed,) = _disputed(BUDGET);
         vm.warp(arbitration.disputeOf(lapsed).resolveBy);
         arbitration.lapse(lapsed);
         vm.prank(cranker);
-        keeper.finalizeDecided(lapsed, "");
+        keeper.finalizeDecided(lapsed);
         assertEq(arbitration.withdrawable(client), 3 * bond, "lapsed: the bond returns to the disputer");
         assertEq(arbitration.withdrawable(provider), bond, "the provider never posts a bond and takes one only on a full win");
         assertSolvent();
