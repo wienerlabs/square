@@ -166,6 +166,55 @@ describe('POST /prove refuses a bad request before proving', () => {
     expect(response.body.error).not.toContain(String(secret));
   });
 
+  // square#251: the eleven requests the issue measured, each purely the caller's
+  // mistake, each answered 500 and counted as a proof failure before the format
+  // checks moved to the gate. Each message is the one the issue recorded.
+  const MALFORMED = [
+    ['an operator_id that is not an address', { operator_id: 'acme-corp' }, 'operator_id: must be a 20-byte hex address'],
+    ['a payment_recipient with bad hex', { payment_recipient: '0x11111111111111111111111111111111111111zz' }, 'payment_recipient: must be a 20-byte hex address'],
+    ['a policy_id that is not a UUID', { policy_id: 'not-a-uuid' }, 'policy_id: not a valid UUID'],
+    ['an unknown weekday name', { time_restrictions: [{ ...window_(9, 17), allowed_days: ['mondayy'] }] }, 'time_restrictions.allowed_days: contains an unknown weekday name'],
+    ['a fractional payment_amount', { payment_amount: 5000000.5 }, 'payment_amount: must be a whole number'],
+    ['a negative payment_amount', { payment_amount: '-5000000' }, 'payment_amount: must be a non-negative integer'],
+    ['a max_daily_spend that is not a number', { max_daily_spend: 'a lot' }, 'max_daily_spend: must be a non-negative integer'],
+    ['an empty category string', { payment_endpoint_category: '' }, 'payment_endpoint_category: must not be empty'],
+    ['a category over 32 bytes', { allowed_endpoint_categories: ['x'.repeat(33)] }, 'allowed_endpoint_categories: exceeds the 32-byte limit'],
+    ['a blocked_addresses entry that is an object', { blocked_addresses: [{ address: '0x2222222222222222222222222222222222222222' }] }, 'blocked_addresses: must be a string'],
+    ['a stripe_receipt_hash that is not a number', { stripe_receipt_hash: 'garbage' }, 'stripe_receipt_hash: must be a non-negative integer'],
+  ];
+
+  const failures = async () => {
+    const response = await request(app).get('/metrics');
+    const match = /square_proof_failures_total\{[^}]*\} (\d+)/.exec(response.text);
+    return match ? Number(match[1]) : 0;
+  };
+
+  it.each(MALFORMED)('answers 400 for %s, naming the field', async (_, overrides, message) => {
+    const response = await post({ ...VALID, ...overrides });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe(message);
+    const logs = captured.join('\n');
+    expect(logs).toContain('"event":"request_rejected"');
+    expect(logs).not.toContain('"event":"proof_failed"');
+  });
+
+  it('counts none of the eleven as a proof failure', async () => {
+    const before = await failures();
+    for (const [, overrides] of MALFORMED) {
+      expect((await post({ ...VALID, ...overrides })).status).toBe(400);
+    }
+    expect(await failures()).toBe(before);
+  });
+
+  // Two mistakes of one kind in one object used to answer two codes: the hour
+  // was checked at the gate and the day name after it.
+  it('answers an hour of 25 and a day of "mondayy" with the same code', async () => {
+    const hour = await post({ ...VALID, time_restrictions: [window_(9, 25)] });
+    const day = await post({ ...VALID, time_restrictions: [{ ...window_(9, 17), allowed_days: ['mondayy'] }] });
+    expect(hour.status).toBe(400);
+    expect(day.status).toBe(hour.status);
+  });
+
   it('still takes a window that does not wrap', async () => {
     // Asserted as "not 400" rather than "200" because what happens next depends
     // on the runner: with the artifacts present this proves and returns 200,

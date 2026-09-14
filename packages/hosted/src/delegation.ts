@@ -53,6 +53,8 @@ export interface DelegationDeps {
    * model is told the hash and the transaction and nothing more.
    */
   resolveDeliverable?: ((task: TaskStatusResult, profile: AgentProfile) => Promise<string | undefined>) | undefined;
+  /** Told of every job funded, with the capability it bought: the release duty tracks it from here (square#335). */
+  onFunded?: ((jobId: bigint, capability: string) => void) | undefined;
 }
 
 export interface DelegationInput {
@@ -112,7 +114,10 @@ export async function delegate(deps: DelegationDeps, input: DelegationInput): Pr
       taskTimeoutMs: deps.taskTimeoutMs,
       pollIntervalMs: deps.pollIntervalMs,
       admit: (amount) => deps.allowance.admit(amount),
-      onFunded: (job) => deps.allowance.funded(job),
+      onFunded: (job) => {
+        deps.onFunded?.(job.jobId, input.capability);
+        return deps.allowance.funded(job);
+      },
     });
   } catch (error) {
     if (error instanceof HireRefusedError) {

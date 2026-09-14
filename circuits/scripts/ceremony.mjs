@@ -28,6 +28,7 @@
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMain } from './entrypoint.mjs';
@@ -142,6 +143,23 @@ export const roundAt = (unixSeconds) =>
 export const timeOfRound = (round) =>
   DRAND.genesis + (round - 1) * DRAND.period;
 
+// The comparison `verify-chain` makes between the beacon in the key and the
+// signature the public chain published, in one place.
+//
+// square#227's review: the round-trip test wrote this out by hand and called it
+// "verify-chain's, character for character". It was, until it was not -- a
+// change to the real comparison could not turn that test red. There is one of
+// it now, and both ends call it.
+//
+// Case-insensitive because the two sources spell hex differently: snarkjs
+// stores what it was handed, drand's API returns lower case. Length is not
+// checked here on purpose; a 64-character sha256 spelling simply does not equal
+// the 96-character signature, which is the failure #227 is about.
+export const beaconMatchesRound = (beaconHash, signature) =>
+  typeof beaconHash === 'string'
+  && typeof signature === 'string'
+  && beaconHash.toLowerCase() === signature.toLowerCase();
+
 // Echoing the command is worth keeping: a ceremony tool that hides what it runs
 // is hard to audit, and every argument here is meant to be public.
 //
@@ -165,6 +183,103 @@ function sh(cmd, args, options = {}) {
 
 const sha256 = (file) =>
   crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+
+// Key order is not part of a verifying key's meaning, so keys are compared over
+// a stable ordering rather than over the bytes snarkjs happened to write.
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Is `vkFile` the verifying key `zkeyFile` produces?
+ *
+ * square#228. `verify-chain` used to answer this by comparing `payment_vk.json`
+ * against `transcript.final.vk_sha256` — and `finalize` writes that field by
+ * hashing that same file. Both sides came from the party being audited, so a
+ * verifying key nobody derived from the final key passed as long as the
+ * transcript recorded its digest. Measured, with a `vk_delta_2` that never came
+ * out of the zkey and a transcript adjusted to match: `ok the verifying key is
+ * the one the transcript records`.
+ *
+ * It is the one file whose provenance cannot rest on the transcript. The zkey
+ * is not what reaches the chain; the verifying key is — `Groth16Verifier.sol`'s
+ * constants are generated from it. `contracts/script/check-verifier-ic.mjs`
+ * binds only that file's IC points to the committed verifier, not its delta,
+ * so it does not stand in for deriving the key here; `verifyingKeyChecks`
+ * below runs this against both the ceremony's file and the repository's.
+ *
+ * This is the same shape as the substitution square#121 removed from the beacon
+ * check, named in `test/drand-beacon.test.js`: "the field the old code compared
+ * is supplied by the party it is meant to check".
+ *
+ * The export is deterministic — two exports of one key are byte-identical, and
+ * the export of `build/payment.zkey` is byte-identical to `build/payment_vk.json`
+ * — so this could compare bytes. It compares canonical JSON instead, because a
+ * reformatted but equal key should read as a pass rather than as a puzzle.
+ */
+export async function verifyingKeyMatches(zkeyFile, vkFile) {
+  if (!fs.existsSync(zkeyFile)) return { ok: false, reason: `there is no key at ${zkeyFile}` };
+  if (!fs.existsSync(vkFile)) return { ok: false, reason: `there is no verifying key at ${vkFile}` };
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-vk-'));
+  const derived = path.join(dir, 'verification_key.json');
+  try {
+    execFileSync('snarkjs', ['zkey', 'export', 'verificationkey', zkeyFile, derived], {
+      cwd: ROOT,
+      stdio: 'pipe',
+    });
+    const fromKey = canonical(JSON.parse(fs.readFileSync(derived, 'utf8')));
+    const published = canonical(JSON.parse(fs.readFileSync(vkFile, 'utf8')));
+    return fromKey === published
+      ? { ok: true, reason: null }
+      : { ok: false, reason: `${path.basename(vkFile)} is not what ${path.basename(zkeyFile)} exports` };
+  } catch (error) {
+    return { ok: false, reason: `could not export a verifying key from ${path.basename(zkeyFile)}: ${error.message}` };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Step 4 of docs/ceremony/verifying.md, as `verify-chain` runs it: three checks
+ * on the verifying key, returned rather than printed, so a test runs exactly
+ * what `verify-chain` runs.
+ *
+ * - `ceremonyVk`, the file `finalize` wrote, is what `finalZkey` exports (#228).
+ * - That file is unchanged since the transcript recorded it. On its own this
+ *   says nothing about where the file came from; it is the check #228 found
+ *   standing in for the first.
+ * - `repositoryVk`, `build/payment_vk.json`, is what `finalZkey` exports. It is
+ *   the file step 4 diffs, the one CI checks with
+ *   `contracts/script/check-verifier-ic.mjs` and copies to the prover. Until #16
+ *   installs the ceremony's key there, it holds the development key, whose phase
+ *   2 is one contribution drawn on the machine that built it; no ceremony
+ *   reproduces that, so this check fails until then, as step 4 would.
+ *   `check-verifier-ic.mjs` does not stand in for it: it binds only the IC
+ *   points to the circuit, and its header says why delta is out of its reach.
+ */
+export async function verifyingKeyChecks({ finalZkey, ceremonyVk, repositoryVk, transcript }) {
+  const derived = await verifyingKeyMatches(finalZkey, ceremonyVk);
+  const recorded = fs.existsSync(ceremonyVk) && Boolean(transcript?.final)
+    && sha256(ceremonyVk) === transcript.final.vk_sha256;
+  const repository = await verifyingKeyMatches(finalZkey, repositoryVk);
+  const where = path.relative(ROOT, repositoryVk);
+  return [
+    derived.ok
+      ? { ok: true, message: 'the verifying key is the one the final key exports' }
+      : { ok: false, message: `the verifying key is not the one the final key exports: ${derived.reason}` },
+    recorded
+      ? { ok: true, message: 'and it is unchanged since the transcript recorded it' }
+      : { ok: false, message: 'the verifying key does not match the transcript' },
+    repository.ok
+      ? { ok: true, message: `the repository's verifying key, ${where}, is the one the final key exports` }
+      : { ok: false, message: `the repository's verifying key, ${where}, is not the one the final key exports: ${repository.reason}` },
+  ];
+}
 
 // What compiled the circuit, and what it compiled.
 //
@@ -210,6 +325,88 @@ function writeTranscript(t) {
 const keyPath = (n) => path.join(CEREMONY, `payment_${String(n).padStart(4, '0')}.zkey`);
 const finalPath = () => path.join(CEREMONY, 'payment_final.zkey');
 const vkPath = () => path.join(CEREMONY, 'payment_vk.json');
+// The verifying key step 4 of docs/ceremony/verifying.md diffs: build.mjs writes
+// it, CI checks it and copies it to the prover.
+const REPOSITORY_VK = path.join(BUILD, 'payment_vk.json');
+
+/**
+ * The `payment_NNNN.zkey` keys on disk, against the transcript: the highest
+ * index (-1 when there is none), the indices missing below it, and how many
+ * contributions the transcript records.
+ *
+ * The chain and the transcript are two states, updated one after the other and
+ * not atomically, and the transcript used to be the only thing consulted about
+ * where the chain ends. square#234: `snarkjs zkey contribute` is irreversible
+ * and prints the contributor's hash before this script records anything, so an
+ * interruption between the two — a failing `inspect`, a Ctrl-C, a full disk —
+ * left a finished contribution on disk that the transcript did not know about.
+ * Re-running `contribute` then overwrote it from the previous key, and running
+ * `beacon` sealed the chain one link short. Either way the contributor had
+ * already published a hash that appears in no artefact, and `verify-chain` saw
+ * a key and a transcript that agreed with each other.
+ *
+ * So the chain is read from the directory, and the two states are compared
+ * before anything irreversible runs. The whole directory, not only its highest
+ * key: each key descends from the one before it, so `payment_0000` and
+ * `payment_0002` with no `payment_0001` is a broken chain even when the highest
+ * index matches the transcript.
+ */
+function chainState(transcript) {
+  const keys = [];
+  if (fs.existsSync(CEREMONY)) {
+    for (const entry of fs.readdirSync(CEREMONY)) {
+      const match = /^payment_(\d{4})\.zkey$/.exec(entry);
+      if (match) keys.push(Number(match[1]));
+    }
+  }
+  const tip = keys.length > 0 ? Math.max(...keys) : -1;
+  const present = new Set(keys);
+  const missing = [];
+  for (let i = 0; i <= tip; i += 1) {
+    if (!present.has(i)) missing.push(i);
+  }
+  return { tip, missing, recorded: transcript.contributions.length };
+}
+
+/**
+ * Refuse to go on when the chain on disk and the transcript disagree.
+ *
+ * `init` writes `payment_0000.zkey` with an empty contribution list, so the
+ * agreement is every key from `payment_0000` to `tip` present, and
+ * `tip === contributions.length`, at every step. A higher tip is a contribution
+ * nobody recorded; a lower one, or a gap, is a key that was deleted or never
+ * arrived. Each needs a person, not a retry — the remedy depends on which key
+ * the contributor published a hash for, and this script cannot know that.
+ */
+function assertChainAgreesWithTranscript(transcript) {
+  const { tip, missing, recorded } = chainState(transcript);
+  if (tip < 0) {
+    throw new Error(
+      `no payment_NNNN.zkey in ${path.relative(ROOT, CEREMONY)}, but the transcript records\n`
+      + `${recorded} contribution(s). The chain is missing; do not start over on top of it.`,
+    );
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `the chain on disk has a gap: ${missing.map((i) => path.relative(ROOT, keyPath(i))).join(', ')} `
+      + `${missing.length === 1 ? 'is' : 'are'} missing below ${path.relative(ROOT, keyPath(tip))}.\n`
+      + 'Each key descends from the one before it, so the chain cannot go on past a missing\n'
+      + 'link. Restore it before continuing.',
+    );
+  }
+  if (tip === recorded) return tip;
+  throw new Error(
+    `the chain on disk and the transcript disagree.\n`
+    + `  highest key    ${path.relative(ROOT, keyPath(tip))}\n`
+    + `  transcript     ${recorded} contribution(s), so it expects ${path.relative(ROOT, keyPath(recorded))}\n`
+    + (tip > recorded
+      ? 'A contribution finished and was never recorded — an interrupted run, most likely.\n'
+        + 'Its contributor may already have published the hash snarkjs printed them.\n'
+        + 'Inspect the key with scripts/inspect-zkey-setup.mjs and reconcile the transcript\n'
+        + 'by hand before continuing; re-running `contribute` would overwrite their work.'
+      : 'A key the transcript records is missing from disk. Restore it before continuing.'),
+  );
+}
 
 // Read the contribution list out of a zkey by reusing the inspector, so the
 // transcript records what the file says rather than what this script believes.
@@ -281,10 +478,15 @@ async function init() {
 async function contribute(name) {
   if (!name) throw new Error('usage: ceremony.mjs contribute "<contributor name>"');
   const transcript = readTranscript();
-  const index = transcript.contributions.length;
+  // From the directory, not from the transcript's length, and only once the two
+  // agree (square#234).
+  const index = assertChainAgreesWithTranscript(transcript);
   const from = keyPath(index);
   const to = keyPath(index + 1);
   if (!fs.existsSync(from)) throw new Error(`${path.relative(ROOT, from)} is missing`);
+  // No separate check that `to` is absent: the agreement above means the keys on
+  // disk end at `from`, so a `to` already there has been refused by it, with the
+  // reason.
 
   // No -e. snarkjs prompts for entropy on stdin and the contributor types
   // something only they ever see.
@@ -307,17 +509,42 @@ async function contribute(name) {
   );
   sh('snarkjs', ['zkey', 'contribute', from, to, `--name=${name}`]);
 
-  const report = await inspect(to);
-  const last = report.contributions[report.contributions.length - 1];
-  transcript.contributions.push({
+  // Recorded before anything else runs (square#234). snarkjs has written the key
+  // and printed the contributor their hash; from here on the transcript has to
+  // know about it, because everything downstream finds the end of the chain by
+  // comparing the two. `inspect` is a separate process reading the file we just
+  // wrote — a report, not a link in the chain — and it used to sit between the
+  // irreversible step and the record.
+  const entry = {
     index: index + 1,
     name,
-    recorded_name: last.name,
-    transcript_hash: last.transcriptHash,
+    recorded_name: null,
+    transcript_hash: null,
     zkey_sha256: sha256(to),
     at: new Date().toISOString(),
-  });
+  };
+  transcript.contributions.push(entry);
   writeTranscript(transcript);
+
+  // Then the two fields that come from reading the key back. A failure here
+  // leaves them null, and the contribution itself is already recorded.
+  // `verify-chain` reports a contribution with either field null as a failure,
+  // because nothing can check it against the key, not as agreement.
+  let last;
+  try {
+    const report = await inspect(to);
+    last = report.contributions[report.contributions.length - 1];
+    entry.recorded_name = last.name;
+    entry.transcript_hash = last.transcriptHash;
+    writeTranscript(transcript);
+  } catch (error) {
+    writeTranscript(transcript);
+    throw new Error(
+      `the contribution is recorded, but reading it back failed: ${error.message}\n`
+      + `Run scripts/inspect-zkey-setup.mjs ${path.relative(ROOT, to)} and fill\n`
+      + `recorded_name and transcript_hash for contribution ${index + 1} by hand.`,
+    );
+  }
 
   process.stdout.write(
     `\ncontribution ${index + 1} recorded as ${JSON.stringify(last.name)}\n`
@@ -331,7 +558,10 @@ async function contribute(name) {
 
 async function verify() {
   const transcript = readTranscript();
-  const index = transcript.contributions.length;
+  // The chain so far is the chain on disk, and only once it agrees with the
+  // transcript (square#234): a verify that indexed by the transcript passed the
+  // recorded key while an unrecorded one sat beside it.
+  const index = assertChainAgreesWithTranscript(transcript);
   const key = fs.existsSync(finalPath()) ? finalPath() : keyPath(index);
   const ptau = path.join(BUILD, ADOPTED.file);
   verifyPtau(ptau);
@@ -352,6 +582,13 @@ async function beacon(roundArg) {
   if (!Number.isInteger(round) || round <= 0) {
     throw new Error('usage: ceremony.mjs beacon <announced drand round>');
   }
+
+  // Before the network, and long before the seal: sealing at the transcript's
+  // length would drop a contribution that finished without being recorded, and
+  // this step cannot be undone (square#234). Checked here so an operator with a
+  // divergent directory is told immediately rather than after two round trips
+  // to drand.
+  const index = assertChainAgreesWithTranscript(transcript);
 
   // Confirm we are talking to the chain the announcement named. The round
   // number is only meaningful relative to a chain's genesis and period, so all
@@ -387,8 +624,6 @@ async function beacon(roundArg) {
     );
   }
   process.stdout.write(`round ${round} verifies against the pinned quicknet group key\n`);
-
-  const index = transcript.contributions.length;
 
   // The randomness is the round's BLS signature: unpredictable before the round
   // and verifiable by anyone against the public chain afterwards.
@@ -575,6 +810,46 @@ async function verifyChain() {
   }
 
   process.stdout.write('\nchain\n');
+
+  // The keys on disk against the transcript, first, and whether or not there is
+  // a final key yet (square#234). Mid-ceremony is when the two diverge, and there
+  // is no final key then; and the final key cannot speak for the intermediate
+  // ones anyway. A contribution that finished without being recorded leaves a
+  // payment_NNNN.zkey the transcript does not mention; if the chain was then
+  // sealed one link short, the final key and the transcript agree with each
+  // other and both leave that contributor out.
+  const onDisk = chainState(transcript);
+  if (onDisk.tip < 0 && fs.existsSync(finalPath())) {
+    ok('no intermediate keys kept beside the final one');
+  } else if (onDisk.tip < 0) {
+    bad(`no payment_NNNN.zkey on disk and no final key, while the transcript records ${onDisk.recorded} contribution(s)`);
+  } else if (onDisk.missing.length > 0) {
+    bad(
+      `the keys on disk skip ${onDisk.missing.map((i) => path.basename(keyPath(i))).join(', ')} `
+      + `below ${path.basename(keyPath(onDisk.tip))}`,
+    );
+  } else if (onDisk.tip === onDisk.recorded) {
+    ok(`the keys on disk end at ${path.basename(keyPath(onDisk.tip))}, where the transcript ends`);
+  } else {
+    bad(
+      `the keys on disk end at ${path.basename(keyPath(onDisk.tip))} but the transcript records `
+      + `${onDisk.recorded} contribution(s)`,
+    );
+  }
+
+  // A contribution recorded before its read-back finished has no recorded name
+  // and no transcript hash (square#234). Nothing can compare such an entry with
+  // the key, so it is reported rather than passed over as agreement.
+  for (const entry of transcript.contributions) {
+    const unread = ['recorded_name', 'transcript_hash'].filter((field) => entry[field] == null);
+    if (unread.length > 0) {
+      bad(
+        `contribution ${entry.index} (${entry.name}) has no ${unread.join(' and no ')}, so it cannot `
+        + 'be checked against the key; fill it in from scripts/inspect-zkey-setup.mjs',
+      );
+    }
+  }
+
   if (!fs.existsSync(finalPath())) {
     bad('no final key');
   } else {
@@ -626,7 +901,7 @@ async function verifyChain() {
       } catch (error) {
         bad(`could not fetch drand round ${announced.round}: ${error.message}`);
       }
-      if (live && beacons[0].beaconHash?.toLowerCase() === live.signature.toLowerCase()) {
+      if (live && beaconMatchesRound(beacons[0].beaconHash, live.signature)) {
         ok(`beacon is drand quicknet round ${announced.round}, matching the public chain`);
       } else if (live) {
         bad(`beacon in the key does not match drand round ${announced.round}`);
@@ -672,11 +947,19 @@ async function verifyChain() {
     }
 
     process.stdout.write('\nkeys\n');
-    if (fs.existsSync(vkPath()) && transcript.final
-        && sha256(vkPath()) === transcript.final.vk_sha256) {
-      ok('the verifying key is the one the transcript records');
-    } else {
-      bad('the verifying key does not match the transcript');
+
+    // Step 4 of docs/ceremony/verifying.md: derived from the final key rather
+    // than read out of the transcript (#228), and against both files step 4 is
+    // about, the one `finalize` wrote and the repository's.
+    const checks = await verifyingKeyChecks({
+      finalZkey: finalPath(),
+      ceremonyVk: vkPath(),
+      repositoryVk: REPOSITORY_VK,
+      transcript,
+    });
+    for (const check of checks) {
+      if (check.ok) ok(check.message);
+      else bad(check.message);
     }
   }
 

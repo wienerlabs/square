@@ -2,12 +2,15 @@
 
 Agent identity on Arc from the terminal: register an agent in the ERC-8004
 IdentityRegistry, and resolve the `did:aip` v2 identifier that registration
-produces.
+produces. And the institution's spending policy: write it, commit it,
+approve buyers, prove releases.
 
 ```console
 $ square login
 $ square register --agent-uri https://acme.example/agent.json
 $ square resolve did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:2
+$ square policy init --daily 100 --per-tx 10 --category text.summarize
+$ square policy commit policy.json
 ```
 
 ## Install
@@ -16,10 +19,11 @@ $ square resolve did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd
 $ npm install && npm run build && npm link
 ```
 
-`@squaresdk/did-resolver` is linked by path, so build it first:
+`@squaresdk/did-resolver`, `@squaresdk/core` and `@squaresdk/policy` are linked by
+path, so build them first, in that order:
 
 ```console
-$ npm --prefix ../did-resolver install && npm --prefix ../did-resolver run build
+$ for dep in did-resolver core policy; do npm --prefix ../$dep install --install-links && npm --prefix ../$dep run build; done
 ```
 
 ## Commands
@@ -31,6 +35,7 @@ $ npm --prefix ../did-resolver install && npm --prefix ../did-resolver run build
 | `square whoami` | Address, active network, balance |
 | `square register` | Register an agent, print the DID it minted |
 | `square resolve <did>` | Resolve a `did:aip` identifier to its DID Document |
+| `square policy …` | The institution's policy: `init`, `commit`, `show`, `buyers`, `prove`, `watch`, `status` (below) |
 | `square config` | Inspect and change the network configuration |
 
 Every command takes `--json`. Machine output goes to stdout and everything else
@@ -53,6 +58,31 @@ non-zero:
 ```console
 $ square register --agent-uri … --yes --json | tail -n 1 | jq -r .did
 ```
+
+## The policy
+
+`square policy` is the institution's side of the compliance gate
+([`@squaresdk/policy`](../policy/README.md), square#338, square#335). The
+commands take the network flags `register` takes, plus `--deployment <file>`
+(or `SQUARE_DEPLOYMENT_FILE`) for a local stack; a chain the SDK's table
+knows needs neither.
+
+| | |
+|---|---|
+| `policy init --daily <usdc> --per-tx <usdc> --category <id>…` | Write `policy.json` (mode 0600) with a fresh id and secret salt; print its commitment. `--token`, `--block`, `--days`/`--hours` for the rest of the policy. |
+| `policy commit <file>` | `setPolicy(commitment, daily limit)` from the wallet; `--dry-run` computes and compares without sending. |
+| `policy show [poster]` | The commitment, limit, today's counter, buyer root and whether the hook holds a module; `--file` says whether a file is the policy on chain. |
+| `policy buyers set <address>… --out buyers.json` | Approve buyers: publish the list's root, keep every buyer's salt in the file. |
+| `policy buyers entry buyers.json <address>` | A buyer's `{salt, proof, buyer}`, what the app's purchase form takes. |
+| `policy prove <jobId> --file --prover --category` | Prove that the job's release fits the policy and bind the proof; `--release` cranks the job once its window has closed. |
+| `policy watch <jobId>… --file --prover --category` | Keep the proofs current and release each job when its window closes, until Ctrl-C. |
+| `policy status <jobId>` | Whether the bound proof still describes the release the chain would make now. |
+
+The policy file holds the policy's secret; it never leaves the machine except
+in the request to the prover named with `--prover`. A proof binds to the payee,
+the net, today's counter and the clock as they stand, which is why `prove`
+is something to run near the release and `watch` exists
+([docs/decisions/proof-freshness.md](../../docs/decisions/proof-freshness.md)).
 
 ## The DID is derived, never supplied
 
@@ -167,6 +197,11 @@ $ npm test                                    # unit, no network
 $ LIVE=1 npm test                             # + live reads and a dry run on Arc
 $ LIVE=1 SQUARE_PRIVATE_KEY=0x… npm test     # + a real registration (spends gas)
 ```
+
+`test/policy.anvil.test.ts` drives every `square policy` command against a
+local stack whose hook holds a compliance module and a prover beside it
+([`@squaresdk/policy` README](../policy/README.md), "the stack the tests run
+against"); without them it skips, with the reason.
 
 The third form is the acceptance test: it drives the built binary to register an
 agent on Arc Testnet, then resolves the DID it derived and checks the controller

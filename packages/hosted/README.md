@@ -24,7 +24,8 @@ policy the institution committed on chain.
       "delegate": true
     }
   ],
-  "delegation": { "allow": ["did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:8"], "maxPerJob": "0.25" }
+  "delegation": { "allow": ["did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:8"], "maxPerJob": "0.25" },
+  "compliance": { "policyFile": "policy.json", "proverUrl": "http://127.0.0.1:3003" }
 }
 ```
 
@@ -94,6 +95,19 @@ nothing. `maxPerJob` bounds one job inside the same allowance. Nothing is refuse
 after escrow moved: an agent that refuses or fails the task after funding is reported
 with the job that now holds the escrow.
 
+**The proof is the hosted wallet's duty too.** On a stack whose hook holds a
+compliance module, a delegated job's release needs a proof, bound by its client,
+that the payment fits the client's policy; the client is this wallet. A
+`compliance` block names the policy file (relative to the config; it holds the
+policy's secret, so it sits beside the config and nowhere public) and the prover
+that secret may be sent to. The host then runs a `ComplianceDuty` over every job it
+delegates, for as long as it lives: it binds a proof, rebinds when the payee, the
+net or the day's counter move, and cranks the job when its window closes
+([docs/decisions/proof-freshness.md](../../docs/decisions/proof-freshness.md));
+`hosted.duty` is that duty. Without the block, on such a stack, every delegated
+release would pay this wallet back, so the block belongs with the delegation
+block; the config parser refuses one without the other.
+
 ## In a host of your own
 
 ```ts
@@ -109,7 +123,8 @@ await hosted.agent.listen(3000);
 
 `hosted.agent` is the `@squaresdk/agent` agent (`card`, `app`, `client`, `listen`);
 `hosted.allowance` is the delegation allowance (`view`, `inFlightJobs`, `restore`);
-`hosted.tools` the MCP pool. `hostedHandlers` builds the capability handlers alone, for
+`hosted.duty` the release duty when `compliance` is given (as deps, `{ policy, prover }`,
+or from the config's block by the binary); `hosted.tools` the MCP pool. `hostedHandlers` builds the capability handlers alone, for
 a host that composes its own agent; `runCapability` is the model loop alone;
 `PolicyAllowance` the allowance alone.
 
@@ -129,6 +144,12 @@ a host that composes its own agent; `runCapability` is the model loop alone;
 npm test              # sealing, the configuration, the model loop against a scripted model, the allowance over a Map of a chain, the handlers with a real MCP server and a Hono agent to delegate to
 npm run test:anvil    # the acceptance criteria of square#38 on anvil: a hosted agent takes a funded job, delegates a subtask under escrow from its own wallet within its policy, is refused past it, and the binary seals a key and serves a configuration
 ```
+
+`test/compliance.test.ts` runs the delegation on a stack whose hook holds a
+module keyed to a prover beside it, with a `compliance` block, and sees the
+sub-agent paid the whole net once the host released the job; it skips, with
+the reason, without that stack ([`@squaresdk/policy` README](../policy/README.md),
+"the stack the tests run against").
 
 The model in every test is scripted; nothing here calls the API. A run against the
 real model is `hostAgent` with `ANTHROPIC_API_KEY` set, the way `square-hosted` runs it.

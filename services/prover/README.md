@@ -132,6 +132,15 @@ over-long endpoint category was echoed verbatim, and `BigInt("abc")` throws
 log the same way. Every request value now passes through `src/normalize.js`
 first, and every error names the field and never the value.
 
+A body the service cannot read at all fails before any of that runs.
+`express.json` raises it: a body that is not JSON, one over the 256 kb limit, a
+charset it will not decode. With no handler for it, Express answered with an
+HTML page and wrote the stack to stderr, and body-parser's `SyntaxError` quotes
+the first bytes of the raw body (square#252). The error handler at the end of
+`src/index.js` keeps the status body-parser chose, answers `{"error": …}` with a
+message picked by the kind of error rather than read off it, and logs one
+`request_rejected` line.
+
 ### OpenAPI spec
 
 The inherited spec had drifted from the code and was rewritten against it in
