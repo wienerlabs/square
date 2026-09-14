@@ -12,12 +12,17 @@ const OTHER = "0x90F79bf6EB2c4f870365E785982E1f101E93b906" as const;
 const TX = ("0x" + "11".repeat(32)) as Hex;
 const NOW = 1_800_000_000n;
 
-type Record_ = { status: number; provider: `0x${string}`; budget: bigint; expiredAt: number };
+type Record_ = { status: number; provider: `0x${string}`; budget: bigint; expiredAt: number; settlementHorizon: number };
 
-function stub(records: Record<string, Record_>, submitEvents: (jobId: bigint, deliverable: Hex) => unknown[] = () => []) {
+function stub(records: Record<string, Record_>, submitEvents: (jobId: bigint, deliverable: Hex) => unknown[] = () => [], chainNow = NOW) {
   const submits: unknown[] = [];
   const client = {
     account: AGENT,
+    publicClient: {
+      async getBlock() {
+        return { timestamp: chainNow };
+      },
+    },
     async getJobRecord(jobId: bigint) {
       const record = records[jobId.toString()];
       if (!record) throw new Error(`InvalidJob() for ${jobId}`);
@@ -31,7 +36,9 @@ function stub(records: Record<string, Record_>, submitEvents: (jobId: bigint, de
   return { client, submits };
 }
 
-const funded = (overrides: Partial<Record_> = {}): Record_ => ({ status: JobStatus.Funded, provider: AGENT, budget: 5_000_000n, expiredAt: 1_900_000_000, ...overrides });
+// A day's settlement horizon; the kernel floors anything shorter at 15 minutes.
+const HORIZON = 86_400;
+const funded = (overrides: Partial<Record_> = {}): Record_ => ({ status: JobStatus.Funded, provider: AGENT, budget: 5_000_000n, expiredAt: 1_900_000_000, settlementHorizon: HORIZON, ...overrides });
 const submitted = (jobId: bigint, deliverable: Hex) => [{ contract: "SquareJob", eventName: "JobSubmitted", args: { jobId, provider: AGENT, deliverable } }];
 const task = { capability: "text.summarize", callerDid: "did:aip:eip155:31337:0x0000000000000000000000000000000000000001:9" };
 
@@ -49,6 +56,18 @@ describe("admit", () => {
     ["a Submitted job", { "42": funded({ status: JobStatus.Submitted }) }, "42", /is Submitted, not Funded/],
     ["a job funded for another provider", { "42": funded({ provider: OTHER }) }, "42", new RegExp(`funded for provider ${OTHER}`)],
     ["an expired job", { "42": funded({ expiredAt: Number(NOW) }) }, "42", /expired at/],
+    [
+      "a job with less than its settlement horizon left, which submit would refuse",
+      { "42": funded({ expiredAt: Number(NOW) + HORIZON - 1 }) },
+      "42",
+      new RegExp(`cannot be submitted: it expires at ${Number(NOW) + HORIZON - 1}, ${HORIZON - 1}s from now, and submit needs ${HORIZON}s before expiry \\(settlement horizon ${HORIZON}s, floor 900s\\)`),
+    ],
+    [
+      "a job under the kernel's 15 minute floor, whatever its horizon",
+      { "42": funded({ expiredAt: Number(NOW) + 899, settlementHorizon: 0 }) },
+      "42",
+      /cannot be submitted: .* submit needs 900s before expiry \(settlement horizon 0s, floor 900s\)/,
+    ],
     ["a job funded below the price", { "42": funded({ budget: 4_999_999n }) }, "42", /funded with 4999999 but text.summarize costs 5000000/],
   ])("refuses %s, with the reason", async (_label, records, jobId, reason) => {
     const { client } = stub(records as Record<string, Record_>);
@@ -56,6 +75,27 @@ describe("admit", () => {
     const verdict = await settlement.admit(jobId, task);
     expect(verdict.ok).toBe(false);
     if (!verdict.ok) expect(verdict.reason).toMatch(reason);
+  });
+
+  it("takes a job with exactly its settlement window left, the last second submit accepts", async () => {
+    const { client } = stub({ "42": funded({ expiredAt: Number(NOW) + HORIZON }), "43": funded({ expiredAt: Number(NOW) + 900, settlementHorizon: 0 }) });
+    const settlement = squareSettlement({ client, agentId: 1n, now: () => NOW });
+    expect(await settlement.admit("42", task)).toEqual({ ok: true });
+    expect(await settlement.admit("43", task)).toEqual({ ok: true });
+  });
+
+  it("measures the window against the chain's clock, the latest block, unless told otherwise", async () => {
+    // The wall clock is nowhere near this job's expiry; the chain's is past it.
+    const { client } = stub({ "42": funded({ expiredAt: 1_900_000_000 }) }, () => [], 1_900_000_000n);
+    const settlement = squareSettlement({ client, agentId: 1n });
+    const verdict = await settlement.admit("42", task);
+    expect(verdict).toEqual({ ok: false, reason: "job 42 expired at 1900000000" });
+  });
+
+  it("refuses, rather than throws, when the chain's clock cannot be read", async () => {
+    const { client } = stub({ "42": funded() });
+    const settlement = squareSettlement({ client, agentId: 1n, now: () => Promise.reject(new Error("HTTP request failed")) });
+    expect(await settlement.admit("42", task)).toEqual({ ok: false, reason: "the chain's clock could not be read for job 42: HTTP request failed" });
   });
 
   it("takes any funded amount when the capability carries no price", async () => {

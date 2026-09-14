@@ -12,6 +12,7 @@ counter it reads means.
 [i90]: https://github.com/wienerlabs/square/issues/90
 [i100]: https://github.com/wienerlabs/square/issues/100
 [i225]: https://github.com/wienerlabs/square/issues/225
+[i335]: https://github.com/wienerlabs/square/issues/335
 
 ## The verdict is a split, not a veto
 
@@ -238,8 +239,16 @@ and these two make impossible.
 - **It carries no assurance.** The key has a real phase 1 and a development
   phase 2; see docs/disclosure/zk-setup-status.md.
 - **It is not installed by default on a dev chain.** Once the hook holds a
-  module every completion needs a proof bound to the job, and nothing on a local
-  chain produces those — the SDK lifecycle, the indexer and keeper suites and the
-  compose stack all complete with empty `optParams`, and installing it by default
-  would route their money to the client. `DeployLocal.s.sol` deploys and wires
-  the module and installs it only under `INSTALL_COMPLIANCE_MODULE=true`.
+  module every completion needs a proof bound to the job, and the suites that
+  share the default stack (the indexer's, the keeper's, the compose stack) do
+  not bind one; installing it by default would route their money to the
+  client. `DeployLocal.s.sol` deploys and wires the module and installs it
+  only under `INSTALL_COMPLIANCE_MODULE=true`. What does bind proofs is the
+  institution's side, `packages/policy` and the surfaces built on it: the
+  `square policy` commands, `square_hire`, the hosted agent's delegation, the
+  lifecycle runner and the app ([#335][i335],
+  [docs/decisions/proof-freshness.md](../decisions/proof-freshness.md)). Their
+  suites run against a stack whose module is keyed to the prover beside it
+  (`packages/policy/scripts/install-module-for-this-build.mjs`), since the
+  verifier `DeployLocal` deploys comes from one particular key and a fresh
+  build draws another.

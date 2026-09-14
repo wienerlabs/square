@@ -1,7 +1,7 @@
 export { hostAgent, hostedHandlers, sealContext } from "./host.js";
-export type { HandlerContext, HostDeps, HostedAgent } from "./host.js";
+export type { ComplianceDeps, HandlerContext, HostDeps, HostedAgent } from "./host.js";
 export { HostedConfigError, parseHostedConfig } from "./config.js";
-export type { DelegationConfig, HostedAgentConfig, HostedCapability, ProviderConfig } from "./config.js";
+export type { ComplianceConfig, DelegationConfig, HostedAgentConfig, HostedCapability, ProviderConfig } from "./config.js";
 export { PolicyAllowance } from "./allowance.js";
 export type { AllowanceView, PolicyAllowanceOptions } from "./allowance.js";
 export { DEFAULT_MODEL, ModelRunError, runCapability } from "./model.js";

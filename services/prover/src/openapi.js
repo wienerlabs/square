@@ -64,7 +64,11 @@ export const openapiSpec = {
           400: {
             description:
               'The request was refused before any proving started: a required field ' +
-              'is missing, a list is not a list, or a time restriction is out of range. ' +
+              'is missing, a list is not a list, a time restriction is out of range, ' +
+              'or a field is not in its format (an address that is not 20 bytes of hex, ' +
+              'a policy_id that is not a UUID, an amount that is not a non-negative ' +
+              'whole number, a category that is empty or over 32 bytes, an unknown ' +
+              'weekday). ' +
               'The message names the offending field but never its value. Retrying an ' +
               'unchanged request will not help.',
             content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
