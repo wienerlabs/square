@@ -22,6 +22,7 @@
     "@clack/prompts": "^0.7.0",
     "@squaresdk/core": "file:../core",
     "@squaresdk/did-resolver": "file:../did-resolver",
+    "@squaresdk/policy": "file:../policy",
     "commander": "^12.1.0",
     "viem": "^2.21.0",
     "zod": "^3.25.76"

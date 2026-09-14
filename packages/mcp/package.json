@@ -31,6 +31,7 @@
     "@squaresdk/agent": "file:../agent",
     "@squaresdk/core": "file:../core",
     "@squaresdk/did-resolver": "file:../did-resolver",
+    "@squaresdk/policy": "file:../policy",
     "@squaresdk/x402": "file:../x402",
     "viem": "^2.48.0",
     "zod": "^3.25.76"

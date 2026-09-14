@@ -201,6 +201,25 @@ describe.skipIf(!reachable)("lifecycle on anvil through the SDK", () => {
     await expect(client.setPolicy(`0x${"ff".repeat(32)}`, dailyLimit)).rejects.toThrow(/CommitmentOutsideProofRange/);
   });
 
+  it("compliance proof: the client binds bytes to its job while Funded or Submitted, and reads them back; the slot says whether anything checks them", async () => {
+    const jobId = await submittedJob();
+    expect(await client.complianceProofOf(jobId)).toBe("0x");
+    const proof = `0x${"ab".repeat(64)}` as const;
+    await client.setComplianceProof(jobId, proof);
+    expect(await client.complianceProofOf(jobId)).toBe(proof);
+    // Only the job's client writes it (square#245).
+    await expect(provider.setComplianceProof(jobId, proof)).rejects.toThrow(/Unauthorized|OnlyClient/);
+    // The default local stack installs no module, so no release is gated and there is no tolerance to read.
+    const module = await client.complianceModule();
+    if (module === null) {
+      expect(await client.complianceTolerance()).toBeNull();
+      expect(await client.previewRelease({ jobId, payee: provider.account, amount: 1n, client: client.account, proof })).toBeNull();
+    } else {
+      expect(await client.complianceTolerance()).toBeGreaterThan(0n);
+      expect(await client.previewRelease({ jobId, payee: provider.account, amount: 1n, client: client.account, proof })).toBe(false);
+    }
+  });
+
   it("spec hash written on chain matches the SDK", async () => {
     const spec = { task: "audit", scope: ["a", "b"] };
     const latest = await publicClient.getBlock();
