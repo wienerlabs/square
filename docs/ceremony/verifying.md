@@ -100,7 +100,8 @@ is where it shows.
 
 `ceremony.mjs verify-chain` makes the same comparison for every contribution at
 once: it reads each contribution's hash and recorded name out of the final key
-and checks them against the transcript, in order. Until square#229 it compared
+and checks them against the transcript, in order, and checks that the name the
+transcript shows is the one it recorded from the key. Until square#229 it compared
 only how many there were, so a chain re-run with different contributors passed
 it — your own check above was the only place a substitution showed.
 

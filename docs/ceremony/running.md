@@ -104,7 +104,8 @@ It checks the phase-1 file by hash, the compiled circuit against the hash the
 ceremony started from, the final key against circuit and ptau, every
 contribution's hash and recorded name against the transcript in order — the
 values each contributor published, so a chain re-run with different contributors
-fails here (square#229) — and the beacon three ways: the value drand
+fails here (square#229) — and the transcript's readable name against the one it
+recorded, and the beacon three ways: the value drand
 publishes for that round, fetched live rather than read from the transcript; the
 round's BLS signature against **the group public key pinned in `ceremony.mjs`**;
 and that the round lands after the last contribution. It exits non-zero if

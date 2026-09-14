@@ -39,8 +39,9 @@ const claimed = (name, hash) => ({
   at: '2026-09-01T00:00:00.000Z',
 });
 
-const ALICE = '1'.repeat(128);
-const BOB = '2'.repeat(128);
+// Hex letters in both, so a comparison that forgot case would be caught.
+const ALICE = 'a1b2c3d4'.repeat(16);
+const BOB = 'e5f6a7b8'.repeat(16);
 
 describe('a transcript that describes the key', () => {
   it('agrees when the names and hashes are the ones the key carries', () => {
@@ -52,6 +53,9 @@ describe('a transcript that describes the key', () => {
   });
 
   it('does not mind the case a hash is written in', () => {
+    // A hash with no letters reads the same in either case, and the test then
+    // passes with the case folding removed.
+    expect(ALICE.toUpperCase()).not.toBe(ALICE);
     const problems = contributionMismatches(
       [held('Alice', ALICE.toUpperCase())],
       [claimed('Alice', ALICE)],
@@ -120,6 +124,17 @@ describe('a transcript that does not', () => {
 
   // A transcript from before square#229 carries no hash. Saying so is the
   // answer; treating a missing hash as a match is how this started.
+  // The transcript's readable name is what a reader sees; `recorded_name` is
+  // what is compared with the key. A transcript showing Alice over a key that
+  // records Zeta passed while only the second was checked.
+  it('catches a transcript whose readable name is not the one it records from the key', () => {
+    const shown = { ...claimed('Zeta', ALICE), name: 'Alice' };
+    const problems = contributionMismatches([held('Zeta', ALICE)], [shown]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('the transcript names "Alice"');
+    expect(problems[0]).toContain('"Zeta"');
+  });
+
   it('refuses to read a missing hash as agreement', () => {
     const withoutHash = { ...claimed('Alice', ALICE), transcript_hash: undefined };
     const problems = contributionMismatches([held('Alice', ALICE)], [withoutHash]);
@@ -157,7 +172,12 @@ describe.skipIf(!HAVE_ZKEY)('against the development key', () => {
     }));
     expect(contributionMismatches(contributions, transcript)).toEqual([]);
 
-    const edited = transcript.map((entry) => ({ ...entry, transcript_hash: `0${entry.transcript_hash.slice(1)}` }));
+    // The first character is flipped to one it is not. Setting it to "0" was a
+    // no-op for a hash that already started with "0", one fresh key in sixteen,
+    // and the test then failed on a build.
+    const flip = (hash) => `${hash[0] === '0' ? '1' : '0'}${hash.slice(1)}`;
+    const edited = transcript.map((entry) => ({ ...entry, transcript_hash: flip(entry.transcript_hash) }));
+    edited.forEach((entry, i) => expect(entry.transcript_hash).not.toBe(transcript[i].transcript_hash));
     expect(contributionMismatches(contributions, edited)).toHaveLength(contributions.length);
   });
 });

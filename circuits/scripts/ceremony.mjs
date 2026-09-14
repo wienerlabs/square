@@ -495,6 +495,15 @@ export function contributionMismatches(held, claimed) {
         + `the transcript ${JSON.stringify(want.recorded_name ?? null)}`,
       );
     }
+    // `name` is what a reader of the transcript sees, and `contribute` writes it
+    // and `recorded_name` from the same argument. A transcript showing one name
+    // over a key that records another describes someone the key does not.
+    if (want.name !== undefined && want.name !== want.recorded_name) {
+      problems.push(
+        `contribution ${i + 1}: the transcript names ${JSON.stringify(want.name)} `
+        + `but records ${JSON.stringify(want.recorded_name ?? null)} from the key`,
+      );
+    }
   }
 
   for (let i = claimed.length; i < held.length; i += 1) {
