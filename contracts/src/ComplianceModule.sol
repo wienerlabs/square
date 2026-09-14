@@ -138,7 +138,15 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
     event TimestampToleranceUpdated(uint64 seconds_);
     event ReleaseVerified(uint256 indexed jobId, address indexed payee, uint256 amount, bytes32 statement);
     event VerdictDisagreed(uint256 indexed jobId, IPolicyRegistry.Verdict verdict);
-    event ReleaseRefused(uint256 indexed jobId, bytes32 reason);
+    /// @notice A release this module refused, why, and which statement was presented.
+    /// @dev `statement` is `keccak256(abi.encode(publicSignals))`, the identity
+    ///      `_consumed` and `ReleaseVerified` use, so a refusal is one log
+    ///      filter away from the release that spent the same statement (#250).
+    ///      It is indexed for that lookup. It is `bytes32(0)` on the two
+    ///      refusals that come before any signal is read: `malformed proof`
+    ///      and `invalid proof`. So zero means the proof could not be read,
+    ///      and anything else means it was read and did not bind.
+    event ReleaseRefused(uint256 indexed jobId, bytes32 indexed statement, bytes32 reason);
 
     error OnlyHook();
     error ProofDoesNotVerify();
@@ -245,7 +253,7 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         bytes32 statement;
         (verified, reason, statement) = _verify(jobId, payee, amount, token, client, proof);
         if (!verified) {
-            emit ReleaseRefused(jobId, reason);
+            emit ReleaseRefused(jobId, statement, reason);
             return false;
         }
 
@@ -280,7 +288,7 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         } catch {
             // Spent and not booked. `false`, so the hook does not record this
             // release as compliant; the hook reports the payment it cannot undo.
-            emit ReleaseRefused(jobId, R_UNRECORDED);
+            emit ReleaseRefused(jobId, statement, R_UNRECORDED);
             return false;
         }
 

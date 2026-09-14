@@ -388,6 +388,12 @@ export const complianceModuleAbi = [
         "internalType": "uint256"
       },
       {
+        "name": "statement",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
         "name": "reason",
         "type": "bytes32",
         "indexed": false,

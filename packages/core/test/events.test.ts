@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { encodeAbiParameters, encodeEventTopics, parseAbiParameters, type Log } from "viem";
-import { decodeSquareLogs, deploymentFor, eventsNamed, squareJobAbi } from "../src/index.js";
+import { encodeAbiParameters, encodeEventTopics, parseAbiParameters, stringToHex, type Address, type Log } from "viem";
+import { complianceModuleAbi, decodeSquareLogs, deploymentFor, eventsNamed, squareJobAbi } from "../src/index.js";
 
 const deployment = deploymentFor(31337);
 const client = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
@@ -53,5 +53,36 @@ describe("decodeSquareLogs", () => {
     const logs = [jobCreatedLog(3n, 12n, 1), jobCreatedLog(1n, 11n, 7), jobCreatedLog(2n, 12n, 0)];
     const ids = eventsNamed(decodeSquareLogs(logs, deployment), "JobCreated").map((e) => e.args.jobId);
     expect(ids).toEqual([1n, 2n, 3n]);
+  });
+
+  // #250: the refusal carries the statement, indexed. It is decoded only when the
+  // record names a module, since without one there is no address to read it from.
+  it("decodes the compliance module's refusal, statement included, when the deployment names the module", () => {
+    const module = "0x00000000000000000000000000000000000000c0" as Address;
+    const statement = `0x${"5a".repeat(32)}` as const;
+    const reason = stringToHex("proof already used", { size: 32 });
+    const log = {
+      address: module,
+      topics: encodeEventTopics({ abi: complianceModuleAbi, eventName: "ReleaseRefused", args: { jobId: 7n, statement } }),
+      data: encodeAbiParameters(parseAbiParameters("bytes32"), [reason]),
+      blockNumber: 3n,
+      logIndex: 0,
+      transactionHash: "0x" + "ab".repeat(32),
+      transactionIndex: 0,
+      blockHash: "0x" + "cd".repeat(32),
+      removed: false,
+    } as Log;
+
+    // The local constant names DeployLocal's module, so it is taken out here to
+    // read as a stack that has none.
+    const { complianceModule: _named, ...withoutModule } = deployment;
+    expect(decodeSquareLogs([log], withoutModule)).toEqual([]);
+
+    const [event] = decodeSquareLogs([log], { ...deployment, complianceModule: module });
+    expect(event?.contract).toBe("ComplianceModule");
+    if (event?.eventName !== "ReleaseRefused") throw new Error("wrong event");
+    expect(event.args.jobId).toBe(7n);
+    expect(event.args.statement).toBe(statement);
+    expect(event.args.reason).toBe(reason);
   });
 });

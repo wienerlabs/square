@@ -39,7 +39,7 @@ other is implemented. The two questions #6 was asked answer as follows.
 | `ClaimMarket` | receivable listing, purchase, cancellation, payee lookup | no: price moves buyer → seller directly |
 | `SquareHook` | the single whitelisted `IACPHook`: payout routing, compliance slot, reputation and validation writes | no |
 | `PolicyRegistry` | the policy commitment and the daily spend counter the compliance module reads and moves, and each poster's buyer list root | no |
-| `ComplianceModule` | the gate in the hook's slot: verifies the proof bound to a job against the eight bindings at release, marks the statement spent, and advances the registry's counter. Absent from the shared deployment while the slot is empty; the SDK carries its ABI (`complianceModuleAbi`) for the tools that bind proofs | no |
+| `ComplianceModule` | the proof gate `SquareHook` calls: verifies the Groth16 proof, binds its eight signals to the job, marks the statement spent and advances the policy counter. Absent from the shared deployment while the slot is empty; the SDK carries its ABI (`complianceModuleAbi`) for the tools that bind proofs | no |
 
 `SquareJob` never reads a live token balance. Every transfer out is computed
 from the stored `budget` and the fee basis points snapshotted at funding.
@@ -270,12 +270,13 @@ do the same.
 `FeesScheduled`, `Skimmed` and `HookWhitelistUpdated` on `SquareJob`; `ArbitrationSet`,
 `WindowsConfigured` and `FinalizeGraceConfigured` on `KeeperEvaluator`;
 `ArbitersUpdated` and `BondParametersUpdated` on `Arbitration`;
-`ComplianceModuleUpdated` and `ReputationPolicyUpdated` on `SquareHook`; and the
-`Ownable2Step` pair below, which five of the six contracts inherit.
+`ComplianceModuleUpdated` and `ReputationPolicyUpdated` on `SquareHook`;
+`HookUpdated` and `TimestampToleranceUpdated` on `ComplianceModule`; and the
+`Ownable2Step` pair below, which six of the seven contracts inherit.
 `PolicyRegistry` is a case of its own, in its section further down: it is keyed
 by the institution throughout and has no `jobId` anywhere.
 
-Every event any of the six contracts declares appears in the tables below, and
+Every event any of the seven contracts declares appears in the tables below, and
 `packages/core/scripts/check-events-documented.mjs` fails the `contracts`
 workflow when one does not.
 
@@ -391,24 +392,28 @@ is a signal on the release, never a lock on the escrow
 
 ### ComplianceModule
 
-Emitted by whichever module the hook's slot holds, so an indexer reads them
-from the address `SquareHook.complianceModule()` names at the time, not from
-the deployment record. Keyed by `jobId`, like the hook's own
-`ComplianceChecked`, which follows every one of the first two.
+The proof gate ([compliance-gate.md](./compliance-gate.md)). Emitted by
+whichever module the hook's slot holds, so a reader takes them from the
+address `SquareHook.complianceModule()` names at the time; the indexer reads
+them when the deployment record names the module. Keyed by `jobId`, like the
+hook's own `ComplianceChecked`, which follows every one of the first two.
+`statement` is `keccak256(abi.encode(publicSignals))`: the proof's identity,
+which a re-randomised copy of the same proof shares, and what `isConsumed` is
+keyed on.
 
 | Event | Carries |
 |---|---|
-| `ReleaseVerified(uint256 indexed jobId, address indexed payee, uint256 amount, bytes32 statement)` | the proof bound to the job passed the eight bindings; `statement` is the hash of its public signals, marked spent so a re-randomised copy is refused (docs/design/compliance-gate.md, "Replay") |
-| `ReleaseRefused(uint256 indexed jobId, bytes32 reason)` | the release was refused and pays the client back; `reason` is one of `malformed proof`, `invalid proof`, `is_compliant is 0`, `policy commitment`, `recipient`, `amount`, `token`, `daily_spent_before`, `timestamp outside window`, `stripe_receipt_hash`, `proof already used`, as a short string in the `bytes32` |
-| `VerdictDisagreed(uint256 indexed jobId, Verdict verdict)` | the proof passed every binding and the registry's `recordSpend` still answered `NoPolicy` or `LimitExceeded`: the two contracts disagree, which is visible here rather than as money moving under a policy nobody checked |
-| `HookUpdated(address indexed hook)` | owner only: the hook whose `checkRelease` calls this module accepts |
-| `TimestampToleranceUpdated(uint64 seconds_)` | owner only: how far a proof's timestamp may sit from the releasing block |
+| `ReleaseVerified(uint256 indexed jobId, address indexed payee, uint256 amount, bytes32 statement)` | a release the proof gated and the module booked: `statement` is spent from here on, and the policy counter has advanced by `amount` |
+| `ReleaseRefused(uint256 indexed jobId, bytes32 indexed statement, bytes32 reason)` | a release the module refused, and why; it pays the client back. `statement` is indexed, so one log filter returns every refusal of a statement, and the release that spent it is the `ReleaseVerified` carrying the same value (#250). It is `bytes32(0)` for `malformed proof` and `invalid proof`, the two refusals that come before any signal is read: zero means the proof could not be read, anything else means it was read and did not bind. `reason` is one of `malformed proof`, `invalid proof`, `is_compliant is 0`, `policy commitment`, `recipient`, `amount`, `token`, `daily_spent_before`, `timestamp outside window`, `stripe_receipt_hash`, `proof already used`, `hook not authorised`, `not a spender`, `spend not recorded`, as a short string in the `bytes32` |
+| `VerdictDisagreed(uint256 indexed jobId, IPolicyRegistry.Verdict verdict)` | a proof that passed every binding and still came back `NoPolicy` or `LimitExceeded` from `PolicyRegistry.recordSpend`: the two contracts have drifted apart, which is visible here rather than as money moving under a policy nobody checked |
+| `HookUpdated(address indexed hook)` | owner only: the hook whose calls to `checkRelease` this module books |
+| `TimestampToleranceUpdated(uint64 seconds_)` | owner only: how far a proof's timestamp may sit from the block's |
 
 The institution's side reads the first two off a release receipt
 (`@squaresdk/policy`'s `moduleVerdict`) to say whether the proof it bound was
-the one the module verified; the keeper and the indexer do not read them yet,
-and until they do a refused release is visible to the client's tools and in
-`ComplianceChecked`'s `verified = false`.
+the one the module verified; the indexer journals them and turns a refusal
+into a `releaseRefused` notice (#250); the keeper does not read them, and a
+refused release is also visible in `ComplianceChecked`'s `verified = false`.
 
 ### Ownership, on every owned contract
 

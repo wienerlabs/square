@@ -80,6 +80,7 @@ export type ReducerNotice =
   | { code: "reputationWriteFailed"; jobId: bigint; agentId: bigint }
   | { code: "validationWriteFailed"; jobId: bigint; requestHash: Hex }
   | { code: "hookFailed"; jobId: bigint; hook: Address; selector: Hex }
+  | { code: "releaseRefused"; jobId: bigint; statement: Hex; reason: Hex }
   | { code: "releaseUnconfirmed"; jobId: bigint; payee: Address; amount: bigint };
 
 export const REFUND_REASON_PAYOUT_UNRESOLVABLE = "payoutUnresolvable";
@@ -144,6 +145,9 @@ export function applyEvent(state: IndexerState, event: SquareEvent, notice: Noti
       return;
     case "SquareHook":
       applyHook(state, event, block, notice);
+      return;
+    case "ComplianceModule":
+      applyModule(event, notice);
       return;
   }
 }
@@ -419,6 +423,18 @@ function applyHook(state: IndexerState, event: Extract<SquareEvent, { contract: 
   const job = requireJob(state, event.args.jobId);
   job.agentId = event.args.agentId;
   job.updatedBlock = block;
+}
+
+/**
+ * The compliance module's verdicts change no mirror row: what a verdict did to
+ * the money arrives as the kernel's `PayoutRouted`. They are journaled like every
+ * log, with `statement` decoded, so a refusal and the release that spent the
+ * same statement are one `job_events` query apart (#250), and a refusal is
+ * reported as it lands.
+ */
+function applyModule(event: Extract<SquareEvent, { contract: "ComplianceModule" }>, notice: NoticeSink): void {
+  if (event.eventName !== "ReleaseRefused") return;
+  notice({ code: "releaseRefused", jobId: event.args.jobId, statement: event.args.statement, reason: event.args.reason });
 }
 
 export function reduce(events: SquareEvent[], state: IndexerState = emptyState(), notice: NoticeSink = ignoreNotice): IndexerState {

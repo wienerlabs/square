@@ -288,12 +288,40 @@ contract ComplianceModuleTest is Test, BuyerLists {
         assertEq(kernel.withdrawable(client), FIXTURE_AMOUNT);
     }
 
-    /// Garbage in the proof slot is a refusal, not a revert.
+    /// Garbage in the proof slot is a refusal, not a revert. No signal is read
+    /// out of it, so the refusal names no statement (#250).
     function test_malformedProofPaysTheProviderNothing() public {
         uint256 jobId = submittedJob();
-        completeWith(jobId, hex"deadbeef");
+        // Bound first, then expected: binding emits `ComplianceProofSet`, and an
+        // expectation set ahead of it would attach to that write.
+        bindProof(jobId, hex"deadbeef");
+        vm.warp(FIXTURE_TIMESTAMP);
+        vm.expectEmit(true, true, false, true, address(module));
+        emit ComplianceModule.ReleaseRefused(jobId, bytes32(0), "malformed proof");
+        vm.prank(address(keeper));
+        kernel.complete(jobId, bytes32(0), abi.encode(FULL_BPS, hex"deadbeef"));
         assertEq(uint8(kernel.getJobRecord(jobId).status), uint8(ISquareJob.JobStatus.Completed));
         assertEq(kernel.withdrawable(provider), 0);
+    }
+
+    /// A proof of the right length that the verifier rejects. As with a
+    /// malformed one no signal was read, so the refusal names no statement, and
+    /// `reason` is what tells the two apart (#250).
+    function test_aProofTheVerifierRejectsIsRefusedWithNoStatement() public {
+        Proof memory tampered = _load(".compliant");
+        tampered.c[0] = tampered.c[0] ^ 1;
+        bytes memory rejected = encoded(tampered);
+        assertEq(rejected.length, compliantProof().length, "the right length, so this is not the malformed path");
+
+        uint256 jobId = submittedJob();
+        bindProof(jobId, rejected);
+        vm.warp(FIXTURE_TIMESTAMP);
+        vm.expectEmit(true, true, false, true, address(module));
+        emit ComplianceModule.ReleaseRefused(jobId, bytes32(0), "invalid proof");
+        vm.prank(address(keeper));
+        kernel.complete(jobId, bytes32(0), abi.encode(FULL_BPS, rejected));
+        assertEq(kernel.withdrawable(provider), 0);
+        assertEq(kernel.withdrawable(client), FIXTURE_AMOUNT);
     }
 
     // ------------------------------------------------------------- the bindings
@@ -417,6 +445,47 @@ contract ComplianceModuleTest is Test, BuyerLists {
         assertEq(kernel.withdrawable(client), FIXTURE_AMOUNT, "the second net went back to the client");
     }
 
+    /// #250: a refusal names the statement it refused, and it is the statement
+    /// the release that spent it verified. Both are read off the logs rather
+    /// than recomputed, so this is what an indexer sees: one refusal, one
+    /// release, the same `statement`.
+    function test_aRefusalNamesTheStatementTheReleaseThatSpentItVerified() public {
+        bytes memory proof = compliantProof();
+
+        uint256 first = submittedJob();
+        bindProof(first, proof);
+        vm.warp(FIXTURE_TIMESTAMP);
+        vm.recordLogs();
+        vm.prank(address(keeper));
+        kernel.complete(first, bytes32(0), abi.encode(FULL_BPS, proof));
+        bytes32 spent = _statementIn(vm.getRecordedLogs(), ComplianceModule.ReleaseVerified.selector);
+
+        uint256 second = submittedJob();
+        bindProof(second, proof);
+        vm.recordLogs();
+        vm.prank(address(keeper));
+        kernel.complete(second, bytes32(0), abi.encode(FULL_BPS, proof));
+        bytes32 refused = _statementIn(vm.getRecordedLogs(), ComplianceModule.ReleaseRefused.selector);
+
+        assertTrue(spent != bytes32(0), "the release named a statement");
+        assertEq(refused, spent, "the refusal names the statement the earlier release spent");
+        assertEq(spent, statementOf(proof), "and it is the statement the module marks");
+        assertTrue(module.isConsumed(refused));
+    }
+
+    /// The `statement` of the module's first `ReleaseVerified` or `ReleaseRefused`
+    /// in `logs`: a topic on the refusal, where it is indexed, and the second
+    /// data word on the release.
+    function _statementIn(Vm.Log[] memory logs, bytes32 topic) internal view returns (bytes32 statement) {
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter != address(module) || logs[i].topics[0] != topic) continue;
+            if (topic == ComplianceModule.ReleaseRefused.selector) return logs[i].topics[2];
+            (, statement) = abi.decode(logs[i].data, (uint256, bytes32));
+            return statement;
+        }
+        revert("the module emitted no such event");
+    }
+
     /// The mark alone stops it, with the counter put back where it was.
     function test_theMarkStopsAReplayEvenWhenTheCounterAgrees() public {
         uint256 first = submittedJob();
@@ -485,8 +554,8 @@ contract ComplianceModuleTest is Test, BuyerLists {
         uint256 second = submittedJob();
         bindProof(second, copy);
         // Named, so the test cannot pass for a different reason later.
-        vm.expectEmit(true, false, false, true, address(module));
-        emit ComplianceModule.ReleaseRefused(second, "proof already used");
+        vm.expectEmit(true, true, false, true, address(module));
+        emit ComplianceModule.ReleaseRefused(second, statementOf(copy), "proof already used");
         vm.prank(address(keeper));
         kernel.complete(second, bytes32(0), abi.encode(FULL_BPS, copy));
 
@@ -726,8 +795,8 @@ contract ComplianceModuleTest is Test, BuyerLists {
         vm.warp(FIXTURE_TIMESTAMP);
 
         vm.recordLogs();
-        vm.expectEmit(true, false, false, true, address(module));
-        emit ComplianceModule.ReleaseRefused(jobId, "not a spender");
+        vm.expectEmit(true, true, false, true, address(module));
+        emit ComplianceModule.ReleaseRefused(jobId, statementOf(compliantProof()), "not a spender");
         vm.prank(address(keeper));
         kernel.complete(jobId, bytes32(0), abi.encode(FULL_BPS, compliantProof()));
         Vm.Log[] memory logs = vm.getRecordedLogs();
@@ -847,8 +916,8 @@ contract ComplianceModuleTest is Test, BuyerLists {
             abi.encodeWithSelector(PolicyRegistry.recordSpend.selector),
             abi.encodeWithSelector(IPolicyRegistry.NotASpender.selector, address(module))
         );
-        vm.expectEmit(true, false, false, true, address(module));
-        emit ComplianceModule.ReleaseRefused(first, "spend not recorded");
+        vm.expectEmit(true, true, false, true, address(module));
+        emit ComplianceModule.ReleaseRefused(first, statementOf(proof), "spend not recorded");
         vm.expectEmit(true, true, false, true, address(hook));
         emit SquareHook.ReleaseUnconfirmed(first, provider, FIXTURE_AMOUNT);
         vm.prank(address(keeper));
@@ -862,8 +931,8 @@ contract ComplianceModuleTest is Test, BuyerLists {
         uint256 second = submittedJob();
         bindProof(second, proof);
         vm.warp(FIXTURE_TIMESTAMP);
-        vm.expectEmit(true, false, false, true, address(module));
-        emit ComplianceModule.ReleaseRefused(second, "proof already used");
+        vm.expectEmit(true, true, false, true, address(module));
+        emit ComplianceModule.ReleaseRefused(second, statementOf(proof), "proof already used");
         vm.prank(address(keeper));
         kernel.complete(second, bytes32(0), abi.encode(FULL_BPS, proof));
         assertEq(kernel.withdrawable(provider), FIXTURE_AMOUNT, "the same proof paid a second job");

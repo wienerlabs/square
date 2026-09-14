@@ -11,6 +11,13 @@ export interface SquareDeployment {
   identityRegistry: Address;
   reputationRegistry: Address;
   validationRegistry: Address;
+  /**
+   * The compliance module `SquareHook` calls (#27), when the record names one.
+   * Optional because a stack can run without it, as the shared Arc stack does;
+   * `DeployLocal` writes it. Its events are decoded and indexed when it is set
+   * (#250).
+   */
+  complianceModule?: Address;
   startBlock?: bigint;
 }
 
@@ -105,6 +112,7 @@ const localAnvil: SquareDeployment = {
   arbitration: "0x0165878A594ca255338adfa4d48449f69242Eb8F",
   claimMarket: "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6",
   squareHook: "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318",
+  complianceModule: "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e",
 };
 
 const arcTestnet: SquareDeployment = {
@@ -155,6 +163,13 @@ export function deploymentFromJson(json: unknown): SquareDeployment {
       throw new InvalidDeploymentError(`${key} is not an address`);
     }
     out[field] = getAddress(value);
+  }
+  const module = record["ComplianceModule"];
+  if (module !== undefined && module !== null) {
+    if (typeof module !== "string" || !isAddress(module)) {
+      throw new InvalidDeploymentError("ComplianceModule is not an address");
+    }
+    out["complianceModule"] = getAddress(module);
   }
   const block = record["block"];
   if (block !== undefined && block !== null) {
