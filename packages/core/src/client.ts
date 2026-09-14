@@ -691,6 +691,51 @@ export class SquareClient {
     });
   }
 
+  /**
+   * This poster's policy as the registry holds it: the commitment the
+   * compliance module compares a proof against, the daily ceiling in USDC
+   * atomic units, and the epoch that counts rotations. A zero commitment is
+   * no policy, and the registry treats no policy as authorising nothing.
+   */
+  async policyOf(poster: Address) {
+    return this.publicClient.readContract({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "policyOf",
+      args: [poster],
+    });
+  }
+
+  /**
+   * What the registry has counted against this poster's ceiling today: the
+   * releases from escrow the compliance module recorded, on the UTC day the
+   * chain is in. Funded but unreleased escrow is not in it; the counter moves
+   * at release (square#26).
+   */
+  async spentToday(poster: Address): Promise<bigint> {
+    return this.publicClient.readContract({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "spentToday",
+      args: [poster],
+    });
+  }
+
+  /**
+   * Commit this account's policy: the circuit's Poseidon commitment (below
+   * the BN254 scalar field, or the registry refuses it) and the daily
+   * ceiling in USDC atomic units, at most `uint64`. Every call starts a new
+   * epoch.
+   */
+  async setPolicy(commitment: Hex, dailyLimit: bigint): Promise<TransactionResult> {
+    return this.write({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "setPolicy",
+      args: [commitment, dailyLimit],
+    });
+  }
+
   async recordExpiry(jobId: bigint): Promise<TransactionResult> {
     return this.write({
       abi: squareHookAbi,
