@@ -9,7 +9,7 @@ import {
   type PublicClient,
   type Transport,
 } from "viem";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { mnemonicToAccount } from "viem/accounts";
 import { SIMPLE_ACCOUNT_FACTORY_V07, SIMPLE_ACCOUNT_IMPLEMENTATION_V07 } from "../src/constants.js";
 import { isStateOverrideUnsupported } from "../src/errors.js";
 import { createSelfBundler, DEFAULT_UNDEPLOYED_CALL_GAS_LIMIT } from "../src/selfBundler.js";
@@ -26,7 +26,13 @@ import { toSimpleSmartAccount } from "../src/simpleAccount.js";
  * the account paid, with nothing to say so; the deployed path threw on the
  * same timeout.
  */
-const owner = privateKeyToAccount(generatePrivateKey());
+// A fixed owner, not a random one. The call below goes to the owner's address,
+// so the address is in the calldata, and `callGasLimit` is the estimate less
+// the intrinsic calldata gas: each zero byte in a random address priced the
+// call 14 to 15 gas higher (129 820 for one, 129 835 for two), and the exact
+// assertion failed on roughly one run in thirteen. anvil's published development
+// account 0 has no zero byte, and its key guards nothing.
+const owner = mnemonicToAccount("test test test test test test test test test test test junk", { addressIndex: 0 });
 const SENDER = "0x1111111111111111111111111111111111111111";
 const word = (address: string): Hex => `0x${address.slice(2).padStart(64, "0")}`;
 
