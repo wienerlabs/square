@@ -55,45 +55,44 @@ export interface MemoryNonceStore extends NonceStore {
 
 export interface MemoryNonceStoreOptions {
   now?: (() => bigint) | undefined;
-  pruneEvery?: number | undefined;
+  pruneIntervalSeconds?: bigint | number | undefined;
 }
 
-export const MEMORY_NONCE_PRUNE_EVERY = 64;
+export const MEMORY_NONCE_PRUNE_INTERVAL_SECONDS = 60n;
 
 export function memoryNonceStore(options: MemoryNonceStoreOptions = {}): MemoryNonceStore {
   const now = options.now ?? currentUnixSeconds;
-  const pruneEvery = Math.max(1, options.pruneEvery ?? MEMORY_NONCE_PRUNE_EVERY);
+  const requestedInterval = BigInt(options.pruneIntervalSeconds ?? MEMORY_NONCE_PRUNE_INTERVAL_SECONDS);
+  const pruneIntervalSeconds = requestedInterval < 0n ? 0n : requestedInterval;
   const used = new Map<string, Map<bigint, bigint>>();
-  let consumedSincePrune = 0;
-  const dropExpired = (nonces: Map<bigint, bigint>, current: bigint): void => {
-    for (const [seen, expiry] of nonces) if (expiry <= current) nonces.delete(seen);
-  };
-  const prune = (): number => {
-    const current = now();
+  let lastPrunedAt = now();
+  const pruneAt = (current: bigint): number => {
     let droppedActors = 0;
     for (const [actorKey, nonces] of used) {
-      dropExpired(nonces, current);
+      for (const [seen, expiry] of nonces) if (expiry <= current) nonces.delete(seen);
       if (nonces.size === 0) {
         used.delete(actorKey);
         droppedActors += 1;
       }
     }
-    consumedSincePrune = 0;
+    lastPrunedAt = current;
     return droppedActors;
   };
   return {
     async consume(actor, nonce, expiresAt) {
-      consumedSincePrune += 1;
-      if (consumedSincePrune >= pruneEvery) prune();
+      const current = now();
+      if (current - lastPrunedAt >= pruneIntervalSeconds) pruneAt(current);
       const actorKey = actor.toLowerCase();
       const nonces = used.get(actorKey) ?? new Map<bigint, bigint>();
-      dropExpired(nonces, now());
-      if (nonces.has(nonce)) return false;
+      const seen = nonces.get(nonce);
+      if (seen !== undefined && seen > current) return false;
       nonces.set(nonce, expiresAt);
       used.set(actorKey, nonces);
       return true;
     },
-    prune,
+    prune() {
+      return pruneAt(now());
+    },
     size() {
       return used.size;
     },
@@ -122,7 +121,10 @@ export interface VerifyActionInput {
   nonceStore: NonceStore;
   expectedChainId: bigint | number;
   now?: bigint | number | undefined;
+  maxLifetimeSeconds?: bigint | number | undefined;
 }
+
+export const DEFAULT_MAX_ACTION_LIFETIME_SECONDS = 300n;
 
 function failure(reason: VerifyActionFailure, detail: string): VerifyActionResult {
   return { ok: false, reason, detail };
@@ -137,6 +139,14 @@ export async function verifyAction(input: VerifyActionInput): Promise<VerifyActi
   if (!isAddress(message.actor)) return failure("malformed_message", "message.actor is not an address");
   if (!isAddress(expectedActor)) return failure("malformed_message", "expectedActor is not an address");
   if (message.expiresAt <= message.issuedAt) return failure("malformed_message", "expiresAt must be after issuedAt");
+  const maxLifetimeSeconds = BigInt(input.maxLifetimeSeconds ?? DEFAULT_MAX_ACTION_LIFETIME_SECONDS);
+  const lifetimeSeconds = message.expiresAt - message.issuedAt;
+  if (lifetimeSeconds > maxLifetimeSeconds) {
+    return failure(
+      "malformed_message",
+      `lifetime of ${lifetimeSeconds} seconds is longer than the ${maxLifetimeSeconds} second cap this verifier accepts`
+    );
+  }
   if (input.expectedChainId === undefined || input.expectedChainId === null) {
     return failure(
       "missing_expected_chain_id",

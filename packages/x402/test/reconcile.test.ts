@@ -3,6 +3,7 @@ import { migrate, MIGRATIONS_DIR, pgliteDatabase, x402Payments } from "@squaresd
 import type { Hex, PublicClient } from "viem";
 import {
   blockTimestampFromClient,
+  DEFAULT_RECEIPT_GRACE_SECONDS,
   RECONCILE_REASON,
   reconcileSettlements,
   type SettlementReceiptStatus,
@@ -220,5 +221,166 @@ describe("reconcileSettlements", () => {
     } finally {
       await db.close();
     }
+  });
+});
+
+describe("a hash whose receipt never arrives", () => {
+  it("waits out the grace before it calls the transfer lost", async () => {
+    const store = memoryReplayStore();
+    const inside = entry(0xf1, BigInt(NOW - 60));
+    await store.insertAccepted(inside);
+    await store.markPending(inside, unseen);
+
+    expect(await reconcileSettlements({ store, receiptStatusOf, now: () => NOW })).toEqual({
+      examined: 1,
+      settled: 0,
+      failed: 0,
+      unresolved: 1,
+    });
+    expect(store.get(inside)?.status).toBe("accepted");
+  });
+
+  it("writes settlement_unconfirmed once validBefore and the grace have both passed", async () => {
+    const store = memoryReplayStore();
+    const lost = entry(0xf2, BigInt(NOW - DEFAULT_RECEIPT_GRACE_SECONDS - 1));
+    await store.insertAccepted(lost);
+    await store.markPending(lost, unseen);
+
+    expect(await reconcileSettlements({ store, receiptStatusOf, now: () => NOW })).toEqual({
+      examined: 1,
+      settled: 0,
+      failed: 1,
+      unresolved: 0,
+    });
+    expect(store.get(lost)?.status).toBe("failed");
+    expect(store.get(lost)?.reason).toBe(RECONCILE_REASON.unconfirmed);
+  });
+
+  it("settles instead of failing when the node catches up, however late", async () => {
+    const store = memoryReplayStore();
+    const late = entry(0xf3, BigInt(NOW - 100_000));
+    await store.insertAccepted(late);
+    await store.markPending(late, landed);
+
+    expect(await reconcileSettlements({ store, receiptStatusOf, now: () => NOW })).toEqual({
+      examined: 1,
+      settled: 1,
+      failed: 0,
+      unresolved: 0,
+    });
+    expect(store.get(late)?.status).toBe("settled");
+  });
+
+  it("takes the grace the caller chooses", async () => {
+    const store = memoryReplayStore();
+    const lost = entry(0xf4, BigInt(NOW - 60));
+    await store.insertAccepted(lost);
+    await store.markPending(lost, unseen);
+
+    expect(await reconcileSettlements({ store, receiptStatusOf, now: () => NOW, receiptGraceSeconds: 30 })).toEqual({
+      examined: 1,
+      settled: 0,
+      failed: 1,
+      unresolved: 0,
+    });
+    expect(store.get(lost)?.reason).toBe(RECONCILE_REASON.unconfirmed);
+  });
+});
+
+describe("a page full of rows that cannot be closed", () => {
+  it("does not hide a newer row that can be", async () => {
+    const store = memoryReplayStore();
+    for (const nonce of [0xa1, 0xa2, 0xa3]) {
+      const stuck = entry(nonce, BigInt(NOW - 60));
+      await store.insertAccepted(stuck);
+      await store.markPending(stuck, unseen);
+    }
+    const closable = entry(0xa4, BigInt(NOW - 60));
+    await store.insertAccepted(closable);
+
+    expect(await reconcileSettlements({ store, receiptStatusOf, now: () => NOW, limit: 3 })).toEqual({
+      examined: 3,
+      settled: 0,
+      failed: 0,
+      unresolved: 3,
+    });
+    expect(store.get(closable)?.status).toBe("accepted");
+
+    const second = await reconcileSettlements({ store, receiptStatusOf, now: () => NOW, limit: 3 });
+
+    expect(second.failed).toBe(1);
+    expect(store.get(closable)?.status).toBe("failed");
+    expect(store.get(closable)?.reason).toBe(RECONCILE_REASON.expired);
+  });
+
+  it("does the same in the durable ledger", async () => {
+    const db = await pgliteDatabase();
+    try {
+      await migrate(db, MIGRATIONS_DIR, "up");
+      const store = postgresReplayStore(db);
+      for (const nonce of [0xb1, 0xb2, 0xb3]) {
+        const stuck = entry(nonce, BigInt(NOW - 60));
+        await store.insertAccepted(stuck);
+        await store.markPending(stuck, unseen);
+      }
+      const closable = entry(0xb4, BigInt(NOW - 60));
+      await store.insertAccepted(closable);
+
+      await reconcileSettlements({ store, receiptStatusOf, now: () => NOW, limit: 3 });
+      expect((await x402Payments.get(db, closable))?.status).toBe(REPLAY_STATUS_CODE.accepted);
+
+      await reconcileSettlements({ store, receiptStatusOf, now: () => NOW, limit: 3 });
+
+      const row = await x402Payments.get(db, closable);
+      expect(row?.status).toBe(REPLAY_STATUS_CODE.failed);
+      expect(row?.reason).toBe(RECONCILE_REASON.expired);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe("a payment settled without a transaction hash", () => {
+  it("is out of the reconciler's reach, so validBefore never closes it as failed", async () => {
+    const db = await pgliteDatabase();
+    try {
+      await migrate(db, MIGRATIONS_DIR, "up");
+      const store = postgresReplayStore(db);
+      const hashless = entry(0xb7, BigInt(NOW - 3600));
+      await store.insertAccepted(hashless);
+
+      expect(await store.markSettled(hashless, null, "settled_without_transaction_hash")).toBe(true);
+
+      expect(await reconcileSettlements({ store, receiptStatusOf, now: () => NOW })).toEqual({
+        examined: 0,
+        settled: 0,
+        failed: 0,
+        unresolved: 0,
+      });
+      const row = await x402Payments.get(db, hashless);
+      expect(row?.status).toBe(REPLAY_STATUS_CODE.settled);
+      expect(row?.reason).toBe("settled_without_transaction_hash");
+      expect(await store.has(hashless)).toBe(true);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps replay protection in the memory store too", async () => {
+    const store = memoryReplayStore();
+    const hashless = entry(0xb8, BigInt(NOW - 3600));
+    await store.insertAccepted(hashless);
+
+    expect(await store.markSettled(hashless, null, "settled_without_transaction_hash")).toBe(true);
+
+    expect(await reconcileSettlements({ store, receiptStatusOf, now: () => NOW })).toEqual({
+      examined: 0,
+      settled: 0,
+      failed: 0,
+      unresolved: 0,
+    });
+    expect(store.get(hashless)?.status).toBe("settled");
+    expect(store.get(hashless)?.txHash).toBeUndefined();
+    expect(await store.has(hashless)).toBe(true);
   });
 });

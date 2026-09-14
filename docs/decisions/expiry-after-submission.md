@@ -50,10 +50,15 @@ never zero, and reported by `finalizeGrace()`.
 
 ## What moves with it
 
-- `Arbitration.settleBond` is permissionless. It returns the bond to the
-  disputer when the job is `Expired` or `Rejected`, since no vote can complete
-  it any more, and otherwise settles as before once the job is `Completed`.
-  A dispute that lapses is cranked by the keeper, not by the client (#91).
+- `Arbitration.settleBond` is permissionless. When the job is `Expired` it
+  routes the bond the way the decision says, to the payee if the panel decided
+  fully against the disputer and back to the disputer otherwise (#265), and
+  once the job is `Completed` it settles as before. A dispute that lapses is
+  cranked by the keeper, not by the client (#91), and so is this: the keeper
+  reads expired jobs whose dispute is still open from the mirror, checks
+  `bondSettled` on chain, sends `settleBond`, and journals it as `settleBond`
+  (#311). The app shows the same action on an expired disputed job for anyone
+  who does not want to wait a tick.
 - `ClaimMarket` lists only jobs whose hook routes the payout to this market,
   checked through `IPayoutResolver.payoutMarket()`, and pays the provider
   read from `SquareJob.providerOf` rather than the historical payee (#89).

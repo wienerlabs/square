@@ -151,7 +151,7 @@ services:
       SQUARE_DEPLOYMENT_FILE: /deployments/${CHAIN_ID:-31337}.json
       DATABASE_URL: ${DATABASE_URL:-postgres://square:square@postgres:5432/square}
       PORT: 3010
-      START_BLOCK: ${START_BLOCK:-0}
+      START_BLOCK: ${START_BLOCK:-}
       POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-1000}
       SQUARE_VERSION: ${SQUARE_VERSION:-0.1.0}
     volumes:

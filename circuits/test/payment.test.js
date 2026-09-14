@@ -13,6 +13,7 @@ import {
   ADDRESSES, TIMESTAMP,
 } from './helpers/inputs.mjs';
 import { calculateWitness, isBuilt, wasmPath } from './helpers/witness.mjs';
+import { isCompiled, publicSignalsOf } from './helpers/signals.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BUILD = path.resolve(HERE, '..', 'build');
@@ -22,25 +23,85 @@ const VKEY = path.join(BUILD, 'payment_vk.json');
 const HAVE_WASM = isBuilt('payment');
 const HAVE_ZKEY = HAVE_WASM && fs.existsSync(ZKEY) && fs.existsSync(VKEY);
 
-// Witness layout: w[0] = 1, then the public outputs in declaration order.
-const signalIndex = (name) => 1 + PUBLIC_SIGNALS.indexOf(name);
+// What the compiled circuit publishes, read out of payment.r1cs and payment.sym
+// rather than assumed (#230). Witness layout: w[0] is the constant 1, then the
+// public outputs in declaration order, then the public inputs.
+const COMPILED = isCompiled('payment') ? publicSignalsOf('payment') : null;
 
 describe.skipIf(!HAVE_WASM)('payment.circom', () => {
   async function run(overrides) {
     const input = await buildInput(overrides);
     const witness = await calculateWitness('payment', input);
+    // Keyed by the names the circuit declares, not by the list this suite
+    // expects: before #230 the object was built by walking PUBLIC_SIGNALS, so
+    // `Object.keys(signals)` equalled it by construction and every assertion
+    // below read a slot the test had chosen rather than one the circuit had.
     const signals = {};
-    PUBLIC_SIGNALS.forEach((name, i) => { signals[name] = witness[1 + i]; });
+    COMPILED.publicSignals.forEach((name, i) => { signals[name] = witness[1 + i]; });
     return { input, witness, signals };
   }
 
   describe('public signals', () => {
     it('exposes exactly eight, in the documented order', async () => {
-      const { witness, signals } = await run({});
-      expect(PUBLIC_SIGNALS).toHaveLength(8);
-      // w[0] is the constant 1; the ninth slot is already an internal signal.
-      expect(witness.length).toBeGreaterThan(9);
-      expect(Object.keys(signals)).toEqual(PUBLIC_SIGNALS);
+      // Every number here comes from the compile output. The old version
+      // counted PUBLIC_SIGNALS against itself, compared `signals` with the list
+      // it was built from, and asserted the witness was longer than nine wires
+      // — it has 11,584 — so a ninth output could not fail it.
+      expect(COMPILED.nPubOut).toBe(8);
+      expect(COMPILED.nPubIn).toBe(0);
+      expect(COMPILED.publicSignals).toEqual(PUBLIC_SIGNALS);
+    });
+
+    // The regression the check above exists for: a ninth output that publishes
+    // a private policy input. #230 compiled exactly that — `signal output
+    // leaked_policy_id <== policy_id_field` — and the whole suite passed.
+    //
+    // The six payment fields are public by design: the circuit takes them as
+    // private inputs and republishes them so the contract can cross-check the
+    // job it is settling. Anything the policy keeps — the ceilings, the lists,
+    // the operator and policy identifiers, the eight leaf salts — must not
+    // appear. Values that are also one of the six are excluded rather than
+    // flagged: a whitelist that contains the token being paid is the point of
+    // the whitelist, not a leak.
+    it('publishes no value the policy keeps private', async () => {
+      const { input, signals } = await run({});
+
+      const republished = new Set([
+        'recipient_in', 'amount_in', 'token_in',
+        'daily_spent_before_in', 'current_unix_timestamp_in', 'stripe_receipt_hash_in',
+      ]);
+      const allowed = new Set(
+        Object.entries(input).filter(([name]) => republished.has(name)).map(([, value]) => String(value)),
+      );
+
+      // Named rather than sized. A first version of this test skipped values
+      // under a million as "small flags", and that let the very regression it
+      // was written for through: policy_id_field is 424242 in the fixture, so a
+      // ninth output publishing it passed. The four time-window fields are the
+      // only inputs whose values legitimately collide with a public signal —
+      // they are 0 and 1 here, as is_compliant and stripe_receipt_hash are.
+      const notSecret = new Set([
+        'time_active', 'time_days_bitmask', 'time_start_hour_utc', 'time_end_hour_utc',
+      ]);
+      const secrets = new Map();
+      for (const [name, value] of Object.entries(input)) {
+        if (republished.has(name) || notSecret.has(name)) continue;
+        const values = Array.isArray(value) ? value : [value];
+        values.forEach((one, i) => {
+          const text = String(one);
+          // Zero is list padding, not a policy.
+          if (text === '0' || allowed.has(text)) return;
+          secrets.set(text, Array.isArray(value) ? `${name}[${i}]` : name);
+        });
+      }
+      expect(secrets.size).toBeGreaterThan(8);
+
+      for (const [name, value] of Object.entries(signals)) {
+        expect(
+          secrets.get(String(value)),
+          `the public signal ${name} carries the private input ${secrets.get(String(value))}`,
+        ).toBeUndefined();
+      }
     });
 
     it('mirrors the payment fields the verifier cross-checks', async () => {

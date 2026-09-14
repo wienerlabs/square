@@ -17,6 +17,7 @@ import {
 } from "viem";
 import { generatePrivateKey, mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
 import {
+  approveBuyers,
   createSquareClient,
   deploymentFromJson,
   eventsNamed,
@@ -292,7 +293,15 @@ async function main(): Promise<void> {
   const receivablePath = "6-receivable";
   const sold = await submittedJob(client, provider, budget, receivablePath);
   record(receivablePath, "list", (await provider.listClaim(sold, (budget * 9n) / 10n)).receipt);
-  record(receivablePath, "buy", (await buyer.buyClaim(sold)).receipt);
+  // square#30: the receivable sells only to a buyer the client's policy approved.
+  const approved = approveBuyers([buyer.account]);
+  record(receivablePath, "setBuyerRoot (the client approves the buyer)", (await client.setBuyerRoot(approved.root)).receipt);
+  await expectRevert(
+    "buy by an address the client did not approve",
+    () => cranker.buyClaim(sold, approved.eligibilityOf(buyer.account), { autoApprove: false }),
+    /BuyerNotEligible/,
+  );
+  record(receivablePath, "buy", (await buyer.buyClaim(sold, approved.eligibilityOf(buyer.account))).receipt);
   await waitUntil(BigInt(await client.challengeEndsAt(sold)), "the challenge window of the sold receivable");
   const paidToBuyer = await cranker.finalize(sold);
   record(receivablePath, "finalize (pays the buyer)", paidToBuyer.receipt);

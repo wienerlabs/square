@@ -59,6 +59,35 @@ describe('time_restrictions, the field that used to fail open', () => {
     expect(input.time_active).toBe('0');
   });
 
+  // square#226. The same mechanism as the empty day list one level down — a
+  // `.filter()` that matched nothing, an empty form field — but it fell the
+  // other way. `[]` made `request.time_restrictions[0]` undefined, so
+  // `time_active` became 0 and rule 6 was off, while the empty day list fails
+  // closed and is therefore visible. Measured before the fix, at 03:00 on a
+  // Sunday under a weekday 09-17 policy: `[]` proved compliant, one window
+  // proved `time_window` violated.
+  it('rejects an empty array rather than reading it as "no window"', async () => {
+    await expect(build({ time_restrictions: [] }))
+      .rejects.toThrow('time_restrictions: must hold exactly one window');
+  });
+
+  // The difference between the two spellings has to reach `time_active`, which
+  // is the signal rule 6 reads: `1 - time_active + time_active * compliant`.
+  it('keeps an empty array and a real window apart at time_active', async () => {
+    await expect(build({ time_restrictions: [] })).rejects.toThrow(/time_restrictions/);
+    expect((await build({ time_restrictions: [WINDOW] })).time_active).toBe('1');
+    expect((await build({})).time_active).toBe('0');
+  });
+
+  // The schema is the other half: it declared maxItems and no minimum, so a
+  // generated client had it in writing that `[]` was a valid request.
+  it('publishes the single-window bound at both ends', async () => {
+    const { openapiSpec } = await import('../src/openapi.js');
+    const field = openapiSpec.components.schemas.ProveRequest.properties.time_restrictions;
+    expect(field.minItems).toBe(1);
+    expect(field.maxItems).toBe(1);
+  });
+
   // The finding. `{...}` instead of `[{...}]` was silently discarded, and the
   // caller got a compliant proof with the window switched off.
   it('rejects a bare object instead of quietly switching the rule off', async () => {

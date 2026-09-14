@@ -42,9 +42,9 @@ interface IKeeperEvaluator is ISettlementHorizon {
     error ArbitrationNotSet();
     error SplitNeedsAPayoutResolver();
 
-    function finalize(uint256 jobId, bytes calldata complianceProof) external;
+    function finalize(uint256 jobId) external;
     function dispute(uint256 jobId, bytes32 evidence) external;
-    function finalizeDecided(uint256 jobId, bytes calldata complianceProof) external;
+    function finalizeDecided(uint256 jobId) external;
     function applyRejection(uint256 jobId, bytes32 resolutionHash) external;
 
     function squareJob() external view returns (address);

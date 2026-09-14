@@ -51,9 +51,10 @@ async function runSweep(argv: string[]): Promise<number> {
     return 2;
   }
   return withDatabase(async (db) => {
-    const removed = await sweepAll(db, { rateLimitWindowMs });
+    const { removed, failures } = await sweepAll(db, { rateLimitWindowMs });
     for (const [table, rows] of Object.entries(removed)) console.log(`swept ${rows} from ${table}`);
-    return 0;
+    for (const failure of failures) console.error(`sweep failed for ${failure.table}: ${failure.message}`);
+    return failures.length === 0 ? 0 : 1;
   });
 }
 
@@ -63,7 +64,10 @@ async function withDatabase(run: (db: Database) => Promise<number>): Promise<num
     console.error("DATABASE_URL is not set");
     return 2;
   }
-  const db = pgDatabase(connectionString, { max: 1 });
+  const db = pgDatabase(connectionString, {
+    max: 1,
+    onPoolError: (error) => console.error(`pool connection lost: ${error.message}`),
+  });
   try {
     return await run(db);
   } finally {

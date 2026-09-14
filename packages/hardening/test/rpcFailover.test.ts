@@ -21,6 +21,7 @@ function fakeTransports(handlers: Record<string, Handler>): (url: string) => Tra
 
 const PRIMARY = "https://primary.test";
 const SECONDARY = "https://secondary.test";
+const TERTIARY = "https://tertiary.test";
 
 describe("createFailoverTransport", () => {
   it("fails over, reports the broken endpoint in cooldown, skips it while cooling, and retries it afterwards", async () => {
@@ -147,6 +148,87 @@ describe("createFailoverTransport", () => {
     expect(transport.getHealth()[0]?.healthy).toBe(true);
     await expect(instance.request({ method: "eth_chainId" })).rejects.toThrow();
     expect(transport.getHealth()[0]?.healthy).toBe(false);
+  });
+
+  it("sends one upstream call per endpoint for one logical request", async () => {
+    const calls: string[] = [];
+    const dead =
+      (url: string): Handler =>
+      async () => {
+        calls.push(url);
+        throw new Error(`${url} down`);
+      };
+    const transport = createFailoverTransport([PRIMARY, SECONDARY], {
+      transportFactory: fakeTransports({ [PRIMARY]: dead(PRIMARY), [SECONDARY]: dead(SECONDARY) }),
+      retryDelay: 0,
+      now: () => 100_000,
+    });
+    const client = createPublicClient({ transport });
+
+    await expect(client.request({ method: "eth_blockNumber" })).rejects.toThrow(/down/);
+
+    expect(calls).toEqual([PRIMARY, SECONDARY]);
+  });
+
+  it("cools a failed endpoint down for baseCooldownMs after one logical request, not for eight times that", async () => {
+    const clock = 100_000;
+    const only = vi.fn<Handler>(async () => {
+      throw new Error("down");
+    });
+    const transport = createFailoverTransport([PRIMARY], {
+      transportFactory: fakeTransports({ [PRIMARY]: only }),
+      baseCooldownMs: 2_000,
+      maxBackoffMs: 60_000,
+      retryDelay: 0,
+      now: () => clock,
+    });
+    const client = createPublicClient({ transport });
+
+    await expect(client.request({ method: "eth_blockNumber" })).rejects.toThrow(/down/);
+
+    expect(only).toHaveBeenCalledTimes(1);
+    expect(transport.getHealth()[0]).toMatchObject({ consecutiveFailures: 1, cooldownUntil: clock + 2_000 });
+  });
+
+  it("does not multiply withRpcRetry attempts by a retry of its own", async () => {
+    const urls = [PRIMARY, SECONDARY, TERTIARY];
+    let calls = 0;
+    const dead: Handler = async () => {
+      calls += 1;
+      throw new Error("down");
+    };
+    const transport = createFailoverTransport(urls, {
+      transportFactory: fakeTransports(Object.fromEntries(urls.map((url) => [url, dead]))),
+      retryDelay: 0,
+      now: () => 100_000,
+    });
+    const client = createPublicClient({ transport });
+
+    await expect(
+      withRpcRetry(() => client.request({ method: "eth_blockNumber" }), { attempts: 4, sleep: async () => undefined })
+    ).rejects.toThrow(/down/);
+
+    expect(calls).toBe(urls.length * 4);
+  });
+
+  it("counts one logical request as one failure even when the caller asks the fallback to retry", async () => {
+    const clock = 100_000;
+    const only = vi.fn<Handler>(async () => {
+      throw new Error("down");
+    });
+    const transport = createFailoverTransport([PRIMARY], {
+      transportFactory: fakeTransports({ [PRIMARY]: only }),
+      baseCooldownMs: 1_000,
+      retryCount: 3,
+      retryDelay: 0,
+      now: () => clock,
+    });
+    const client = createPublicClient({ transport });
+
+    await expect(client.request({ method: "eth_blockNumber" })).rejects.toThrow(/down/);
+
+    expect(only).toHaveBeenCalledTimes(4);
+    expect(transport.getHealth()[0]).toMatchObject({ consecutiveFailures: 1, cooldownUntil: clock + 1_000 });
   });
 
   it("rejects an empty url list", () => {

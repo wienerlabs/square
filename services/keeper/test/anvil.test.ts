@@ -5,8 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPublicClient, createTestClient, createWalletClient, http, parseUnits } from "viem";
 import { foundry } from "viem/chains";
 import { anvilAccount } from "./anvil.js";
-import { createSquareClient, deploymentFor, deploymentFromJson, hashDeliverable, JobStatus, type SquareDeployment } from "@squaresdk/core";
-import { keeperActions, migrate, MIGRATIONS_DIR, pgliteDatabase, type Database } from "@squaresdk/data";
+import { createSquareClient, deploymentFor, deploymentFromJson, hashDeliverable, JobStatus, squareJobAbi, type SquareDeployment } from "@squaresdk/core";
+import { disputes, keeperActions, migrate, MIGRATIONS_DIR, pgliteDatabase, type Database } from "@squaresdk/data";
 import { createLogger, createMetrics } from "@squaresdk/observability";
 import { Indexer } from "@squaresdk/indexer";
 import { Keeper } from "../src/run.js";
@@ -24,6 +24,18 @@ async function anvilReachable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+interface ForgeArtifact {
+  abi: readonly unknown[];
+  bytecode: { object: `0x${string}` };
+}
+
+function maliciousHookArtifact(): ForgeArtifact | null {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const file = join(here, "..", "..", "..", "contracts", "out", "MaliciousHook.sol", "MaliciousHook.json");
+  if (!existsSync(file)) return null;
+  return JSON.parse(readFileSync(file, "utf8")) as ForgeArtifact;
 }
 
 function localDeployment(): SquareDeployment {
@@ -122,7 +134,85 @@ describe.skipIf(!reachable)("keeper against anvil", () => {
     await syncAll();
     const again = await keeper.tick((await publicClient.getBlock()).timestamp);
     expect(again.finalized).toEqual([]);
-    expect(again.pending).toBeGreaterThanOrEqual(1);
-    expect(again.oldestPendingAgeSeconds).toBeGreaterThan(0);
+    expect(again.skipped.find((s) => s.jobId === poor)?.reason).toBe("unprofitable");
+    expect(again.unprofitable).toBe(1);
+    expect(again.pending).toBe(0);
+    expect(again.oldestPendingAgeSeconds).toBe(0);
+  }, 120_000);
+
+  const rogueArtifact = maliciousHookArtifact();
+
+  it.skipIf(rogueArtifact === null)("returns a disputer's bond once the job expires under a dead resolver, without anyone knowing the ABI", async () => {
+    const owner = anvilAccount(0);
+    const ownerWallet = createWalletClient({ chain: foundry, transport: http(rpcUrl), account: owner });
+    const artifact = rogueArtifact as ForgeArtifact;
+    const deployHash = await ownerWallet.deployContract({
+      abi: artifact.abi as never,
+      bytecode: artifact.bytecode.object,
+      args: [deployment.squareJob],
+    });
+    const rogue = (await publicClient.waitForTransactionReceipt({ hash: deployHash })).contractAddress;
+    if (rogue === null || rogue === undefined) throw new Error("the rogue hook did not deploy");
+    await publicClient.waitForTransactionReceipt({
+      hash: await ownerWallet.writeContract({
+        abi: squareJobAbi,
+        address: deployment.squareJob,
+        functionName: "setHookWhitelist",
+        args: [rogue, true],
+      }),
+    });
+
+    const latest = await publicClient.getBlock();
+    const expiredAt = latest.timestamp + 30n * 24n * 3600n;
+    const { jobId } = await client.createJob({ provider: provider.account, expiredAt, spec: { keeper: "dead resolver" }, hook: rogue });
+    const budget = parseUnits("20", 6);
+    await provider.setBudget(jobId, budget);
+    await client.fund(jobId, budget);
+    await provider.submit({ jobId, deliverable: hashDeliverable(`keeper ${jobId}`), agentId: 1n });
+    await client.dispute(jobId);
+    const bond = (await client.disputeOf(jobId)).bond;
+    expect(bond).toBeGreaterThan(0n);
+
+    const resolverReverts = 9;
+    await publicClient.waitForTransactionReceipt({
+      hash: await ownerWallet.writeContract({
+        abi: artifact.abi as never,
+        address: rogue,
+        functionName: "setMode",
+        args: [resolverReverts],
+      }),
+    });
+    const now = (await publicClient.getBlock()).timestamp;
+    await testClient.increaseTime({ seconds: Number(expiredAt - now + 1n) });
+    await testClient.mine({ blocks: 1 });
+    await client.claimRefund(jobId);
+    expect((await client.getJobRecord(jobId)).status).toBe(JobStatus.Expired);
+    expect((await client.disputeOf(jobId)).bondSettled).toBe(false);
+    await syncAll();
+    expect((await disputes.get(db, 31337, jobId))?.closed).toBe(false);
+
+    const keeper = new Keeper({
+      db,
+      chainId: 31337,
+      client: cranker,
+      logger: silent,
+      minimumMarginBps: 2000,
+      defaultFinalizeGas: 450_000n,
+      defaultFinalizeDecidedGas: 500_000n,
+      recordExpiries: false,
+    });
+    const before = await client.bondWithdrawable(client.account);
+    const report = await keeper.tick((await publicClient.getBlock()).timestamp);
+
+    expect(report.bondsSettled).toContain(jobId);
+    expect((await client.disputeOf(jobId)).bondSettled).toBe(true);
+    expect((await client.bondWithdrawable(client.account)) - before).toBe(BigInt(bond));
+    const actions = await keeperActions.recent(db, 31337);
+    expect(actions.find((a) => a.jobId === jobId && a.action === "settleBond")?.txHash).toMatch(/^0x[0-9a-f]{64}$/);
+
+    await syncAll();
+    expect((await disputes.get(db, 31337, jobId))?.closed).toBe(true);
+    const again = await keeper.tick((await publicClient.getBlock()).timestamp);
+    expect(again.bondsSettled).not.toContain(jobId);
   }, 120_000);
 });

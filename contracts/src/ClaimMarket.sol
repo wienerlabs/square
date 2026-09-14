@@ -4,9 +4,11 @@ pragma solidity ^0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {IClaimMarket} from "./interfaces/IClaimMarket.sol";
 import {IKeeperEvaluator} from "./interfaces/IKeeperEvaluator.sol";
 import {IPayoutResolver} from "./interfaces/IPayoutResolver.sol";
+import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
 import {ISquareJob} from "./interfaces/ISquareJob.sol";
 
 contract ClaimMarket is IClaimMarket, ReentrancyGuard {
@@ -17,13 +19,15 @@ contract ClaimMarket is IClaimMarket, ReentrancyGuard {
     ISquareJob private immutable _squareJob;
     IKeeperEvaluator private immutable _keeperEvaluator;
     IERC20 private immutable _token;
+    IPolicyRegistry private immutable _policyRegistry;
 
     mapping(uint256 jobId => Listing) private _listings;
 
-    constructor(address squareJob_, address keeperEvaluator_) {
+    constructor(address squareJob_, address keeperEvaluator_, address policyRegistry_) {
         _squareJob = ISquareJob(squareJob_);
         _keeperEvaluator = IKeeperEvaluator(keeperEvaluator_);
         _token = IERC20(_squareJob.paymentToken());
+        _policyRegistry = IPolicyRegistry(policyRegistry_);
     }
 
     function list(uint256 jobId, uint64 price) external nonReentrant {
@@ -42,13 +46,23 @@ contract ClaimMarket is IClaimMarket, ReentrancyGuard {
         emit ClaimListed(jobId, msg.sender, price, uint64(face));
     }
 
-    function buy(uint256 jobId, uint64 expectedPrice) external nonReentrant {
+    function buy(uint256 jobId, uint64 expectedPrice, bytes32 salt, bytes32[] calldata eligibility)
+        external
+        nonReentrant
+    {
         Listing storage listing = _listings[jobId];
         if (listing.status != Status.Listed) revert NotListed();
         if (listing.price != expectedPrice) revert PriceMismatch(expectedPrice, listing.price);
         ISquareJob.JobRecord memory job = _liveJob(jobId);
         if (msg.sender == listing.seller || msg.sender == job.provider) revert BuyerIsSeller();
         if (msg.sender == job.client) revert BuyerIsClient();
+        // square#30. The poster's policy decides who its money may be redirected
+        // to. A zero root is a poster who approved nobody, and is refused before
+        // the proof is looked at rather than left to a hash that cannot match.
+        bytes32 root = _policyRegistry.buyerRootOf(job.client);
+        if (root == bytes32(0) || !MerkleProof.verifyCalldata(eligibility, root, buyerLeaf(msg.sender, salt))) {
+            revert BuyerNotEligible();
+        }
 
         listing.buyer = msg.sender;
         listing.status = Status.Sold;
@@ -72,6 +86,17 @@ contract ClaimMarket is IClaimMarket, ReentrancyGuard {
 
     function getListing(uint256 jobId) external view returns (Listing memory) {
         return _listings[jobId];
+    }
+
+    function policyRegistry() external view returns (address) {
+        return address(_policyRegistry);
+    }
+
+    /// @dev Hashed twice so a leaf can never be read as an inner node: an inner
+    ///      node is the hash of 64 bytes, and so is the inner hash here, but the
+    ///      outer hash is over 32. OpenZeppelin's standard tree does the same.
+    function buyerLeaf(address buyer, bytes32 salt) public pure returns (bytes32) {
+        return keccak256(bytes.concat(keccak256(abi.encode(buyer, salt))));
     }
 
     function _liveJob(uint256 jobId) private view returns (ISquareJob.JobRecord memory job) {
