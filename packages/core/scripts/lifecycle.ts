@@ -30,6 +30,15 @@ import {
 } from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
+// A stack whose hook holds a compliance module gates every release on a
+// proof the client binds (square#335). The runner then needs the client's
+// policy and a prover, and binds a proof before each release it cranks;
+// without them it stops here rather than run a lifecycle whose every
+// release would pay the client back. @squaresdk/policy is loaded from its
+// build beside this package, not declared, so core carries no dependency on
+// a package that depends on it.
+const policyFile = process.env["LIFECYCLE_POLICY_FILE"];
+const proverUrl = process.env["LIFECYCLE_PROVER_URL"];
 const rpcUrl = process.env["RPC_URL"] ?? "http://127.0.0.1:8545";
 const chainId = Number(process.env["CHAIN_ID"] ?? 31337);
 const isAnvil = process.env["ANVIL"] === "1" || chainId === 31337;
@@ -226,11 +235,57 @@ async function expectRevert(label: string, fn: () => Promise<unknown>, pattern: 
   throw new Error(`${label} did not revert`);
 }
 
+type PolicyModule = typeof import("../../policy/dist/index.js");
+interface Gate {
+  policy: import("../../policy/dist/index.js").Policy;
+  prover: import("../../policy/dist/index.js").Prover;
+  bind: PolicyModule["bindComplianceProof"];
+}
+
+/** The module, the policy and the prover, when the stack gates releases; null when it does not. */
+async function gateFor(client: SquareClient): Promise<Gate | null> {
+  const module = await client.complianceModule();
+  if (module === null) {
+    if (policyFile || proverUrl) console.log("the hook holds no compliance module; LIFECYCLE_POLICY_FILE and LIFECYCLE_PROVER_URL are not used");
+    return null;
+  }
+  if (!policyFile || !proverUrl) {
+    throw new Error(`the hook holds a compliance module (${module}); set LIFECYCLE_POLICY_FILE and LIFECYCLE_PROVER_URL so the client can prove its releases`);
+  }
+  const policyPkg = (await import(join(here, "..", "..", "policy", "dist", "index.js"))) as PolicyModule;
+  const policy = policyPkg.parsePolicy(JSON.parse(readFileSync(policyFile, "utf8")));
+  if (policy.operator_id.toLowerCase() !== client.account.toLowerCase()) {
+    throw new Error(`${policyFile} is ${policy.operator_id}'s policy; the lifecycle's client is ${client.account}`);
+  }
+  const commitment = await policyPkg.policyCommitment(policy);
+  const onChain = await client.policyOf(client.account);
+  if (onChain.commitment.toLowerCase() !== commitment.hex.toLowerCase()) {
+    const committed = await client.setPolicy(commitment.hex, BigInt(policy.max_daily_spend));
+    record("0-policy", "setPolicy (the client commits its policy)", committed.receipt);
+  }
+  console.log(`0-policy | module ${module} | commitment ${commitment.hex}`);
+  return { policy, prover: policyPkg.createProverClient({ url: proverUrl }), bind: policyPkg.bindComplianceProof };
+}
+
+/** Bind a proof for the release as it stands now, and record it; a refusal is a failure of the run. */
+async function prove(gate: Gate | null, client: SquareClient, jobId: bigint, path: string): Promise<void> {
+  if (gate === null) return;
+  const outcome = await gate.bind({ client, policy: gate.policy, prover: gate.prover, jobId, category: LIFECYCLE_CATEGORY });
+  if (!outcome.bound) {
+    const why = outcome.reason === "not-compliant" ? `not compliant: ${(outcome.violated ?? ["rules unknown"]).join(", ")}` : `${outcome.reason}: ${outcome.detail}`;
+    throw new Error(`${path}: no proof could be bound to job ${jobId} (${why})`);
+  }
+  const receipt = await client.publicClient.waitForTransactionReceipt({ hash: outcome.transaction });
+  record(path, `setComplianceProof (payee ${outcome.facts.payee}, ${formatUnits(outcome.facts.amount, 6)} USDC)`, receipt);
+}
+const LIFECYCLE_CATEGORY = "lifecycle";
+
 async function main(): Promise<void> {
   const deployment = deploymentFromJson(JSON.parse(readFileSync(deploymentFile, "utf8")));
   const actors = loadActors();
   await fundActors(deployment, actors);
   const client = actor(deployment, actors.client);
+  const gate = await gateFor(client);
   const provider = actor(deployment, actors.provider);
   const buyer = actor(deployment, actors.buyer);
   const arbiterA = actor(deployment, actors.arbiterA);
@@ -243,6 +298,7 @@ async function main(): Promise<void> {
   const optimistic = await submittedJob(client, provider, budget, "1-optimistic");
   await expectRevert("finalize before the window closes", () => cranker.finalize(optimistic), /WindowOpen/);
   await waitUntil(BigInt(await client.challengeEndsAt(optimistic)), "the challenge window");
+  await prove(gate, client, optimistic, "1-optimistic");
   const finalized = await cranker.finalize(optimistic);
   record("1-optimistic", "finalize (permissionless)", finalized.receipt);
   const reputation = finalized.events.find((e) => e.contract === "SquareHook" && (e.eventName === "ReputationRecorded" || e.eventName === "ReputationWriteFailed"));
@@ -263,6 +319,7 @@ async function main(): Promise<void> {
   record("2b-dispute-provider-wins", "dispute (bonded)", (await client.dispute(completePath, hashDeliverable("evidence"))).receipt);
   record("2b-dispute-provider-wins", "vote 1/2", (await arbiterA.vote(completePath, Outcome.Complete, 10_000)).receipt);
   record("2b-dispute-provider-wins", "vote 2/2", (await arbiterB.vote(completePath, Outcome.Complete, 10_000)).receipt);
+  await prove(gate, client, completePath, "2b-dispute-provider-wins");
   record("2b-dispute-provider-wins", "finalizeDecided (permissionless)", (await cranker.finalizeDecided(completePath)).receipt);
   record("2b-dispute-provider-wins", "withdrawBond (provider takes the bond)", (await provider.withdrawBond()).receipt);
 
@@ -270,6 +327,7 @@ async function main(): Promise<void> {
   record("2c-dispute-split", "dispute (bonded)", (await client.dispute(splitPath, hashDeliverable("evidence"))).receipt);
   record("2c-dispute-split", "vote 1/2 (4000 bps)", (await arbiterA.vote(splitPath, Outcome.Complete, 4_000)).receipt);
   record("2c-dispute-split", "vote 2/2 (4000 bps)", (await arbiterB.vote(splitPath, Outcome.Complete, 4_000)).receipt);
+  await prove(gate, client, splitPath, "2c-dispute-split");
   const split = await cranker.finalizeDecided(splitPath);
   record("2c-dispute-split", "finalizeDecided (split through the hook)", split.receipt);
   const routed = eventsNamed(split.events, "PayoutRouted")[0];
@@ -303,6 +361,7 @@ async function main(): Promise<void> {
   );
   record(receivablePath, "buy", (await buyer.buyClaim(sold, approved.eligibilityOf(buyer.account))).receipt);
   await waitUntil(BigInt(await client.challengeEndsAt(sold)), "the challenge window of the sold receivable");
+  await prove(gate, client, sold, receivablePath);
   const paidToBuyer = await cranker.finalize(sold);
   record(receivablePath, "finalize (pays the buyer)", paidToBuyer.receipt);
   const released = eventsNamed(paidToBuyer.events, "PaymentReleased")[0];

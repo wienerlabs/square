@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { A2AClient, JOB_STATUS_NAMES, TaskState, WellKnownCache, type TaskStatusResult } from "@squaresdk/a2a";
 import { JobStatus, type JobStatusValue, type SquareClient } from "@squaresdk/core";
+import { ComplianceDuty, proofState, releaseFacts, type DutyEvent, type Policy, type Prover } from "@squaresdk/policy";
 import { createPayingFetch, decodePaymentResponseHeader, networkOf, PAYMENT_RESPONSE_HEADER } from "@squaresdk/x402";
 import { formatUnits, parseUnits, type Hex, type LocalAccount } from "viem";
 import { z } from "zod";
@@ -34,6 +35,23 @@ export interface SquareMcpServerOptions {
   taskTimeoutMs?: number | undefined;
   pollIntervalMs?: number | undefined;
   serverInfo?: { name: string; version: string } | undefined;
+  /**
+   * The institution's side of the compliance gate (square#335). With it,
+   * every job `square_hire` funds is tracked by a `ComplianceDuty`: a proof
+   * that the release fits `policy` is built at the prover and bound to the
+   * job, kept current as the payee, the net and the day's counter move, and
+   * the job is cranked once its window closes. Without it, on a stack whose
+   * hook holds a module, every hire's release would pay the client back.
+   */
+  compliance?: ComplianceOptions | undefined;
+}
+
+export interface ComplianceOptions {
+  policy: Policy;
+  prover: Prover;
+  /** How often the duty looks at its jobs; well inside the module's tolerance. Default 15 s. */
+  intervalMs?: number | undefined;
+  onEvent?: ((event: DutyEvent) => void) | undefined;
 }
 
 const USDC = /^\d+(\.\d{1,6})?$/;
@@ -82,7 +100,8 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
   // One hire at a time. A model may call tools concurrently, and two
   // transactions signed from one wallet in the same instant can take the
   // same nonce; a queue costs a hire nothing it would not have spent waiting
-  // for its own receipts.
+  // for its own receipts. The duty's ticks go through the same queue, since
+  // they sign from the same wallet.
   let queue: Promise<unknown> = Promise.resolve();
   const serially = <T>(work: () => Promise<T>): Promise<T> => {
     const next = queue.then(work, work);
@@ -91,6 +110,29 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
       () => undefined,
     );
     return next;
+  };
+
+  // The duty runs for as long as the server does, from the first hire on:
+  // its jobs outlive the tool call that funded them by the challenge window,
+  // and the proof they carry has to be current when the window closes.
+  let duty: ComplianceDuty | undefined;
+  let dutyRun: Promise<void> | undefined;
+  const dutyStop = new AbortController();
+  if (options.compliance && canSpend) {
+    const compliance = options.compliance;
+    duty = new ComplianceDuty({ client, policy: compliance.policy, prover: compliance.prover, onEvent: compliance.onEvent, serialize: serially });
+    const previousClose = server.server.onclose;
+    server.server.onclose = () => {
+      dutyStop.abort();
+      previousClose?.();
+    };
+  }
+  const trackFunded = (jobId: bigint, capability: string): void => {
+    if (!duty) return;
+    duty.track(jobId, capability);
+    dutyRun ??= duty.run(dutyStop.signal, { intervalMs: options.compliance?.intervalMs }).catch((error: unknown) => {
+      options.compliance?.onEvent?.({ type: "error", jobId: null, error: error instanceof Error ? error : new Error(String(error)) });
+    });
   };
 
   server.registerTool(
@@ -127,6 +169,7 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
         const record = await client.getJobRecord(id);
         const agentId = await client.agentOf(id);
         const status = record.status as JobStatusValue;
+        const compliance = await complianceOf(client, id, record.status);
         const content: Structured = {
           jobId,
           status: JOB_STATUS_NAMES[status] ?? String(status),
@@ -140,6 +183,7 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
           ...(record.submittedAt ? { submittedAt: iso(record.submittedAt) } : {}),
           deliverable: record.deliverable,
           agentId: agentId === null ? null : agentId.toString(),
+          ...(compliance ? { compliance } : {}),
         };
         return ok(
           [
@@ -147,6 +191,7 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
             `client ${record.client}, provider ${record.provider}, evaluator ${record.evaluator}`,
             `budget ${content.budget as string} USDC, expires ${content.expiredAt as string}`,
             `deliverable ${record.deliverable}${agentId === null ? ", no agent bound" : `, bound to agent ${agentId}`}`,
+            ...(compliance ? [`compliance: ${compliance.summary}`] : []),
           ].join("\n"),
           content,
         );
@@ -221,6 +266,7 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
             callerDid,
             taskTimeoutMs,
             pollIntervalMs,
+            onFunded: (job) => trackFunded(job.jobId, capability),
           });
         } catch (error) {
           if (error instanceof HireRefusedError && error.stage === "funding") return failed(error, undefined, { transactions: error.transactions });
@@ -237,7 +283,9 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
           transactions: result.transactions,
           ...(result.task ? taskContent(result.task) : {}),
         };
-        const head = `Job ${jobId} funded with ${formatUnits(result.budget, 6)} USDC for ${profile.name || profile.did}, capability ${capability}.`;
+        const head =
+          `Job ${jobId} funded with ${formatUnits(result.budget, 6)} USDC for ${profile.name || profile.did}, capability ${capability}.` +
+          (duty ? ` This server keeps the job's compliance proof current and releases it when the window closes.` : "");
         switch (result.dispatch) {
           case "delivered":
             return ok(`${head}\n${describeTask(result.task!)}`, content);
@@ -346,6 +394,31 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
   );
 
   return server;
+}
+
+/**
+ * Where a job stands with the gate: nothing when the stack has no module or
+ * the job is settled; otherwise the bound proof against the release the
+ * chain would make now (square#335). Read for `square_job`, so a model that
+ * hired sees whether the release is provable before the window closes.
+ */
+async function complianceOf(client: SquareClient, jobId: bigint, status: number): Promise<(Structured & { summary: string }) | null> {
+  if (status !== JobStatus.Funded && status !== JobStatus.Submitted) return null;
+  const tolerance = await client.complianceTolerance();
+  if (tolerance === null) return null;
+  const [bound, facts] = await Promise.all([client.complianceProofOf(jobId), releaseFacts(client, jobId)]);
+  const state = proofState(bound, facts, tolerance / 2n);
+  const base = { payee: facts.payee, net: formatUnits(facts.amount, 6), spentToday: formatUnits(facts.dailySpentBefore, 6), toleranceSeconds: tolerance.toString() };
+  switch (state.kind) {
+    case "none":
+      return { ...base, proof: "none", summary: "the hook holds a module and no proof is bound; a release now would pay the client back" };
+    case "malformed":
+      return { ...base, proof: "malformed", summary: "the bound proof is malformed" };
+    case "current":
+      return { ...base, proof: "current", proofAgeSeconds: state.age.toString(), summary: `a current proof is bound, ${state.age}s old, naming payee ${facts.payee} and net ${base.net} USDC` };
+    case "stale":
+      return { ...base, proof: "stale", proofAgeSeconds: state.age.toString(), stale: state.reasons, summary: `the bound proof is stale: ${state.reasons.join("; ")}` };
+  }
 }
 
 function ok(text: string, structuredContent: Structured): CallToolResult {

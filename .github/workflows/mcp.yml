@@ -13,6 +13,7 @@ on:
     paths:
       - "packages/mcp/**"
       - "packages/agent/**"
+      - "packages/policy/**"
       - "packages/a2a/**"
       - "packages/core/**"
       - "packages/did-resolver/**"
@@ -51,7 +52,7 @@ jobs:
 
       - name: Build path dependencies
         run: |
-          for dep in packages/did-resolver packages/core packages/observability packages/data packages/a2a packages/x402 packages/agent; do
+          for dep in packages/did-resolver packages/core packages/observability packages/data packages/a2a packages/x402 packages/agent packages/policy; do
             (cd "$dep" && npm install --install-links && npm run build)
           done
 

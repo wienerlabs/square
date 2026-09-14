@@ -82,7 +82,11 @@ carries no module yet ([#27][i27] installs it). Where the module is absent the
 counter stays at zero, and the allowance is the ceiling less what is in flight:
 the chain's own reading, not a substitute for it. The allowance never invents a
 count the registry did not make; when the module lands, the same code reads the
-count it makes.
+count it makes. What makes a module survivable for the hosted wallet is the
+other half of the same work: with a `compliance` block the host keeps a proof
+bound to every job it delegates and releases each when its window closes, so
+the counter moves by verified releases and not by refusals that pay the wallet
+back ([proof-freshness.md](proof-freshness.md)).
 
 ## What this does not cover
 
