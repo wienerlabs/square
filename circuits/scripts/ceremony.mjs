@@ -190,9 +190,10 @@ function canonical(value) {
  *
  * It is the one file whose provenance cannot rest on the transcript. The zkey
  * is not what reaches the chain; the verifying key is — `Groth16Verifier.sol`'s
- * constants are generated from it, and `contracts/script/check-verifier-ic.mjs`
- * ties that file to the deployed verifier. Deriving it here closes
- * `final.zkey → vk → Groth16Verifier` end to end.
+ * constants are generated from it. `contracts/script/check-verifier-ic.mjs`
+ * binds only that file's IC points to the committed verifier, not its delta,
+ * so it does not stand in for deriving the key here; `verifyingKeyChecks`
+ * below runs this against both the ceremony's file and the repository's.
  *
  * This is the same shape as the substitution square#121 removed from the beacon
  * check, named in `test/drand-beacon.test.js`: "the field the old code compared
@@ -224,6 +225,43 @@ export async function verifyingKeyMatches(zkeyFile, vkFile) {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Step 4 of docs/ceremony/verifying.md, as `verify-chain` runs it: three checks
+ * on the verifying key, returned rather than printed, so a test runs exactly
+ * what `verify-chain` runs.
+ *
+ * - `ceremonyVk`, the file `finalize` wrote, is what `finalZkey` exports (#228).
+ * - That file is unchanged since the transcript recorded it. On its own this
+ *   says nothing about where the file came from; it is the check #228 found
+ *   standing in for the first.
+ * - `repositoryVk`, `build/payment_vk.json`, is what `finalZkey` exports. It is
+ *   the file step 4 diffs, the one CI checks with
+ *   `contracts/script/check-verifier-ic.mjs` and copies to the prover. Until #16
+ *   installs the ceremony's key there, it holds the development key, whose phase
+ *   2 is one contribution drawn on the machine that built it; no ceremony
+ *   reproduces that, so this check fails until then, as step 4 would.
+ *   `check-verifier-ic.mjs` does not stand in for it: it binds only the IC
+ *   points to the circuit, and its header says why delta is out of its reach.
+ */
+export async function verifyingKeyChecks({ finalZkey, ceremonyVk, repositoryVk, transcript }) {
+  const derived = await verifyingKeyMatches(finalZkey, ceremonyVk);
+  const recorded = fs.existsSync(ceremonyVk) && Boolean(transcript?.final)
+    && sha256(ceremonyVk) === transcript.final.vk_sha256;
+  const repository = await verifyingKeyMatches(finalZkey, repositoryVk);
+  const where = path.relative(ROOT, repositoryVk);
+  return [
+    derived.ok
+      ? { ok: true, message: 'the verifying key is the one the final key exports' }
+      : { ok: false, message: `the verifying key is not the one the final key exports: ${derived.reason}` },
+    recorded
+      ? { ok: true, message: 'and it is unchanged since the transcript recorded it' }
+      : { ok: false, message: 'the verifying key does not match the transcript' },
+    repository.ok
+      ? { ok: true, message: `the repository's verifying key, ${where}, is the one the final key exports` }
+      : { ok: false, message: `the repository's verifying key, ${where}, is not the one the final key exports: ${repository.reason}` },
+  ];
 }
 
 // What compiled the circuit, and what it compiled.
@@ -270,6 +308,9 @@ function writeTranscript(t) {
 const keyPath = (n) => path.join(CEREMONY, `payment_${String(n).padStart(4, '0')}.zkey`);
 const finalPath = () => path.join(CEREMONY, 'payment_final.zkey');
 const vkPath = () => path.join(CEREMONY, 'payment_vk.json');
+// The verifying key step 4 of docs/ceremony/verifying.md diffs: build.mjs writes
+// it, CI checks it and copies it to the prover.
+const REPOSITORY_VK = path.join(BUILD, 'payment_vk.json');
 
 // Read the contribution list out of a zkey by reusing the inspector, so the
 // transcript records what the file says rather than what this script believes.
@@ -646,24 +687,18 @@ async function verifyChain() {
 
     process.stdout.write('\nkeys\n');
 
-    // Derived from the final key, not read out of the transcript. This is the
-    // check that ties the file the chain will carry to the ceremony that
-    // produced it, and it is step 4 of docs/ceremony/verifying.md (#228).
-    const vk = await verifyingKeyMatches(finalPath(), vkPath());
-    if (vk.ok) {
-      ok('the verifying key is the one the final key exports');
-    } else {
-      bad(`the verifying key is not the one the final key exports: ${vk.reason}`);
-    }
-
-    // Second, and it says something smaller: the published file has not changed
-    // since the transcript recorded it. On its own it says nothing about where
-    // that file came from, which is what #228 found.
-    if (fs.existsSync(vkPath()) && transcript.final
-        && sha256(vkPath()) === transcript.final.vk_sha256) {
-      ok('and it is unchanged since the transcript recorded it');
-    } else {
-      bad('the verifying key does not match the transcript');
+    // Step 4 of docs/ceremony/verifying.md: derived from the final key rather
+    // than read out of the transcript (#228), and against both files step 4 is
+    // about, the one `finalize` wrote and the repository's.
+    const checks = await verifyingKeyChecks({
+      finalZkey: finalPath(),
+      ceremonyVk: vkPath(),
+      repositoryVk: REPOSITORY_VK,
+      transcript,
+    });
+    for (const check of checks) {
+      if (check.ok) ok(check.message);
+      else bad(check.message);
     }
   }
 

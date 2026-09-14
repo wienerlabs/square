@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { verifyingKeyMatches } from '../scripts/ceremony.mjs';
+import { verifyingKeyChecks, verifyingKeyMatches } from '../scripts/ceremony.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -53,10 +53,20 @@ describe.skipIf(!HAVE_KEYS)('the verifying key is derived from the key, not from
       vk.vk_delta_2[0][0] = '1';
       fs.writeFileSync(forged, `${JSON.stringify(vk, null, 1)}\n`);
 
-      // What the old check did: hash the published file, compare it with the
-      // transcript field the publisher wrote from that same file.
-      const transcriptField = sha256(forged);
-      expect(sha256(forged)).toBe(transcriptField);
+      // The old check, run as verify-chain runs it rather than restated.
+      // `finalize` writes the digest of the file it exported into the
+      // transcript, so a transcript recording the forged file's digest is what a
+      // publisher who swapped the file would write. The transcript check passes
+      // on it; only the derivation refuses it.
+      const transcript = { final: { vk_sha256: sha256(forged) } };
+      const [derived, recorded] = await verifyingKeyChecks({
+        finalZkey: ZKEY,
+        ceremonyVk: forged,
+        repositoryVk: VK,
+        transcript,
+      });
+      expect(recorded).toEqual({ ok: true, message: 'and it is unchanged since the transcript recorded it' });
+      expect(derived.ok).toBe(false);
 
       const result = await verifyingKeyMatches(ZKEY, forged);
       expect(result.ok).toBe(false);
@@ -83,6 +93,43 @@ describe.skipIf(!HAVE_KEYS)('the verifying key is derived from the key, not from
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  }, 120_000);
+
+  // Step 4 of docs/ceremony/verifying.md diffs the repository's key,
+  // build/payment_vk.json, and verify-chain compared only the ceremony's copy.
+  // An honest ceremony directory beside a repository key the final key does not
+  // export is the gap the review of #278 measured; it now fails, and names the
+  // file.
+  it("refuses a repository key the final key does not export, even when the ceremony's own file is honest", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'square-vk-test-'));
+    const repositoryVk = path.join(dir, 'payment_vk.json');
+    try {
+      const vk = JSON.parse(fs.readFileSync(VK, 'utf8'));
+      vk.vk_delta_2[0][0] = '1';
+      fs.writeFileSync(repositoryVk, `${JSON.stringify(vk, null, 1)}\n`);
+
+      const checks = await verifyingKeyChecks({
+        finalZkey: ZKEY,
+        ceremonyVk: VK,
+        repositoryVk,
+        transcript: { final: { vk_sha256: sha256(VK) } },
+      });
+      expect(checks.map((check) => check.ok)).toEqual([true, true, false]);
+      expect(checks[2].message).toContain("the repository's verifying key");
+      expect(checks[2].message).toContain('is not the one the final key exports');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it('passes all three when both files are what the final key exports and the transcript records the ceremony file', async () => {
+    const checks = await verifyingKeyChecks({
+      finalZkey: ZKEY,
+      ceremonyVk: VK,
+      repositoryVk: VK,
+      transcript: { final: { vk_sha256: sha256(VK) } },
+    });
+    expect(checks.map((check) => check.ok)).toEqual([true, true, true]);
   }, 120_000);
 
   it('answers rather than throwing when a file is missing', async () => {
