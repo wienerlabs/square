@@ -52,7 +52,7 @@ export function minimumProfitableBudget(evaluatorFeeBP: number, gasPriceWei: big
   return budget * BigInt(evaluatorFeeBP) < required * FULL_BPS ? budget + 1n : budget;
 }
 
-function profitable(fee: bigint, gasCost: bigint, marginBps: number): boolean {
+export function profitable(fee: bigint, gasCost: bigint, marginBps: number): boolean {
   return fee * FULL_BPS >= gasCost * (FULL_BPS + BigInt(marginBps));
 }
 

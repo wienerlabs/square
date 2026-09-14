@@ -1,0 +1,16 @@
+# Who has to look before it merges (docs/decisions/review-gate.md, #108).
+#
+# Two directories hold the code that moves money or gates it: the escrow
+# contracts and the compliance circuit. A pull request that touches either
+# needs an approving review from one of the owners below who did not author
+# it; everything else merges on green checks alone, as before. Branch
+# protection enforces this through "require review from code owners"
+# (docs/ci/branch-protection.json); this file only says who the owners are.
+#
+# The second owner on each line is the reviewer of the first: the person who
+# writes most of a directory cannot approve their own pull request, and a
+# rule with one owner would make every one of their changes wait on nobody.
+# Owners must have write access; all three do.
+
+/contracts/  @kh0ra @mehmethayirli
+/circuits/   @MuhammedAkinci @mehmethayirli

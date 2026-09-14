@@ -49,7 +49,19 @@ export {
 } from "./events.js";
 export { agentFromDid, UnsupportedDidError, type AgentReference } from "./agent.js";
 export {
+  approveBuyers,
+  BUYER_SALT_FLOOR,
+  buyerLeaf,
+  buyerListFrom,
+  BuyerListError,
+  drawBuyerSalt,
+  type BuyerEligibility,
+  type BuyerEntry,
+  type BuyerList,
+} from "./buyers.js";
+export {
   AgentIdMismatchError,
+  connectSquareClient,
   createSquareClient,
   DeploymentChainMismatchError,
   DidScopeMismatchError,
@@ -65,3 +77,4 @@ export {
   type SubmitParams,
   type TransactionResult,
 } from "./client.js";
+export { SQUARE_ERRORS, withSquareErrors } from "./revertAbi.js";

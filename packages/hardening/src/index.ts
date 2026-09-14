@@ -24,6 +24,7 @@ export type {
 
 export {
   canonicalQuery,
+  defaultShouldStore,
   hashRequest,
   idempotencyMiddleware,
   idempotencyScope,
@@ -73,7 +74,8 @@ export {
 export type { EndpointHealth, FailoverTransport, FailoverTransportOptions, RpcRetryOptions } from "./rpcFailover.js";
 
 export {
-  MEMORY_NONCE_PRUNE_EVERY,
+  DEFAULT_MAX_ACTION_LIFETIME_SECONDS,
+  MEMORY_NONCE_PRUNE_INTERVAL_SECONDS,
   SQUARE_ACTION_PRIMARY_TYPE,
   SQUARE_ACTION_TYPES,
   canonicalJson,
@@ -92,5 +94,7 @@ export type {
   VerifyActionInput,
   VerifyActionResult,
 } from "./signedMessages.js";
+
+export { isTransientRejection, markTransientRejection, TRANSIENT_REJECTION_STATUSES } from "./transient.js";
 
 export type { SqlClient } from "./sql.js";

@@ -23,7 +23,7 @@ import { estimateGas, getChainId, getCode, readContract } from "viem/actions";
 import { simpleAccountAbi, simpleAccountFactoryAbi } from "./abi.js";
 import { callGasLimitFromTransactionEstimate } from "./callGasLimit.js";
 import { ENTRY_POINT_V07, SIMPLE_ACCOUNT_FACTORY_V07 } from "./constants.js";
-import { CallSimulationRevertedError, isExecutionRevert, revertDataOf } from "./errors.js";
+import { CallSimulationRevertedError, isExecutionRevert, isStateOverrideUnsupported, revertDataOf } from "./errors.js";
 
 export type SimpleSmartAccountExtension = {
   abi: typeof simpleAccountAbi;
@@ -113,8 +113,19 @@ export async function toSimpleSmartAccount(
       });
       return callGasLimitFromTransactionEstimate(estimate + SIMPLE_ACCOUNT_PROXY_DISPATCH_GAS, callData);
     } catch (error) {
-      if (!isExecutionRevert(error)) return undefined;
-      throw new CallSimulationRevertedError({ sender, callData, data: revertDataOf(error), cause: error as Error });
+      if (isExecutionRevert(error)) {
+        throw new CallSimulationRevertedError({ sender, callData, data: revertDataOf(error), cause: error as Error });
+      }
+      // No estimate is an answer only when the node cannot give one: without
+      // state overrides there is nothing to simulate against, and the bundler
+      // falls back to DEFAULT_UNDEPLOYED_CALL_GAS_LIMIT, as documented. A
+      // timeout, a rate limit or a dropped socket is not that answer, and
+      // used to be taken for it: the operation went out with the constant,
+      // reserving gas the account then paid the unused-gas penalty on, or
+      // too little of it, with nothing to say a fallback had happened. The
+      // deployed path throws on the same failures (#297).
+      if (isStateOverrideUnsupported(error)) return undefined;
+      throw error;
     }
   }
 
@@ -200,16 +211,27 @@ export async function toSimpleSmartAccount(
     },
 
     userOperation: {
+      // Only what the request leaves open is estimated. A request that
+      // carries callGasLimit is a caller who has decided to submit the call
+      // whatever a simulation says, and the simulation below is the one that
+      // would refuse it (#274); viem's prepareUserOperation and the
+      // self-bundler both put the caller's fixed fields in the request.
       async estimateGas(request) {
         if (!request.factory) {
-          return { verificationGasLimit: SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT };
+          return request.verificationGasLimit === undefined
+            ? { verificationGasLimit: SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT }
+            : {};
         }
-        const creationGas = await estimateGas(client, { to: factoryAddress, data: factoryData });
-        const callGasLimit = request.callData
-          ? await estimateUndeployedCallGas(request.callData)
-          : undefined;
+        const verificationGasLimit =
+          request.verificationGasLimit === undefined
+            ? (await estimateGas(client, { to: factoryAddress, data: factoryData })) + SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT
+            : undefined;
+        const callGasLimit =
+          request.callData && request.callGasLimit === undefined
+            ? await estimateUndeployedCallGas(request.callData)
+            : undefined;
         return {
-          verificationGasLimit: creationGas + SIMPLE_ACCOUNT_VALIDATION_GAS_LIMIT,
+          ...(verificationGasLimit === undefined ? {} : { verificationGasLimit }),
           ...(callGasLimit === undefined ? {} : { callGasLimit }),
         };
       },

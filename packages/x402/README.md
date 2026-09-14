@@ -100,6 +100,15 @@ verb), `"GET /jobs/:id"`, `"GET /files/*"`. Parameters may be written either as 
 `:id` or as Next's `[id]`; `"GET /jobs/[id]"` and `"GET /jobs/:id"` configure the same
 route.
 
+Because they configure the same route, writing both is a configuration error and
+`createGatewayApp` throws on it rather than picking a winner. The same holds for any two
+keys that reach one canonical form: a lowercase verb, extra whitespace between the verb
+and the path, or the two parameter dialects. The error names both spellings and the
+canonical form they share. Left silent it would split the route in two, since the price
+is stored under the canonical key (last key wins) while Hono keeps a handler for every
+key (first match runs), so the surviving handler would be the one whose price was
+discarded.
+
 `createGatewayApp` serves each key to two consumers that must agree on it, or a paid
 endpoint answers `200` with no payment: the `@x402/hono` `paymentMiddleware`, which
 decides whether a request needs paying, and Hono's router, which decides which handler
@@ -108,6 +117,17 @@ runs. Both receive the output of **one** `parseRoutePattern` call, so they canno
 puts that back together, and the canonical form both sides see is the colon one,
 `"GET /jobs/:id"`. Whatever dialect you write, that is the key the payment side is
 configured with and the path Hono registers.
+
+One verb needs a second key, because Hono answers it without being asked. A `HEAD`
+request is re-dispatched into the `GET` chain, so Hono runs the `GET` handler and then
+throws the body away, while the payment middleware still reads `HEAD` from
+`c.req.method`. A route table keyed `"GET /quote"` therefore had no entry the middleware
+could match, `requiresPayment()` was false, and the paid handler ran for free: no body,
+but the whole computation, every response header it set, and the status code. So
+`createPaidRoutes` registers a `HEAD` key alongside every `GET` key, pointing at the same
+price, and `HEAD` on a paid `GET` route answers `402` without reaching the handler. Keys
+written with no verb (`"/quote"`) already covered every method and are unchanged, and a
+`HEAD` key you declare yourself is left as you wrote it.
 
 The facilitator key pays gas (native USDC on Arc) and does nothing else; the
 payer's USDC moves straight from the payer to `payTo` inside
@@ -186,7 +206,11 @@ whether the update held, so a second settle, a late failure after a settlement, 
 mark for a row nobody accepted is a `false` the facilitator logs instead of a silent
 no-op. `markFailed`'s reason is stored, in the `reason` column added by migration
 `0006_x402_reason`, so reconciling a failure does not mean grepping logs for a
-`(payer, nonce)` pair.
+`(payer, nonce)` pair. It stores the transaction hash too when the failure has one: a
+transfer that was broadcast and then reverted, or one that was mined without a matching
+`Transfer` event, is named by a hash the operator can follow to a block. A failure with
+no hash leaves the column as it found it, so a hash written by an earlier settlement
+attempt survives.
 
 `has()` is deliberately status-blind: it answers "has this authorization identity ever
 been presented", not "did it settle". That is what replay protection needs, because an
@@ -236,9 +260,11 @@ receipt means.
 |---|---|---|---|
 | has a `txHash` | `success` | `settled` with that hash | |
 | has a `txHash` | `reverted` | `failed` | `settlement_reverted` |
-| has a `txHash` | cannot be read | left `accepted`, counted `unresolved` | `settlement_receipt_unreadable` |
+| has a `txHash`, `validBefore` plus the grace still ahead | cannot be read | left `accepted`, counted `unresolved` | `settlement_receipt_unreadable` |
+| has a `txHash`, `validBefore` plus the grace passed | cannot be read | `failed` | `settlement_unconfirmed` |
 | no `txHash`, `validBefore` passed | not asked | `failed` | `authorization_expired` |
 | no `txHash`, still valid | not asked | left `accepted`, counted `unresolved` | `awaiting_settlement` |
+| `settled` with no `txHash` | not asked | not listed, so never examined | `settled_without_transaction_hash` |
 
 `authorization_expired` is written only for a row with no transaction hash. A transfer
 that was never sent can never be sent once `validBefore` passes, so that row is a
@@ -249,6 +275,33 @@ row to be `accepted` and `listUnsettled` returns only `accepted` rows. Writing i
 close a settled payment as failed and no later pass would look at it again. The row
 keeps its hash and its `accepted` status instead, the unresolved reason says why, and
 the next pass settles it as soon as the node catches up.
+
+The grace is where that patience ends. Once `validBefore` plus `receiptGraceSeconds` has
+passed and the receipt still cannot be read, the transfer is not late, it is gone: the
+token compares `validBefore` itself, so an inclusion after that point reverts, and the
+hash names a transaction that was dropped from the mempool or replaced. That row is
+written `failed` with `settlement_unconfirmed`, a reason kept distinct from
+`authorization_expired` so an operator can tell a transfer that was never sent from one
+that was sent and never seen. The grace defaults to `DEFAULT_RECEIPT_GRACE_SECONDS`, 900
+seconds, and exists to cover a node that lags rather than a chain that refused; a
+deployment whose node lags further should pass a larger one.
+
+A pass reads a page, and a row it leaves unresolved is stamped with `last_checked_at`
+(migration `0009_x402_last_checked`). `listUnsettled` orders by that column with nulls
+first, so a row that has never been examined always sorts ahead of one that was examined
+and left open. Ordering by `created_at` alone, which is what this replaced, meant that
+`limit` rows nobody could close sat at the head of the queue forever and no newer row was
+ever examined again. The default `limit` is 100, so a hundred dropped transactions were
+enough to stop reconciliation for the whole gateway.
+
+The last row of the table is the one case the gateway records rather than reconciles. If
+a settle reports success with no transaction hash, the facilitator writes the row
+`settled` with the reason `settled_without_transaction_hash` instead of leaving it
+`accepted`. The scheme does not produce that result today and the facilitator logs it as
+the contradiction it is, but the money did leave: an `accepted` row with no hash is
+exactly the shape reconciliation later closes as `authorization_expired`, which would
+record a payment that happened as one that failed. Replay protection is unaffected,
+because `has()` is status-blind.
 
 `now` defaults to the local wall clock. `blockTimestampFromClient` reads the latest
 block timestamp instead, which is the clock the token contract actually compares
@@ -261,9 +314,20 @@ that sweep, which drops rows 30 days after `validBefore`.
 Independently of the library's checks, `onBeforeVerify` also asserts that
 `payTo`, `asset` and `network` are on the configured allowlist, that the client's
 echoed `accepted` matches the server's requirements, that `authorization.to` is
-the allowlisted payee, and that `authorization.value` covers the required amount.
-Every rejection reason is exported as `REJECTION.*` and travels back to the client
-in the `error` field of `PAYMENT-REQUIRED`.
+the allowlisted payee, that `authorization.value` covers the required amount, and that
+`authorization.validBefore` is no further out than the offer itself declared. Every
+rejection reason is exported as `REJECTION.*` and travels back to the client in the
+`error` field of `PAYMENT-REQUIRED`.
+
+`validBefore` is typed like a timestamp the system produced, and it is not: it comes
+from a signed client payload, and the library bounds it only from below
+(`validBefore < now + 6` is expired). Left unbounded above, a payer could sign an
+otherwise flawless authorization with `validBefore = 2^62`, have it verified, settled and
+charged normally, and leave behind a row that no retention sweep can ever drop and that
+`reconcile` counts as still in flight forever. So the ceiling is
+`now + maxTimeoutSeconds + VALID_BEFORE_SKEW_SECONDS`: the deadline the 402 offered, plus
+five minutes for a payer whose clock runs ahead. Anything past it is refused with
+`invalid_valid_before`.
 
 ## Tests
 

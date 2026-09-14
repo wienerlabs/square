@@ -12,6 +12,7 @@ import {
   withIdempotency,
 } from "../src/idempotency.js";
 import type { HandlerResponse, IdempotencyMiddlewareOptions, IdempotencyStore } from "../src/idempotency.js";
+import { memoryRateLimitStore, rateLimitMiddleware } from "../src/rateLimit.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -72,6 +73,19 @@ describe("hashRequest", () => {
   it("treats a missing body and actor as null", () => {
     expect(hashRequest({ method: "GET", path: "/" })).toBe(hashRequest({ method: "GET", path: "/", body: null, actor: null }));
   });
+
+  it("refuses a Map body rather than giving two different payouts the same hash", () => {
+    const alice = { method: "POST", path: "/payouts", actor: "0xabc", body: new Map<string, unknown>([["amount", 1], ["to", "0xalice"]]) };
+    const mallory = { method: "POST", path: "/payouts", actor: "0xabc", body: new Map<string, unknown>([["amount", 1_000_000], ["to", "0xmallory"]]) };
+
+    expect(() => hashRequest(alice)).toThrow(TypeError);
+    expect(() => hashRequest(mallory)).toThrow(TypeError);
+
+    const asObjects = [alice, mallory].map((request) =>
+      hashRequest({ ...request, body: Object.fromEntries(request.body) })
+    );
+    expect(asObjects[0]).not.toBe(asObjects[1]);
+  });
 });
 
 describe("withIdempotency", () => {
@@ -119,6 +133,29 @@ describe("withIdempotency", () => {
     expect((await execute(request)).status).toBe(500);
     expect(await execute(request)).toEqual({ source: "handler", status: 201, body: { id: 1 } });
     expect((await execute(request)).source).toBe("replay");
+  });
+
+  it.each([408, 425, 429])("does not store a %i, so a temporary refusal leaves the key free", async (status) => {
+    let calls = 0;
+    const handler = async (): Promise<HandlerResponse> => {
+      calls += 1;
+      return calls === 1 ? { status, body: { error: "not now" } } : { status: 201, body: { id: 1 } };
+    };
+    const execute = withIdempotency(memoryIdempotencyStore(), handler);
+    expect((await execute(request)).status).toBe(status);
+    expect(await execute(request)).toEqual({ source: "handler", status: 201, body: { id: 1 } });
+    expect((await execute(request)).source).toBe("replay");
+  });
+
+  it("refuses to store a response marked transient even when the policy stores everything", async () => {
+    let calls = 0;
+    const handler = async (): Promise<HandlerResponse> => {
+      calls += 1;
+      return calls === 1 ? { status: 429, body: { error: "rate_limited" }, transient: true } : { status: 201, body: { id: 1 } };
+    };
+    const execute = withIdempotency(memoryIdempotencyStore(), handler, { shouldStore: () => true });
+    expect((await execute(request)).status).toBe(429);
+    expect(await execute(request)).toEqual({ source: "handler", status: 201, body: { id: 1 } });
   });
 
   it("collapses concurrent duplicates inside one process", async () => {
@@ -469,6 +506,170 @@ describe("idempotencyMiddleware", () => {
     const retry = await post("", "k1");
     expect(retry.status).toBe(422);
     expect(retry.headers.get("idempotent-replayed")).toBeNull();
+    expect(calls()).toBe(2);
+  });
+
+  const STALE_DATE = "Thu, 01 Jan 1970 00:00:00 GMT";
+
+  function buildHeaderEcho(store: IdempotencyStore) {
+    const app = new Hono();
+    let calls = 0;
+    app.use("/orders", idempotencyMiddleware(store, { scope: "orders", actorOf: (c) => c.req.header("x-tenant") }));
+    app.post("/orders", (c) => {
+      calls += 1;
+      c.header("location", `/orders/${calls}`);
+      c.header("etag", '"v1"');
+      c.header("x-request-id", `req-${calls}`);
+      c.header("date", STALE_DATE);
+      c.header("content-length", "999");
+      c.header("set-cookie", "sid=abc; HttpOnly", { append: true });
+      c.header("set-cookie", "theme=dark; Path=/", { append: true });
+      return c.json({ id: calls }, 201);
+    });
+    const post = (key: string) =>
+      app.request("/orders", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant": "tenant-a", "idempotency-key": key },
+        body: JSON.stringify({ item: "tea" }),
+      });
+    return { post, calls: () => calls };
+  }
+
+  async function expectHeadersToSurviveTheReplay(store: IdempotencyStore): Promise<void> {
+    const { post, calls } = buildHeaderEcho(store);
+    const first = await post("k1");
+    const replay = await post("k1");
+
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(201);
+    expect(calls()).toBe(1);
+    expect(replay.headers.get("idempotent-replayed")).toBe("true");
+    expect(replay.headers.get("location")).toBe("/orders/1");
+    expect(replay.headers.get("etag")).toBe('"v1"');
+    expect(replay.headers.get("x-request-id")).toBe("req-1");
+    expect(replay.headers.get("content-type")).toContain("application/json");
+    expect(replay.headers.getSetCookie()).toEqual(["sid=abc; HttpOnly", "theme=dark; Path=/"]);
+    expect(replay.headers.getSetCookie()).toEqual(first.headers.getSetCookie());
+    expect(replay.headers.get("date")).not.toBe(STALE_DATE);
+    expect(replay.headers.get("content-length")).not.toBe("999");
+    expect(await replay.json()).toEqual({ id: 1 });
+  }
+
+  it("replays the first response's headers, not only its status and body", async () => {
+    await expectHeadersToSurviveTheReplay(memoryIdempotencyStore());
+  });
+
+  it("replays the first response's headers out of the postgres store as well", async () => {
+    const db = await openKeyStore();
+    try {
+      await expectHeadersToSurviveTheReplay(postgresIdempotencyStore(db));
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("still replays a row stored in the shape an earlier version wrote", async () => {
+    const store = memoryIdempotencyStore();
+    const app = new Hono();
+    app.use("/orders", idempotencyMiddleware(store, { scope: "orders", actorOf: (c) => c.req.header("x-tenant") }));
+    app.post("/orders", (c) => c.json({ id: 1 }, 201));
+    const send = () =>
+      app.request("/orders", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant": "tenant-a", "idempotency-key": "k1" },
+        body: JSON.stringify({ item: "tea" }),
+      });
+    const requestHash = hashRequest({
+      method: "POST",
+      path: "/orders",
+      body: { item: "tea" },
+      actor: "tenant-a",
+    });
+    await store.putIfAbsent(
+      idempotencyScope("orders", "tenant-a"),
+      "k1",
+      requestHash,
+      { status: 201, body: { contentType: "application/json", text: JSON.stringify({ id: 9 }) } },
+      DAY_MS
+    );
+
+    const replay = await send();
+    expect(replay.status).toBe(201);
+    expect(replay.headers.get("idempotent-replayed")).toBe("true");
+    expect(replay.headers.get("content-type")).toContain("application/json");
+    expect(await replay.json()).toEqual({ id: 9 });
+  });
+
+  function buildRateLimited(clock: () => number, extra: Partial<IdempotencyMiddlewareOptions> = {}) {
+    const app = new Hono();
+    let calls = 0;
+    app.use(
+      "/api/*",
+      idempotencyMiddleware(memoryIdempotencyStore({ now: clock }), {
+        scope: "orders",
+        actorOf: (c) => c.req.header("x-tenant"),
+        ...extra,
+      })
+    );
+    app.use(
+      "/api/*",
+      rateLimitMiddleware(memoryRateLimitStore(), {
+        limit: 1,
+        windowMs: 60_000,
+        keyOf: (c) => c.req.header("x-tenant") ?? "anonymous",
+        now: clock,
+      })
+    );
+    app.post("/api/orders", (c) => {
+      calls += 1;
+      return c.json({ id: calls }, 201);
+    });
+    const post = (key: string) =>
+      app.request("/api/orders", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant": "tenant-a", "idempotency-key": key },
+        body: JSON.stringify({ item: "tea" }),
+      });
+    return { post, calls: () => calls };
+  }
+
+  it("lets a client that waits out Retry-After retry the same key instead of replaying the stored 429", async () => {
+    let clock = Math.floor(1_700_000_000_000 / 60_000) * 60_000;
+    const { post, calls } = buildRateLimited(() => clock);
+
+    const first = await post("k1");
+    expect(first.status).toBe(201);
+    expect(calls()).toBe(1);
+
+    const limited = await post("k2");
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("60");
+    expect(limited.headers.get("idempotent-replayed")).toBeNull();
+
+    clock += 60_000;
+    const afterTheWindow = await post("k2");
+    expect(afterTheWindow.status).toBe(201);
+    expect(afterTheWindow.headers.get("idempotent-replayed")).toBeNull();
+    expect(await afterTheWindow.json()).toEqual({ id: 2 });
+    expect(calls()).toBe(2);
+
+    clock += 60_000;
+    const freshKey = await post("k3");
+    expect(freshKey.status).toBe(201);
+    expect(calls()).toBe(3);
+  });
+
+  it("keeps the rate limiter's 429 out of the store even when the route stores everything", async () => {
+    let clock = Math.floor(1_700_000_000_000 / 60_000) * 60_000;
+    const { post, calls } = buildRateLimited(() => clock, { shouldStore: () => true });
+
+    expect((await post("k1")).status).toBe(201);
+    expect((await post("k2")).status).toBe(429);
+
+    clock += 60_000;
+    const afterTheWindow = await post("k2");
+    expect(afterTheWindow.status).toBe(201);
+    expect(afterTheWindow.headers.get("idempotent-replayed")).toBeNull();
     expect(calls()).toBe(2);
   });
 

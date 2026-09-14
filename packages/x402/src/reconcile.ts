@@ -12,13 +12,17 @@ export const RECONCILE_REASON = {
   reverted: "settlement_reverted",
   expired: "authorization_expired",
   receiptUnreadable: "settlement_receipt_unreadable",
+  unconfirmed: "settlement_unconfirmed",
   awaitingSettlement: "awaiting_settlement",
 } as const;
+
+export const DEFAULT_RECEIPT_GRACE_SECONDS = 900;
 
 export interface ReconcileOptions {
   store: ReplayStore;
   receiptStatusOf: SettlementReceiptLookup;
   limit?: number;
+  receiptGraceSeconds?: number;
   now?: ReconcileClock;
   logger?: GatewayLogger;
 }
@@ -53,9 +57,11 @@ export async function reconcileSettlements(options: ReconcileOptions): Promise<R
   const report: ReconcileReport = { examined: rows.length, settled: 0, failed: 0, unresolved: 0 };
   if (rows.length === 0) return report;
   const now = BigInt(await (options.now ?? wallClockSeconds)());
+  const grace = BigInt(options.receiptGraceSeconds ?? DEFAULT_RECEIPT_GRACE_SECONDS);
   for (const row of rows) {
-    const outcome = await resolve(row, options.receiptStatusOf, now);
+    const outcome = await resolve(row, options.receiptStatusOf, now, grace);
     if (outcome.status === "unresolved") {
+      await options.store.markChecked(row);
       report.unresolved += 1;
       logger.info("x402 settlement still unresolved", {
         payer: row.payer,
@@ -83,11 +89,12 @@ type Outcome =
   | { status: "settled"; txHash: Hex }
   | { status: "failed"; reason: string };
 
-async function resolve(row: UnsettledPayment, receiptStatusOf: SettlementReceiptLookup, now: bigint): Promise<Outcome> {
+async function resolve(row: UnsettledPayment, receiptStatusOf: SettlementReceiptLookup, now: bigint, grace: bigint): Promise<Outcome> {
   if (row.txHash !== null) {
     const status = await receiptStatusOf(row.txHash);
     if (status === "success") return { status: "settled", txHash: row.txHash };
     if (status === "reverted") return { status: "failed", reason: RECONCILE_REASON.reverted };
+    if (row.validBefore + grace <= now) return { status: "failed", reason: RECONCILE_REASON.unconfirmed };
     return { status: "unresolved", reason: RECONCILE_REASON.receiptUnreadable };
   }
   if (row.validBefore <= now) return { status: "failed", reason: RECONCILE_REASON.expired };

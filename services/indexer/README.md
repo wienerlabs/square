@@ -28,6 +28,14 @@ proves it by comparing the rebuilt state with the chain field by field.
   still commits and the checkpoint still advances. Chain strings are untrusted,
   so a `U+0000` in a job description is stripped on the way into the mirror
   rather than left to poison a `jsonb` bind.
+- A set-aside log is written to `quarantined_events` in the same transaction that
+  advances the checkpoint, and `/quarantine` is that table read back, capped at
+  the hundred most recent. Durability matters most for the `journal` stage: a log
+  the reducer rejected is still in `job_events` and comes back through the replay
+  on the next start, but a log Postgres refused is in no table at all and its
+  block range is never read again, so before this it vanished on restart and the
+  `quarantine` health check went green with the event still missing from the
+  mirror.
 - On start it compares the address stored in `indexer_checkpoints` with the
   address in the deployment file. A mismatch means the checkpoint belongs to an
   earlier deployment on the same chain and resuming from it would silently skip
@@ -46,9 +54,10 @@ proves it by comparing the rebuilt state with the chain field by field.
   `docs/design/data-layer.md`.
 - No reorg handling. Arc has deterministic finality: a block is either final or
   absent, so `latest` is safe to index.
-- `api.ts` serves `/jobs/open`, `/jobs/in-window`, `/jobs/finalizable`,
-  `/jobs/provider/:address`, `/jobs/:id`, `/listings`, `/disputes/open`,
-  `/status`, `/quarantine`, plus `/health`, `/metrics` and `/version`.
+- `api.ts` serves the query surface tabled under [Endpoints](#endpoints). Every
+  list is bounded: one `GET` answers with at most `limit` rows and the cursor
+  for the rest, never with the whole table, and the counts the app polls are
+  counted in the database instead of being derived from a list it downloads.
 - Every answer carries `Access-Control-Allow-Origin` for an allowed origin, on
   the plain `GET` and not only on a preflight. The app reads this surface from
   the browser with `Accept: application/json`, which is a safelisted header, so
@@ -76,14 +85,50 @@ proves it by comparing the rebuilt state with the chain field by field.
   configuration error, not a job with no window: it warns as
   `indexer.windows_missing` and shows up as `missingWindowEvents` on `/status`.
 
+## Endpoints
+
+| Endpoint | Answers | Parameters |
+|---|---|---|
+| `GET /status` | Chain id, the indexed head, the chain head and the in-memory counters | none |
+| `GET /overview` | Everything `/status` carries, plus `counts.open`, `counts.inWindow` and `counts.finalizable` counted in the database | none |
+| `GET /jobs/open` | The jobs that are open or funded | `limit`, `after` |
+| `GET /jobs/in-window` | Submitted, undisputed jobs whose challenge window is still open | `limit`, `after` |
+| `GET /jobs/finalizable` | Submitted, undisputed jobs whose challenge window has closed | `limit`, `after` |
+| `GET /jobs/provider/:address` | The jobs of one provider | `limit`, `after` |
+| `GET /jobs/:id` | One job with its listing and its dispute | none |
+| `GET /listings` | The claim listings still on sale | `limit`, `after` |
+| `GET /disputes/open` | The disputes that are not closed | `limit`, `after` |
+| `GET /quarantine` | The hundred most recent set-aside events | none |
+| `GET /health`, `GET /metrics`, `GET /version` | The observability surface | none |
+
+`limit` is the most rows one answer may carry: a whole number from 1 to 500,
+100 when it is absent, and anything above 500 is read as 500. `after` is a job
+id and the page starts at the first row whose `job_id` is greater, so a paged
+answer is an object rather than an array:
+
+```json
+{ "items": [ ... ], "nextAfter": "142" }
+```
+
+`nextAfter` is the id to send as the next `after`, and `null` when the list ends
+there, so a reader walks a list by following it until it is null. A `limit` that
+is not a positive whole number and an `after` that is not a job id are both
+answered 400.
+
+A paged list is ordered by job id, because the cursor is a job id. The unpaged
+reads keep the order they had, `challenge_end, job_id` for the two challenge
+window lists and `resolve_by, job_id` for the disputes, which is the order the
+keeper wants them in; paging those by job id while ordering by the deadline
+would let a page skip a row whose deadline sorts before a row already returned.
+
 ## Running
 
 ```bash
 export CHAIN_ID=5042002
 export RPC_URL=https://rpc.testnet.arc.io
 export DATABASE_URL=postgres://...    # empty means an ephemeral PGlite database
-export START_BLOCK=<deployment block>
-export BATCH_BLOCKS=2000
+export START_BLOCK=                    # empty takes the block from the deployment record; neither is an error, not a scan from genesis
+export BATCH_BLOCKS=2000              # Arc refuses a span above roughly 20 000 blocks, and a refused batch is halved until it fits
 export POLL_INTERVAL_MS=3000
 export PORT=3010
 export CORS_ORIGINS=                  # comma separated browser origins; localhost is always allowed
@@ -97,6 +142,23 @@ npx square-data migrate up
 npm install --install-links && npm run build && npm start
 ```
 
+`START_BLOCK` is the block the settlement stack was deployed in. A deploy script
+writes it into the deployment record as `block`, and the indexer reads it from
+there when the variable is unset, so the number lives in one place rather than in
+an operator's notes. When neither the record nor the variable carries one the
+indexer fails to start and says so: scanning Arc from genesis is roughly a day of
+catching up with the lag check red the whole way, which is never what anyone
+wanted.
+
+`BATCH_BLOCKS` is a request size, not a promise. Arc's `eth_getLogs` refuses a
+span above roughly twenty thousand blocks with code `-32012`, and a batch set
+wider than that used to fail, be retried unchanged, and stall the cursor forever
+behind a repeating `indexer.sync_failed`. A refused range is now halved until the
+node accepts it, logged once per split as `indexer.batch_split`, and the batch
+still ends where it was meant to. The splitting is a recovery, not a setting:
+each split costs an extra request, so `indexer.batch_split` in the log means
+`BATCH_BLOCKS` should come down.
+
 Migrations are never run at boot against a real database; `square-data
 migrate up` is the explicit step. Only the ephemeral PGlite mode migrates
 itself, because there is nothing to preserve.
@@ -109,6 +171,8 @@ event, the rolled-back batch, the deployment change and the rows it deletes,
 the hook call the kernel could not complete, the refund a dead resolver forced,
 and the stalled health check. Two more suites run hermetically as well: the API suite drives
 `app.fetch` with an `Origin` header and reads the header off the `GET` answer,
+and walks a PGlite mirror holding more rows than the default limit through
+every list to prove the bound, the cursor and the counts on `/overview`,
 and the checks suite runs the four health checks over an empty database that
 never synced, a checkpointed restart, a normal run and a frozen loop. With an
 anvil at
