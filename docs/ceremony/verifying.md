@@ -106,7 +106,20 @@ You are checking four separate claims. They fail independently, so check them
 separately.
 
 If you would rather not do it by hand, `ceremony.mjs verify-chain` runs all four
-and exits non-zero on any failure:
+and exits non-zero on any failure. Step 4 is the one it used to skip: until
+square#228 it compared the published verifying key against a digest of that same
+file recorded in the transcript, which is the publisher checking their own
+arithmetic. It now exports a verifying key from `payment_final.zkey` and compares
+it with both files step 4 is about: `build/ceremony/payment_vk.json`, which
+`finalize` wrote, and `build/payment_vk.json`, the repository's key that step 4
+diffs below.
+
+The repository's key fails that comparison until
+[#16](https://github.com/wienerlabs/square/issues/16) installs the ceremony's key
+in its place. Until then it is the development key, whose phase 2 is one
+contribution drawn on the machine that built it, so no ceremony reproduces it.
+`contracts/script/check-verifier-ic.mjs`, which CI runs on that file, does not
+cover this: it binds only the IC points to the circuit and leaves delta out.
 
 ```bash
 node scripts/ceremony.mjs verify-chain
