@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { configCommand } from "./commands/config.js";
 import { loginCommand } from "./commands/login.js";
 import { logoutCommand } from "./commands/logout.js";
+import { policyCommand } from "./commands/policy.js";
 import { registerCommand } from "./commands/register.js";
 import { resolveCommand } from "./commands/resolve.js";
 import { whoamiCommand } from "./commands/whoami.js";
@@ -12,7 +13,7 @@ export const VERSION = "0.1.0";
 
 export function buildProgram(): Command {
   const program = new Command("square")
-    .description("Agent identity on Arc: did:aip v2 over the ERC-8004 IdentityRegistry.")
+    .description("Agent identity on Arc (did:aip v2 over the ERC-8004 IdentityRegistry) and the institution's spending policy.")
     .version(VERSION)
     .showHelpAfterError();
 
@@ -21,6 +22,7 @@ export function buildProgram(): Command {
   program.addCommand(whoamiCommand());
   program.addCommand(registerCommand());
   program.addCommand(resolveCommand());
+  program.addCommand(policyCommand());
   program.addCommand(configCommand());
 
   return program;

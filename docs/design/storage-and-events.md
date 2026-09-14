@@ -39,7 +39,7 @@ other is implemented. The two questions #6 was asked answer as follows.
 | `ClaimMarket` | receivable listing, purchase, cancellation, payee lookup | no: price moves buyer → seller directly |
 | `SquareHook` | the single whitelisted `IACPHook`: payout routing, compliance slot, reputation and validation writes | no |
 | `PolicyRegistry` | the policy commitment and the daily spend counter the compliance module reads and moves, and each poster's buyer list root | no |
-| `ComplianceModule` | the proof gate `SquareHook` calls: verifies the Groth16 proof, binds its eight signals to the job, marks the statement spent and advances the policy counter | no |
+| `ComplianceModule` | the proof gate `SquareHook` calls: verifies the Groth16 proof, binds its eight signals to the job, marks the statement spent and advances the policy counter. Absent from the shared deployment while the slot is empty; the SDK carries its ABI (`complianceModuleAbi`) for the tools that bind proofs | no |
 
 `SquareJob` never reads a live token balance. Every transfer out is computed
 from the stored `budget` and the fee basis points snapshotted at funding.
@@ -363,6 +363,7 @@ What the normative set does not carry and the indexer needs.
 | `ValidationRecorded(uint256 indexed jobId, bytes32 indexed requestHash, uint8 response)` | |
 | `ValidationWriteFailed(uint256 indexed jobId, bytes32 indexed requestHash, bytes reason)` | |
 | `ComplianceCheckFailed(uint256 indexed jobId, bytes reason)` | the installed compliance module reverted while `beforeAction` was checking the release. The revert data is carried, the `ComplianceChecked` that follows reports `verified = false`, and settlement continues |
+| `ReleaseUnconfirmed(uint256 indexed jobId, address indexed payee, uint256 amount)` | at complete, from `afterAction`: the kernel paid `amount` to `payee` on a compliance preview that passed, and the check that books the release, the counter and the replay mark, did not pass. It should never fire (#225); the indexer counts it into `square_hook_write_failures_total{kind="complianceCheck"}` and the `hookWriteFailures` alert fires on it |
 | `ReputationSkipped(uint256 indexed jobId, uint256 indexed agentId, bytes32 reason)` | positive feedback that was deliberately not written, with `reason` either `untrusted evaluator` or `budget below minimum`. No registry call was attempted, so this is neither `ReputationRecorded` nor `ReputationWriteFailed` |
 | `ComplianceModuleUpdated(address indexed module)` | |
 | `ReputationPolicyUpdated(address indexed trustedEvaluator, uint64 minReputationBudget)` | the constructor and every later policy change: whose jobs earn positive reputation, and the budget below which it is not written |
@@ -391,25 +392,34 @@ is a signal on the release, never a lock on the escrow
 
 ### ComplianceModule
 
-The proof gate ([compliance-gate.md](./compliance-gate.md)). Its verdicts are
-keyed by `jobId`. `statement` is `keccak256(abi.encode(publicSignals))`: the
-proof's identity, which a re-randomised copy of the same proof shares, and what
-`isConsumed` is keyed on. The indexer reads these events when the deployment
-record names the module.
+The proof gate ([compliance-gate.md](./compliance-gate.md)). Emitted by
+whichever module the hook's slot holds, so a reader takes them from the
+address `SquareHook.complianceModule()` names at the time; the indexer reads
+them when the deployment record names the module. Keyed by `jobId`, like the
+hook's own `ComplianceChecked`, which follows every one of the first two.
+`statement` is `keccak256(abi.encode(publicSignals))`: the proof's identity,
+which a re-randomised copy of the same proof shares, and what `isConsumed` is
+keyed on.
 
 | Event | Carries |
 |---|---|
 | `ReleaseVerified(uint256 indexed jobId, address indexed payee, uint256 amount, bytes32 statement)` | a release the proof gated and the module booked: `statement` is spent from here on, and the policy counter has advanced by `amount` |
-| `ReleaseRefused(uint256 indexed jobId, bytes32 indexed statement, bytes32 reason)` | a release the module refused, and why. `statement` is indexed, so one log filter returns every refusal of a statement, and the release that spent it is the `ReleaseVerified` carrying the same value (#250). It is `bytes32(0)` for `malformed proof` and `invalid proof`, the two refusals that come before any signal is read: zero means the proof could not be read, anything else means it was read and did not bind |
-| `VerdictDisagreed(uint256 indexed jobId, IPolicyRegistry.Verdict verdict)` | a proof that passed every binding and still came back `NoPolicy` or `LimitExceeded` from `PolicyRegistry.recordSpend`: the two contracts have drifted apart |
+| `ReleaseRefused(uint256 indexed jobId, bytes32 indexed statement, bytes32 reason)` | a release the module refused, and why; it pays the client back. `statement` is indexed, so one log filter returns every refusal of a statement, and the release that spent it is the `ReleaseVerified` carrying the same value (#250). It is `bytes32(0)` for `malformed proof` and `invalid proof`, the two refusals that come before any signal is read: zero means the proof could not be read, anything else means it was read and did not bind. `reason` is one of `malformed proof`, `invalid proof`, `is_compliant is 0`, `policy commitment`, `recipient`, `amount`, `token`, `daily_spent_before`, `timestamp outside window`, `stripe_receipt_hash`, `proof already used`, `hook not authorised`, `not a spender`, `spend not recorded`, as a short string in the `bytes32` |
+| `VerdictDisagreed(uint256 indexed jobId, IPolicyRegistry.Verdict verdict)` | a proof that passed every binding and still came back `NoPolicy` or `LimitExceeded` from `PolicyRegistry.recordSpend`: the two contracts have drifted apart, which is visible here rather than as money moving under a policy nobody checked |
 | `HookUpdated(address indexed hook)` | owner only: the hook whose calls to `checkRelease` this module books |
 | `TimestampToleranceUpdated(uint64 seconds_)` | owner only: how far a proof's timestamp may sit from the block's |
+
+The institution's side reads the first two off a release receipt
+(`@squaresdk/policy`'s `moduleVerdict`) to say whether the proof it bound was
+the one the module verified; the indexer journals them and turns a refusal
+into a `releaseRefused` notice (#250); the keeper does not read them, and a
+refused release is also visible in `ComplianceChecked`'s `verified = false`.
 
 ### Ownership, on every owned contract
 
 `SquareJob`, `KeeperEvaluator`, `Arbitration`, `SquareHook`, `PolicyRegistry` and
-`ComplianceModule` inherit OpenZeppelin's `Ownable2Step`, so each of them declares
-the same pair.
+`ComplianceModule` inherit OpenZeppelin's `Ownable2Step`, so each of them
+declares the same pair.
 `ClaimMarket` has no owner and declares neither.
 
 | Event | Carries |
@@ -418,8 +428,9 @@ the same pair.
 | `OwnershipTransferred(address indexed previousOwner, address indexed newOwner)` | the nominee called `acceptOwnership`, or the constructor set the first owner. This is the transfer |
 
 An event that should never fire needs a consumer in the change that adds it.
-`HookFailed`, `ReputationWriteFailed`, `ValidationWriteFailed` and
-`PayoutUnresolvable` all mean "the design tolerated something it did not want",
+`HookFailed`, `ReputationWriteFailed`, `ValidationWriteFailed`,
+`ReleaseUnconfirmed` and `PayoutUnresolvable` all mean "the design tolerated
+something it did not want",
 and a tolerated failure nobody reads is an unobserved one. So the same change
 that adds such an event adds the reader: a reducer branch, a metric or a mirror
 column, and where it warrants attention an alert rule. A pull request that adds

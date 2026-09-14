@@ -80,7 +80,8 @@ export type ReducerNotice =
   | { code: "reputationWriteFailed"; jobId: bigint; agentId: bigint }
   | { code: "validationWriteFailed"; jobId: bigint; requestHash: Hex }
   | { code: "hookFailed"; jobId: bigint; hook: Address; selector: Hex }
-  | { code: "releaseRefused"; jobId: bigint; statement: Hex; reason: Hex };
+  | { code: "releaseRefused"; jobId: bigint; statement: Hex; reason: Hex }
+  | { code: "releaseUnconfirmed"; jobId: bigint; payee: Address; amount: bigint };
 
 export const REFUND_REASON_PAYOUT_UNRESOLVABLE = "payoutUnresolvable";
 
@@ -412,6 +413,10 @@ function applyHook(state: IndexerState, event: Extract<SquareEvent, { contract: 
   }
   if (event.eventName === "ValidationWriteFailed") {
     notice({ code: "validationWriteFailed", jobId: event.args.jobId, requestHash: event.args.requestHash });
+    return;
+  }
+  if (event.eventName === "ReleaseUnconfirmed") {
+    notice({ code: "releaseUnconfirmed", jobId: event.args.jobId, payee: event.args.payee, amount: event.args.amount });
     return;
   }
   if (event.eventName !== "AgentBound") return;

@@ -55,6 +55,7 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     event ComplianceCheckFailed(uint256 indexed jobId, bytes reason);
     event ReputationPolicyUpdated(address indexed trustedEvaluator, uint64 minReputationBudget);
     event ReputationSkipped(uint256 indexed jobId, uint256 indexed agentId, bytes32 reason);
+    event ReleaseUnconfirmed(uint256 indexed jobId, address indexed payee, uint256 amount);
 
     bytes32 private constant SKIP_UNTRUSTED_EVALUATOR = "untrusted evaluator";
     bytes32 private constant SKIP_BUDGET_BELOW_MINIMUM = "budget below minimum";
@@ -214,10 +215,27 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     function afterAction(uint256 jobId, bytes4 selector, bytes calldata data) external onlyKernel {
         if (selector == COMPLETE_SELECTOR) {
             (bytes32 reason,) = abi.decode(data, (bytes32, bytes));
-            _writeReputation(jobId, 1, "completed", reason);
             uint8 outcome = _checkedJob == jobId ? _checkOutcome : CHECK_NOT_RUN;
             _checkedJob = 0;
             _checkOutcome = CHECK_NOT_RUN;
+            // First, before the registry writes, because they run arbitrary
+            // registry code and this is the report worth getting out early.
+            //
+            // What the ordering does not do is guarantee it. A log belongs to
+            // the frame that wrote it: the kernel calls this hook with
+            // `{gas: hookGasLimit}` and, if that call fails, emits `HookFailed`
+            // and carries on -- and everything this frame emitted goes with the
+            // frame, whatever order it was emitted in. A registry that eats the
+            // budget rather than reverting takes the report with it, and
+            // `test_theUnconfirmedReportIsLostWhenTheHookFrameRunsOut` holds
+            // that as it is. Moving the emit into a `try this.…{gas: n}` of its
+            // own would not help either: a nested frame's logs are journalled
+            // into its parent and discarded with it.
+            //
+            // So this is best-effort, and the guarantee lives one level up, in
+            // the `HookFailed` the kernel emits from its own frame.
+            if (outcome != CHECK_PASSED && address(_complianceModule) != address(0)) _reportUnconfirmed(jobId);
+            _writeReputation(jobId, 1, "completed", reason);
             if (outcome == CHECK_PASSED) _writeValidation(jobId, 100);
             else if (outcome == CHECK_FAILED) _writeValidation(jobId, 0);
         } else if (selector == REJECT_SELECTOR) {
@@ -226,6 +244,23 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
             _writeReputation(jobId, -1, "rejected", reason);
             _writeValidation(jobId, 0);
         }
+    }
+
+    /// @dev A release the kernel paid and the compliance check did not confirm.
+    ///
+    ///      `resolvePayout` zeroes the split whenever the preview refuses, so a
+    ///      non-zero split on a job whose check did not pass means the preview
+    ///      said yes and the check -- the counter and the replay mark -- did not
+    ///      land: the module reverted, ran out of gas, or could not book the
+    ///      spend. `_checkRelease` alone cannot tell that apart from an ordinary
+    ///      refusal, because the kernel writes the split it applied only after
+    ///      `beforeAction`; here it has. The payment cannot be undone, so it is
+    ///      reported by name and with the amount instead of passing as one more
+    ///      `verified = false` (#225).
+    function _reportUnconfirmed(uint256 jobId) private {
+        ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
+        if (job.providerBps == 0) return;
+        emit ReleaseUnconfirmed(jobId, job.payee, (_squareJob.netPayout(jobId) * job.providerBps) / FULL_BPS);
     }
 
     function recordExpiry(uint256 jobId) external {

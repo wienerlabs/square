@@ -41,9 +41,18 @@ contract MockReputationRegistry is IReputationRegistry {
 
     mapping(uint256 => Feedback[]) public feedbacks;
     bool public shouldRevert;
+    /// @dev Zero unless a test asks for it, so nothing else changes behaviour.
+    ///      A registry that reverts is caught by the hook's `try`; one that eats
+    ///      the gas is not, and that is the difference the ordering of writes in
+    ///      `afterAction` was claimed to survive.
+    uint256 public gasToBurn;
 
     function setShouldRevert(bool value) external {
         shouldRevert = value;
+    }
+
+    function setGasToBurn(uint256 value) external {
+        gasToBurn = value;
     }
 
     function giveFeedback(
@@ -56,6 +65,11 @@ contract MockReputationRegistry is IReputationRegistry {
         string calldata,
         bytes32 feedbackHash
     ) external {
+        if (gasToBurn > 0) {
+            uint256 start = gasleft();
+            uint256 x;
+            while (start - gasleft() < gasToBurn) x = uint256(keccak256(abi.encode(x)));
+        }
         require(!shouldRevert, "registry down");
         feedbacks[agentId].push(Feedback(msg.sender, value, valueDecimals, tag1, tag2, feedbackHash));
     }

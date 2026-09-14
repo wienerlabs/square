@@ -146,7 +146,7 @@ returns a private `prom-client` registry plus typed helpers. Every metric carrie
 | `square_keeper_last_tick_timestamp_seconds` | gauge | | `recordKeeperTick(at?)` | Unix time of the last keeper tick that completed. This is the dead man's switch `keeperStalled` reads. |
 | `square_finalize_gas_used` | gauge | `action` | `recordFinalizeGas(action, assumed, used)` | Gas the last settlement receipt reported. |
 | `square_finalize_gas_gap` | gauge | `action` | `recordFinalizeGas(action, assumed, used)` | Configured gas assumption minus the receipt. Negative means the assumption is too low. |
-| `square_hook_write_failures_total` | counter | `kind` | `recordHookWriteFailure(kind)` | `ReputationWriteFailed` and `ValidationWriteFailed` the indexer decoded. `kind` is `reputation` or `validation`. |
+| `square_hook_write_failures_total` | counter | `kind` | `recordHookWriteFailure(kind)` | `HookFailed`, `ReputationWriteFailed`, `ValidationWriteFailed` and `ReleaseUnconfirmed` the indexer decoded. `kind` is `hookCall`, `reputation`, `validation` or `complianceCheck`. |
 | `square_alert_dispatch_failures_total` | counter | `rule`, `stage` | `recordAlertDispatchFailure(rule, stage)` | Alert evaluations or deliveries that failed. `stage` is `evaluate` or `notify`. |
 | `square_indexer_quarantined_events_total` | counter | `contract`, `event` | `recordQuarantinedEvent(contract, event)` | Chain events the indexer could not journal or reduce and set aside. |
 

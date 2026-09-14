@@ -62,6 +62,13 @@ export function fakeChain(
       record(id);
       return agents.get(id) ?? null;
     },
+    // No module in the hook's slot: square_job reports no compliance state.
+    async complianceModule() {
+      return null;
+    },
+    async complianceTolerance() {
+      return null;
+    },
     async usdcBalance() {
       return state.balance;
     },
