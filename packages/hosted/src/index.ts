@@ -1,0 +1,11 @@
+export { hostAgent, hostedHandlers, sealContext } from "./host.js";
+export type { ComplianceDeps, HandlerContext, HostDeps, HostedAgent } from "./host.js";
+export { HostedConfigError, parseHostedConfig } from "./config.js";
+export type { ComplianceConfig, DelegationConfig, HostedAgentConfig, HostedCapability, ProviderConfig } from "./config.js";
+export { PolicyAllowance } from "./allowance.js";
+export type { AllowanceView, PolicyAllowanceOptions } from "./allowance.js";
+export { DEFAULT_MODEL, ModelRunError, runCapability } from "./model.js";
+export type { ModelClient, RunOptions, RunOutcome, ToolCallRecord, ToolOutcome } from "./model.js";
+export { DELEGATE_TOOL, allowed, delegate, delegateTool } from "./delegation.js";
+export type { DelegationDeps, DelegationInput, DelegationOutcome } from "./delegation.js";
+export { SEALED_PREFIX, SealError, deriveSealKey, isSealed, open, seal } from "./sealed.js";

@@ -107,6 +107,14 @@ can be lost on the way back; the retry, carrying the same five fields, is
 answered with the task as it stands. The same id with different content is
 refused with `-32003`, which is not what a bad request gets.
 
+A host that composes a settlement in (`@squaresdk/agent` does) adds two things
+to the wire. `task/create` can be refused with `-32004` and a reason when the
+chain does not show the job funded for this provider. `task/status` on a
+delivered task then carries `reference`, the transaction that carried the
+`submit`, and `job: { status, name }`, the job's status as the chain has it at
+the moment of the answer: the evaluator's `Completed` or `Rejected` is read
+there, never kept by the task machine.
+
 `callerDid` on the wire is a claim. Nothing in the envelope proves it, so the
 host that has authenticated the caller by its own transport tells the server
 who is asking, and the server holds the body to that: a create naming another

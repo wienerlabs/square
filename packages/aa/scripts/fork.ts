@@ -33,7 +33,19 @@ export const repoRoot = resolve(packageRoot, "..", "..");
 
 export const contractsDir = join(repoRoot, "contracts");
 
-export const deploymentFile = join(contractsDir, "deployments", `${ARC_TESTNET_CHAIN_ID}.json`);
+/**
+ * The record of the real Arc Testnet deployment, in version control. Nothing
+ * in this harness writes it or removes it (#270): the fork answers with Arc's
+ * chain id, so the deploy script's default path would be this file, and one
+ * `npm test` here used to leave the working tree without it.
+ */
+export const arcDeploymentFile = join(contractsDir, "deployments", `${ARC_TESTNET_CHAIN_ID}.json`);
+
+/** Relative to `contracts/`, the way the deploy script takes it in DEPLOYMENT_FILE. */
+export const forkDeploymentPath = `deployments/${ARC_TESTNET_CHAIN_ID}.local.json`;
+
+/** Where the fork's mock stack is recorded: next to the record, and ignored by git. */
+export const forkDeploymentFile = join(contractsDir, forkDeploymentPath);
 
 export const broadcastDir = join(contractsDir, "broadcast", "DeployLocal.s.sol", String(ARC_TESTNET_CHAIN_ID));
 
@@ -178,7 +190,7 @@ export function parseDeployment(raw: unknown): SquareDeployment {
 }
 
 export function removeLocalDeploymentArtifacts(): void {
-  rmSync(deploymentFile, { force: true });
+  rmSync(forkDeploymentFile, { force: true });
   rmSync(broadcastDir, { recursive: true, force: true });
 }
 
@@ -270,10 +282,13 @@ export async function deployWithForgeScript(rpcUrl: string): Promise<SquareDeplo
   delete env["DEPLOYER_PRIVATE_KEY"];
   // DeployLocal deploys mocks and refuses any chain but 31337 unless the caller
   // names the one it means (square#232). This fork answers with Arc's chain id
-  // and is ours: spawned above, and `removeLocalDeploymentArtifacts` deletes
-  // everything the script writes, including the deployment file that path shares
-  // with the real testnet.
+  // and is ours: spawned above. Where the script writes is named as well: its
+  // default for this chain id is the committed Arc Testnet record, and the
+  // script refuses that path on any chain but 31337 (#270). The file it does
+  // write is gitignored, and `removeLocalDeploymentArtifacts` deletes it along
+  // with the broadcast log.
   env["DEPLOY_LOCAL_ALLOW_CHAIN_ID"] = String(ARC_TESTNET_CHAIN_ID);
+  env["DEPLOYMENT_FILE"] = forkDeploymentPath;
   try {
     execSync(`forge script script/DeployLocal.s.sol --rpc-url ${rpcUrl} --broadcast --slow`, {
       cwd: contractsDir,
@@ -281,7 +296,7 @@ export async function deployWithForgeScript(rpcUrl: string): Promise<SquareDeplo
       stdio: "pipe",
       timeout: 300_000,
     });
-    return parseDeployment(JSON.parse(readFileSync(deploymentFile, "utf8")));
+    return parseDeployment(JSON.parse(readFileSync(forkDeploymentFile, "utf8")));
   } catch (error) {
     const detail =
       typeof error === "object" && error !== null && "stderr" in error

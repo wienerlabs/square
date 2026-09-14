@@ -92,10 +92,10 @@ describe.skipIf(!reachable)("indexer sync against anvil with a PGlite journal", 
     expect(checkpoint?.lastBlock).toBe(await publicClient.getBlockNumber());
 
     const api = createApi({ db, chainId: 31337, indexer: first, health: createHealth({ service: "t", version: "0" }), metrics: createMetrics({ service: "t", defaultMetrics: false }) });
-    const inWindow = (await (await api.request("/jobs/in-window")).json()) as Array<{ jobId: string }>;
-    expect(inWindow.map((j) => j.jobId)).toContain(jobId.toString());
-    const byProvider = (await (await api.request(`/jobs/provider/${provider.account}`)).json()) as Array<{ jobId: string }>;
-    expect(byProvider.map((j) => j.jobId)).toContain(jobId.toString());
+    const inWindow = (await (await api.request("/jobs/in-window")).json()) as { items: Array<{ jobId: string }> };
+    expect(inWindow.items.map((j) => j.jobId)).toContain(jobId.toString());
+    const byProvider = (await (await api.request(`/jobs/provider/${provider.account}`)).json()) as { items: Array<{ jobId: string }> };
+    expect(byProvider.items.map((j) => j.jobId)).toContain(jobId.toString());
     const one = (await (await api.request(`/jobs/${jobId}`)).json()) as { job: { description: string } };
     expect(one.job.description.startsWith("spec:0x")).toBe(true);
     expect((await api.request("/health")).status).toBe(200);

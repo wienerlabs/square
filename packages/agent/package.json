@@ -1,0 +1,46 @@
+{
+  "name": "@squaresdk/agent",
+  "version": "0.1.0",
+  "description": "Write a Square agent in a few lines: capabilities with prices, an ERC-8004 registration file served at the well-known path, an A2A endpoint whose tasks are admitted and delivered through SquareJob escrow on Arc, and x402 paid routes for per-call work.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:anvil": "ANVIL=1 vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.0",
+    "@squaresdk/a2a": "file:../a2a",
+    "@squaresdk/core": "file:../core",
+    "@squaresdk/data": "file:../data",
+    "@squaresdk/did-resolver": "file:../did-resolver",
+    "@squaresdk/x402": "file:../x402",
+    "hono": "^4.7.0",
+    "viem": "^2.48.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@x402/core": "2.25.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

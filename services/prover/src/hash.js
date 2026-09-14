@@ -50,12 +50,11 @@ export function addressToField(address, label = 'address') {
   return BigInt(`0x${hex}`).toString();
 }
 
-// Poseidon-hash an ASCII category string into a single field element.
-//
-// Right-padded to 32 bytes and split into halves before hashing, because 32
-// bytes exceeds the field. The shape is fixed by the circuit and the policy
-// service, so it cannot be simplified independently of both.
-export async function hashCategory(categoryString, label = 'category') {
+// A category string's bytes, once it is known to be one: a string of 1 to 32
+// UTF-8 bytes. Separate from the hash so the request gate can refuse a bad
+// category without paying for Poseidon (square#251), and so the rule has one
+// home that the gate and the hash both read.
+export function categoryBytes(categoryString, label = 'category') {
   if (typeof categoryString !== 'string') {
     throw new Error(`${label}: must be a string`);
   }
@@ -66,11 +65,34 @@ export async function hashCategory(categoryString, label = 'category') {
   if (utf8.length > 32) {
     throw new Error(`${label}: exceeds the 32-byte limit`);
   }
+  return utf8;
+}
+
+// Poseidon-hash an ASCII category string into a single field element.
+//
+// Right-padded to 32 bytes and split into halves before hashing, because 32
+// bytes exceeds the field. The shape is fixed by the circuit and the policy
+// service, so it cannot be simplified independently of both.
+export async function hashCategory(categoryString, label = 'category') {
+  const utf8 = categoryBytes(categoryString, label);
   const padded = Buffer.alloc(32);
   utf8.copy(padded);
   const high = BigInt(`0x${padded.subarray(0, 16).toString('hex')}`);
   const low = BigInt(`0x${padded.subarray(16, 32).toString('hex')}`);
   return poseidon([high, low]);
+}
+
+// A UUID's 32 hex digits, once it is known to be one. The gate calls it without
+// the hash, for the same reason as categoryBytes (square#251).
+export function uuidHex(uuidString, label = 'policy_id') {
+  if (typeof uuidString !== 'string') {
+    throw new Error(`${label}: must be a string`);
+  }
+  const cleaned = uuidString.replace(/-/g, '');
+  if (cleaned.length !== 32 || !/^[0-9a-f]+$/i.test(cleaned)) {
+    throw new Error(`${label}: not a valid UUID`);
+  }
+  return cleaned;
 }
 
 // Poseidon-hash a UUID into a single field element.
@@ -80,13 +102,7 @@ export async function hashCategory(categoryString, label = 'category') {
 // sides have to agree, so the shape stays as it is rather than being simplified
 // on one side only.
 export async function hashUuid(uuidString, label = 'policy_id') {
-  if (typeof uuidString !== 'string') {
-    throw new Error(`${label}: must be a string`);
-  }
-  const cleaned = uuidString.replace(/-/g, '');
-  if (cleaned.length !== 32 || !/^[0-9a-f]+$/i.test(cleaned)) {
-    throw new Error(`${label}: not a valid UUID`);
-  }
+  const cleaned = uuidHex(uuidString, label);
   const padded = Buffer.alloc(32);
   Buffer.from(cleaned, 'hex').copy(padded, 0);
   const high = BigInt(`0x${padded.subarray(0, 16).toString('hex')}`);

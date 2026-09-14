@@ -185,12 +185,22 @@ describe("distinct route keys on createGatewayApp", () => {
 describe("a parameterised paid route on createGatewayApp", () => {
   function gatewayFor(pattern: string) {
     const accepting = acceptingFacilitator();
+    let handlerRuns = 0;
     const app = createGatewayApp({
       payTo,
       network: ARC_TESTNET_NETWORK,
       facilitator: accepting,
       asset: ARC_TESTNET_USDC,
-      routes: { [pattern]: { price: "0.05", description: "One job", handler: (c) => c.json({ id: c.req.param("id") }) } },
+      routes: {
+        [pattern]: {
+          price: "0.05",
+          description: "One job",
+          handler: (c) => {
+            handlerRuns += 1;
+            return c.json({ id: c.req.param("id") }, 200, { "x-quote": "42 USDC" });
+          },
+        },
+      },
     });
     const payingFetch = createPayingFetch({
       account: payer,
@@ -199,7 +209,7 @@ describe("a parameterised paid route on createGatewayApp", () => {
       maxAmountPerPayment: "1.00",
       fetch: async (input, init) => app.request(input as Parameters<typeof app.request>[0], init),
     });
-    return { app, accepting, payingFetch };
+    return { app, accepting, payingFetch, handlerRuns: () => handlerRuns };
   }
 
   it.each(["GET /jobs/[id]", "GET /jobs/:id"])("%s answers /jobs/1 with 402 when nothing is paid", async (pattern) => {
@@ -226,17 +236,57 @@ describe("a parameterised paid route on createGatewayApp", () => {
   });
 
   it.each([
-    ["GET /jobs/[id]", "/jobs/1"],
-    ["GET /jobs/:id", "/jobs/1"],
-    ["GET /quote", "/quote"],
-    ["GET /files/*", "/files/a/b"],
-    ["/quote", "/quote"],
-  ])("%s never serves %s for free", async (pattern, path) => {
-    const { app } = gatewayFor(pattern);
+    ["GET /jobs/[id]", "/jobs/1", "GET", 402],
+    ["GET /jobs/[id]", "/jobs/1", "HEAD", 402],
+    ["GET /jobs/[id]", "/jobs/1", "POST", 404],
+    ["GET /jobs/[id]", "/jobs/1", "OPTIONS", 404],
+    ["GET /jobs/:id", "/jobs/1", "GET", 402],
+    ["GET /jobs/:id", "/jobs/1", "HEAD", 402],
+    ["GET /jobs/:id", "/jobs/1", "POST", 404],
+    ["GET /jobs/:id", "/jobs/1", "OPTIONS", 404],
+    ["GET /quote", "/quote", "GET", 402],
+    ["GET /quote", "/quote", "HEAD", 402],
+    ["GET /quote", "/quote", "POST", 404],
+    ["GET /quote", "/quote", "OPTIONS", 404],
+    ["GET /files/*", "/files/a/b", "GET", 402],
+    ["GET /files/*", "/files/a/b", "HEAD", 402],
+    ["GET /files/*", "/files/a/b", "POST", 404],
+    ["GET /files/*", "/files/a/b", "OPTIONS", 404],
+    ["/quote", "/quote", "GET", 402],
+    ["/quote", "/quote", "HEAD", 402],
+    ["/quote", "/quote", "POST", 402],
+    ["/quote", "/quote", "OPTIONS", 402],
+  ] as const)("%s never serves %s for free: %s answers %i", async (pattern, path, method, status) => {
+    const { app, accepting, handlerRuns } = gatewayFor(pattern);
 
-    const res = await app.request(`http://gateway.local${path}`);
+    const res = await app.request(`http://gateway.local${path}`, { method });
 
-    expect(res.status).toBe(402);
+    expect(res.status).toBe(status);
+    expect(handlerRuns()).toBe(0);
+    expect(accepting.verified).toHaveLength(0);
+    expect(accepting.settled).toHaveLength(0);
+    expect(res.headers.get("x-quote")).toBeNull();
+    expect(res.headers.get(PAYMENT_RESPONSE_HEADER)).toBeNull();
+  });
+
+  it("does not let HEAD walk the paid GET chain that Hono re-dispatches it into", async () => {
+    const { app, handlerRuns } = gatewayFor("GET /quote");
+
+    const head = await app.request("http://gateway.local/quote", { method: "HEAD" });
+
+    expect(head.status).toBe(402);
+    expect(head.headers.get(PAYMENT_REQUIRED_HEADER)).toBeTruthy();
+    expect(handlerRuns()).toBe(0);
+  });
+
+  it("keeps serving a paid GET once the payment is made, HEAD twin or not", async () => {
+    const { payingFetch, handlerRuns } = gatewayFor("GET /quote");
+
+    const res = await payingFetch("http://gateway.local/quote");
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-quote")).toBe("42 USDC");
+    expect(handlerRuns()).toBe(1);
   });
 
   it("leaves /health free", async () => {

@@ -1,7 +1,7 @@
 import type { Database } from "../database.js";
 import { hexToBytes, nullableBigIntParam, nullableBytesToHex, nullableToBigInt, toBigInt, type Hex } from "../codec.js";
 
-export type KeeperAction = "finalize" | "finalizeDecided" | "lapse" | "recordExpiry" | "skipped";
+export type KeeperAction = "finalize" | "finalizeDecided" | "lapse" | "settleBond" | "recordExpiry" | "skipped";
 
 export interface KeeperActionInput {
   chainId: number;
@@ -79,22 +79,6 @@ export async function recent(db: Database, chainId: number, limit = 100): Promis
     gaveUp: row.gave_up,
     createdAt: row.created_at,
   }));
-}
-
-export async function listGaveUp(db: Database, chainId: number): Promise<bigint[]> {
-  const { rows } = await db.query<{ job_id: string }>(
-    `select distinct job_id from keeper_actions where chain_id = $1 and gave_up order by job_id`,
-    [chainId],
-  );
-  return rows.map((row) => toBigInt(row.job_id));
-}
-
-export async function clearGiveUp(db: Database, chainId: number, jobId: bigint): Promise<number> {
-  const { rowCount } = await db.query(
-    `update keeper_actions set gave_up = false where chain_id = $1 and job_id = $2 and gave_up`,
-    [chainId, jobId.toString()],
-  );
-  return rowCount;
 }
 
 export async function sweep(db: Database): Promise<number> {

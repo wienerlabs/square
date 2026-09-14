@@ -6,6 +6,7 @@ import { createPublicClient, createTestClient, createWalletClient, http, parseUn
 import { foundry } from "viem/chains";
 import { anvilAccount } from "./anvil.js";
 import {
+  approveBuyers,
   arbitrationAbi,
   claimMarketAbi,
   createSquareClient,
@@ -93,7 +94,9 @@ describe.skipIf(!reachable)("state rebuilt from logs equals state read from the 
 
     const sold = await submitted();
     await provider.listClaim(sold, parseUnits("35", 6));
-    await buyer.buyClaim(sold);
+    const approved = approveBuyers([buyer.account]);
+    await client.setBuyerRoot(approved.root);
+    await buyer.buyClaim(sold, approved.eligibilityOf(buyer.account));
     await passWindow(sold);
     await cranker.finalize(sold);
 

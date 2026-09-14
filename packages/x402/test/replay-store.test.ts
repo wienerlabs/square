@@ -75,6 +75,22 @@ describe("memoryReplayStore", () => {
     expect(store.get(entry)?.status).toBe("failed");
   });
 
+  it("keeps the transaction hash a failure was handed", async () => {
+    const store = memoryReplayStore();
+    await store.insertAccepted(entry);
+    expect(await store.markFailed(entry, "invalid_exact_evm_transaction_failed", txHash)).toBe(true);
+    expect(store.get(entry)?.status).toBe("failed");
+    expect(store.get(entry)?.txHash).toBe(txHash);
+  });
+
+  it("leaves the hash the row already carried when a failure brings none", async () => {
+    const store = memoryReplayStore();
+    await store.insertAccepted(entry);
+    await store.markPending(entry, txHash);
+    expect(await store.markFailed(entry, "settle_failed")).toBe(true);
+    expect(store.get(entry)?.txHash).toBe(txHash);
+  });
+
   it("reports a transition that found no accepted row", async () => {
     const store = memoryReplayStore();
     expect(await store.markSettled(entry, txHash)).toBe(false);
@@ -153,6 +169,28 @@ describe("postgresReplayStore", () => {
       await store.insertAccepted(entry);
       await store.markFailed(entry, "settle_failed");
       expect((await x402Payments.get(db, entry))?.reason).toBe("settle_failed");
+    });
+  });
+
+  it("writes the transaction hash of a settlement that reverted on chain", async () => {
+    await withStore(async (store, db) => {
+      await store.insertAccepted(entry);
+      expect(await store.markFailed(entry, "invalid_exact_evm_transaction_failed", txHash)).toBe(true);
+      const row = await x402Payments.get(db, entry);
+      expect(row?.status).toBe(REPLAY_STATUS_CODE.failed);
+      expect(row?.reason).toBe("invalid_exact_evm_transaction_failed");
+      expect(row?.txHash).toBe(txHash);
+    });
+  });
+
+  it("leaves tx_hash alone when a failure carries no hash", async () => {
+    await withStore(async (store, db) => {
+      await store.insertAccepted(entry);
+      await store.markPending(entry, txHash);
+      expect(await store.markFailed(entry, "settle_failed")).toBe(true);
+      const row = await x402Payments.get(db, entry);
+      expect(row?.status).toBe(REPLAY_STATUS_CODE.failed);
+      expect(row?.txHash).toBe(txHash);
     });
   });
 

@@ -2,22 +2,37 @@ import {
   type Abi,
   type Account,
   type Address,
+  BaseError,
   type Chain,
   type ContractFunctionArgs,
   type ContractFunctionName,
+  ContractFunctionRevertedError,
   type Hex,
   isAddressEqual,
   type PublicClient,
+  type ReadContractReturnType,
   type TransactionReceipt,
   type Transport,
   type WalletClient,
+  zeroAddress,
 } from "viem";
-import { arbitrationAbi, claimMarketAbi, erc20Abi, keeperEvaluatorAbi, squareHookAbi, squareJobAbi } from "./abi/index.js";
+import {
+  arbitrationAbi,
+  claimMarketAbi,
+  erc20Abi,
+  keeperEvaluatorAbi,
+  policyRegistryAbi,
+  complianceModuleAbi,
+  squareHookAbi,
+  squareJobAbi,
+} from "./abi/index.js";
 import { agentFromDid, type AgentReference } from "./agent.js";
+import { type BuyerEligibility } from "./buyers.js";
 import { deploymentFor, type SquareDeployment } from "./deployments.js";
 import { decodeSquareLogs, eventsNamed, type SquareEvent } from "./events.js";
 import { encodeCompleteOptParams, encodeSubmitOptParams, ZERO_HASH } from "./optParams.js";
 import { type OutcomeValue } from "./reasons.js";
+import { withSquareErrors } from "./revertAbi.js";
 import { specDescription } from "./spec.js";
 
 export const JobStatus = {
@@ -86,12 +101,24 @@ export class TransactionRevertedError extends Error {
   }
 }
 
+/**
+ * The deployment and the chain disagree. `source` says which chain id lost:
+ * `"declared"` is the id the viem client was built with, checked in the
+ * constructor; `"endpoint"` is the id the RPC actually answered, checked on the
+ * first read or write. They can differ, and only the second can catch an
+ * endpoint that points at some other chain (#269).
+ */
 export class DeploymentChainMismatchError extends Error {
   constructor(
     readonly deploymentChainId: number,
     readonly clientChainId: number,
+    readonly source: "declared" | "endpoint" = "declared",
   ) {
-    super(`the deployment is for chain ${deploymentChainId} but the client is connected to chain ${clientChainId}`);
+    super(
+      source === "endpoint"
+        ? `the deployment is for chain ${deploymentChainId} but the RPC endpoint answers eth_chainId with ${clientChainId}`
+        : `the deployment is for chain ${deploymentChainId} but the client declares chain ${clientChainId}`,
+    );
     this.name = "DeploymentChainMismatchError";
   }
 }
@@ -126,6 +153,24 @@ type WriteArgs<TAbi extends Abi, TName extends ContractFunctionName<TAbi, "nonpa
   functionName: TName;
   args: ContractFunctionArgs<TAbi, "nonpayable" | "payable", TName>;
 };
+
+type ReadArgs<TAbi extends Abi, TName extends ContractFunctionName<TAbi, "pure" | "view">> = {
+  abi: TAbi;
+  address: Address;
+  functionName: TName;
+  args?: ContractFunctionArgs<TAbi, "pure" | "view", TName>;
+};
+
+/**
+ * A call that reverted carrying nothing: no error data, no reason string.
+ * Solidity's dispatcher answers an unknown selector exactly so, which is how
+ * a contract deployed before a function existed looks from here.
+ */
+function isUnknownSelectorRevert(error: unknown): boolean {
+  if (!(error instanceof BaseError)) return false;
+  const reverted = error.walk((candidate) => candidate instanceof ContractFunctionRevertedError);
+  return reverted instanceof ContractFunctionRevertedError && reverted.data === undefined && reverted.signature === undefined;
+}
 
 export class SquareClient {
   readonly publicClient: PublicClient;
@@ -168,15 +213,62 @@ export class SquareClient {
     return this.walletClient;
   }
 
+  private endpointChain: Promise<void> | undefined;
+
+  /**
+   * Ask the endpoint which chain it is, once, and refuse to go on if it is not
+   * the deployment's. The constructor compares the deployment to the chain the
+   * clients *declare*, and both sides of that come from the caller, so it
+   * cannot catch an `RPC_URL` that points somewhere else: every read would
+   * answer from the wrong chain at Arc addresses, quietly, and a local-key
+   * wallet would sign without viem ever checking either (#269). This is the
+   * `cast chain-id` step `deploy-arc-testnet.sh` takes before broadcasting,
+   * done for the SDK. Runs before the first read or write; a failure is not
+   * cached, so a transport error on the check is retried on the next call.
+   */
+  async assertChain(): Promise<void> {
+    this.endpointChain ??= this.publicClient.getChainId().then((actual) => {
+      if (actual !== this.deployment.chainId) {
+        throw new DeploymentChainMismatchError(this.deployment.chainId, actual, "endpoint");
+      }
+    });
+    try {
+      await this.endpointChain;
+    } catch (error) {
+      this.endpointChain = undefined;
+      throw error;
+    }
+  }
+
+  /**
+   * Every read goes through here so two things hold for all of them: the
+   * endpoint has been checked against the deployment, and a revert decodes
+   * to a name whichever Square contract raised it (see `revertAbi.ts`).
+   */
+  private async read<TAbi extends Abi, TName extends ContractFunctionName<TAbi, "pure" | "view">>(
+    request: ReadArgs<TAbi, TName>,
+  ): Promise<ReadContractReturnType<TAbi, TName, ContractFunctionArgs<TAbi, "pure" | "view", TName>>> {
+    await this.assertChain();
+    return this.publicClient.readContract({ ...request, abi: withSquareErrors(request.abi) } as never) as never;
+  }
+
   private async write<TAbi extends Abi, TName extends ContractFunctionName<TAbi, "nonpayable" | "payable">>(
     request: WriteArgs<TAbi, TName>,
   ): Promise<TransactionResult> {
+    await this.assertChain();
     const wallet = this.wallet();
+    // The ABI carries every Square error so the simulation can name a revert
+    // raised behind the contract being called. simulateContract hands back a
+    // request whose ABI is cut down to the one function, so the full one is
+    // put back for the send: the write leg carries the same error entries as
+    // the simulation that approved it (#268).
+    const abi = withSquareErrors(request.abi);
     const simulation = await this.publicClient.simulateContract({
       ...request,
+      abi,
       account: wallet.account,
     } as never);
-    const hash = await wallet.writeContract(simulation.request as never);
+    const hash = await wallet.writeContract({ ...simulation.request, abi } as never);
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status !== "success") throw new TransactionRevertedError(hash, receipt);
     return { hash, receipt, events: decodeSquareLogs(receipt.logs, this.deployment) };
@@ -187,7 +279,7 @@ export class SquareClient {
   }
 
   async jobCounter(): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: squareJobAbi,
       address: this.deployment.squareJob,
       functionName: "jobCounter",
@@ -195,7 +287,7 @@ export class SquareClient {
   }
 
   async getJob(jobId: bigint) {
-    return this.publicClient.readContract({
+    return this.read({
       abi: squareJobAbi,
       address: this.deployment.squareJob,
       functionName: "getJob",
@@ -204,7 +296,7 @@ export class SquareClient {
   }
 
   async getJobRecord(jobId: bigint) {
-    return this.publicClient.readContract({
+    return this.read({
       abi: squareJobAbi,
       address: this.deployment.squareJob,
       functionName: "getJobRecord",
@@ -213,7 +305,7 @@ export class SquareClient {
   }
 
   async netPayout(jobId: bigint): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: squareJobAbi,
       address: this.deployment.squareJob,
       functionName: "netPayout",
@@ -222,7 +314,7 @@ export class SquareClient {
   }
 
   async withdrawable(account: Address): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: squareJobAbi,
       address: this.deployment.squareJob,
       functionName: "withdrawable",
@@ -231,7 +323,7 @@ export class SquareClient {
   }
 
   async bondWithdrawable(account: Address): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: arbitrationAbi,
       address: this.deployment.arbitration,
       functionName: "withdrawable",
@@ -240,7 +332,7 @@ export class SquareClient {
   }
 
   async settlementHorizon(): Promise<number> {
-    const horizon = await this.publicClient.readContract({
+    const horizon = await this.read({
       abi: keeperEvaluatorAbi,
       address: this.deployment.keeperEvaluator,
       functionName: "settlementHorizon",
@@ -249,7 +341,7 @@ export class SquareClient {
   }
 
   async challengeEndsAt(jobId: bigint): Promise<number> {
-    const end = await this.publicClient.readContract({
+    const end = await this.read({
       abi: keeperEvaluatorAbi,
       address: this.deployment.keeperEvaluator,
       functionName: "challengeEndsAt",
@@ -259,7 +351,7 @@ export class SquareClient {
   }
 
   async isDisputed(jobId: bigint): Promise<boolean> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: keeperEvaluatorAbi,
       address: this.deployment.keeperEvaluator,
       functionName: "isDisputed",
@@ -268,7 +360,7 @@ export class SquareClient {
   }
 
   async disputeOf(jobId: bigint) {
-    return this.publicClient.readContract({
+    return this.read({
       abi: arbitrationAbi,
       address: this.deployment.arbitration,
       functionName: "disputeOf",
@@ -277,7 +369,7 @@ export class SquareClient {
   }
 
   async bondFor(budget: bigint): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: arbitrationAbi,
       address: this.deployment.arbitration,
       functionName: "bondFor",
@@ -286,7 +378,7 @@ export class SquareClient {
   }
 
   async listing(jobId: bigint) {
-    return this.publicClient.readContract({
+    return this.read({
       abi: claimMarketAbi,
       address: this.deployment.claimMarket,
       functionName: "getListing",
@@ -295,7 +387,7 @@ export class SquareClient {
   }
 
   async payeeOf(jobId: bigint): Promise<Address> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: claimMarketAbi,
       address: this.deployment.claimMarket,
       functionName: "payeeOf",
@@ -303,17 +395,51 @@ export class SquareClient {
     });
   }
 
-  async agentOf(jobId: bigint): Promise<bigint> {
-    return this.publicClient.readContract({
+  /**
+   * Whether the hook answers `boundAgentOf`. Decided once per client, on the
+   * first `agentOf()`: a hook deployed before #300 has no such selector and
+   * the call reverts with no data, which is the one shape taken to mean
+   * "older hook"; anything else is an error and is thrown.
+   */
+  private hookAnswersBoundAgentOf: boolean | undefined;
+
+  /**
+   * The ERC-8004 agent a job's submit bound, or null when none was.
+   *
+   * Agent id 0 is a real agent (on Arc's registry it is the first
+   * registration), so 0 cannot stand for "none": the hook's `agentOf` reverts
+   * with NoAgentBound when nothing is bound and `boundAgentOf` answers both
+   * questions, and this reads the latter. On a hook deployed before #300 only
+   * `agentOf` exists and answers 0 for both; that is read as null, which is
+   * what it meant there and is wrong only for agent 0.
+   */
+  async agentOf(jobId: bigint): Promise<bigint | null> {
+    if (this.hookAnswersBoundAgentOf !== false) {
+      try {
+        const [bound, agentId] = await this.read({
+          abi: squareHookAbi,
+          address: this.deployment.squareHook,
+          functionName: "boundAgentOf",
+          args: [jobId],
+        });
+        this.hookAnswersBoundAgentOf = true;
+        return bound ? agentId : null;
+      } catch (error) {
+        if (!isUnknownSelectorRevert(error)) throw error;
+        this.hookAnswersBoundAgentOf = false;
+      }
+    }
+    const agentId = await this.read({
       abi: squareHookAbi,
       address: this.deployment.squareHook,
       functionName: "agentOf",
       args: [jobId],
     });
+    return agentId === 0n ? null : agentId;
   }
 
   async usdcBalance(account: Address): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: erc20Abi,
       address: this.deployment.usdc,
       functionName: "balanceOf",
@@ -322,7 +448,7 @@ export class SquareClient {
   }
 
   async usdcAllowance(owner: Address, spender: Address): Promise<bigint> {
-    return this.publicClient.readContract({
+    return this.read({
       abi: erc20Abi,
       address: this.deployment.usdc,
       functionName: "allowance",
@@ -452,21 +578,21 @@ export class SquareClient {
     });
   }
 
-  async finalize(jobId: bigint, complianceProof: Hex = "0x"): Promise<TransactionResult> {
+  async finalize(jobId: bigint): Promise<TransactionResult> {
     return this.write({
       abi: keeperEvaluatorAbi,
       address: this.deployment.keeperEvaluator,
       functionName: "finalize",
-      args: [jobId, complianceProof],
+      args: [jobId],
     });
   }
 
-  async finalizeDecided(jobId: bigint, complianceProof: Hex = "0x"): Promise<TransactionResult> {
+  async finalizeDecided(jobId: bigint): Promise<TransactionResult> {
     return this.write({
       abi: keeperEvaluatorAbi,
       address: this.deployment.keeperEvaluator,
       functionName: "finalizeDecided",
-      args: [jobId, complianceProof],
+      args: [jobId],
     });
   }
 
@@ -497,6 +623,10 @@ export class SquareClient {
     return this.write({ abi: arbitrationAbi, address: this.deployment.arbitration, functionName: "lapse", args: [jobId] });
   }
 
+  async settleBond(jobId: bigint): Promise<TransactionResult> {
+    return this.write({ abi: arbitrationAbi, address: this.deployment.arbitration, functionName: "settleBond", args: [jobId] });
+  }
+
   async withdrawBond(): Promise<TransactionResult> {
     return this.write({ abi: arbitrationAbi, address: this.deployment.arbitration, functionName: "withdraw", args: [] });
   }
@@ -510,7 +640,17 @@ export class SquareClient {
     });
   }
 
-  async buyClaim(jobId: bigint, options: { autoApprove?: boolean; expectedPrice?: bigint } = {}): Promise<TransactionResult> {
+  /**
+   * Buy a listed receivable. `eligibility` is this account's salt and path on
+   * the poster's buyer list (square#30), as the poster issued them:
+   * `buyerListFrom(entries).eligibilityOf(account)`. The market rebuilds the
+   * leaf from the sender, so a path issued to another address is refused.
+   */
+  async buyClaim(
+    jobId: bigint,
+    eligibility: BuyerEligibility,
+    options: { autoApprove?: boolean; expectedPrice?: bigint } = {},
+  ): Promise<TransactionResult> {
     const listing = await this.listing(jobId);
     const expectedPrice = options.expectedPrice ?? listing.price;
     if (options.autoApprove ?? true) await this.ensureAllowance(this.deployment.claimMarket, expectedPrice);
@@ -518,12 +658,150 @@ export class SquareClient {
       abi: claimMarketAbi,
       address: this.deployment.claimMarket,
       functionName: "buy",
-      args: [jobId, expectedPrice],
+      args: [jobId, expectedPrice, eligibility.salt, [...eligibility.proof]],
     });
   }
 
   async cancelClaim(jobId: bigint): Promise<TransactionResult> {
     return this.write({ abi: claimMarketAbi, address: this.deployment.claimMarket, functionName: "cancel", args: [jobId] });
+  }
+
+  /** Where buyer lists live. Read from the market, which is bound to it at construction. */
+  async policyRegistry(): Promise<Address> {
+    return this.publicClient.readContract({
+      abi: claimMarketAbi,
+      address: this.deployment.claimMarket,
+      functionName: "policyRegistry",
+    });
+  }
+
+  async buyerRootOf(poster: Address): Promise<Hex> {
+    return this.publicClient.readContract({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "buyerRootOf",
+      args: [poster],
+    });
+  }
+
+  /**
+   * Publish this account's buyer list (square#30): `approveBuyers(...).root`.
+   * Zero approves nobody. Only the root reaches the chain; keep the entries.
+   */
+  async setBuyerRoot(root: Hex): Promise<TransactionResult> {
+    return this.write({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "setBuyerRoot",
+      args: [root],
+    });
+  }
+
+  /**
+   * This poster's policy as the registry holds it: the commitment the
+   * compliance module compares a proof against, the daily ceiling in USDC
+   * atomic units, and the epoch that counts rotations. A zero commitment is
+   * no policy, and the registry treats no policy as authorising nothing.
+   */
+  async policyOf(poster: Address) {
+    return this.publicClient.readContract({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "policyOf",
+      args: [poster],
+    });
+  }
+
+  /**
+   * What the registry has counted against this poster's ceiling today: the
+   * releases from escrow the compliance module recorded, on the UTC day the
+   * chain is in. Funded but unreleased escrow is not in it; the counter moves
+   * at release (square#26).
+   */
+  async spentToday(poster: Address): Promise<bigint> {
+    return this.publicClient.readContract({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "spentToday",
+      args: [poster],
+    });
+  }
+
+  /**
+   * Commit this account's policy: the circuit's Poseidon commitment (below
+   * the BN254 scalar field, or the registry refuses it) and the daily
+   * ceiling in USDC atomic units, at most `uint64`. Every call starts a new
+   * epoch.
+   */
+  async setPolicy(commitment: Hex, dailyLimit: bigint): Promise<TransactionResult> {
+    return this.write({
+      abi: policyRegistryAbi,
+      address: await this.policyRegistry(),
+      functionName: "setPolicy",
+      args: [commitment, dailyLimit],
+    });
+  }
+
+  /**
+   * The compliance module in the hook's slot, or null while the slot is
+   * empty. With a module in place every release out of escrow is checked
+   * against the client's policy and the proof the client bound to the job;
+   * without one no release is proof gated (docs/design/compliance-gate.md).
+   */
+  async complianceModule(): Promise<Address | null> {
+    const module = await this.read({
+      abi: squareHookAbi,
+      address: this.deployment.squareHook,
+      functionName: "complianceModule",
+    });
+    return module === zeroAddress ? null : module;
+  }
+
+  /**
+   * How far the proof's timestamp may sit from the block that releases the
+   * escrow, in seconds, as the installed module has it; null with no module.
+   * A proof older than this at release is refused, which is why binding one
+   * is a duty timed to the release, not a step of funding (square#335).
+   */
+  async complianceTolerance(): Promise<bigint | null> {
+    const module = await this.complianceModule();
+    if (module === null) return null;
+    const tolerance = await this.publicClient.readContract({ abi: complianceModuleAbi, address: module, functionName: "timestampTolerance" });
+    return BigInt(tolerance);
+  }
+
+  /**
+   * Bind a compliance proof to a job this account is the client of, while
+   * the job is Funded or Submitted (square#245): the hook reads it from the
+   * job at release and hands it to the module unchanged. Rebinding replaces
+   * it, which is how a proof is kept current as the payee, the net or the
+   * day's counter move. At most `MAX_COMPLIANCE_PROOF` bytes.
+   */
+  async setComplianceProof(jobId: bigint, proof: Hex): Promise<TransactionResult> {
+    return this.write({ abi: squareJobAbi, address: this.deployment.squareJob, functionName: "setComplianceProof", args: [jobId, proof] });
+  }
+
+  /** The proof bound to the job, `0x` when none is. */
+  async complianceProofOf(jobId: bigint): Promise<Hex> {
+    return this.read({ abi: squareJobAbi, address: this.deployment.squareJob, functionName: "complianceProofOf", args: [jobId] });
+  }
+
+  /**
+   * What the module would say to a release, without moving anything: the
+   * same eight bindings `checkRelease` applies at release, as a view. The
+   * payee and the amount are the hook's to resolve; `payeeOf` and
+   * `netPayout` are what it will pass. Null when no module is installed,
+   * since then nothing is asked.
+   */
+  async previewRelease(params: { jobId: bigint; payee: Address; amount: bigint; client: Address; proof: Hex }): Promise<boolean | null> {
+    const module = await this.complianceModule();
+    if (module === null) return null;
+    return this.publicClient.readContract({
+      abi: complianceModuleAbi,
+      address: module,
+      functionName: "previewRelease",
+      args: [params.jobId, params.payee, params.amount, this.deployment.usdc, params.client, params.proof],
+    });
   }
 
   async recordExpiry(jobId: bigint): Promise<TransactionResult> {
@@ -542,4 +820,16 @@ export class SquareClient {
 
 export function createSquareClient(config: SquareClientConfig): SquareClient {
   return new SquareClient(config);
+}
+
+/**
+ * `createSquareClient`, then the endpoint check, before the client is handed
+ * back. The check runs on first use either way; this is for a caller that
+ * wants a misconfigured `RPC_URL` to fail at startup rather than on the first
+ * request it serves.
+ */
+export async function connectSquareClient(config: SquareClientConfig): Promise<SquareClient> {
+  const client = new SquareClient(config);
+  await client.assertChain();
+  return client;
 }

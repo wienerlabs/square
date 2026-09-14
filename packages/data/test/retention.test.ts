@@ -69,10 +69,8 @@ describe("sweepAll", () => {
       await x402Payments.insertAccepted(db, { ...stale, nonce: hash32(0x43), validBefore: 4_000_000_000n });
 
       expect(await sweepAll(db)).toEqual({
-        idempotency_keys: 1,
-        rate_limits: 1,
-        x402_payments: 1,
-        keeper_actions: 1,
+        removed: { idempotency_keys: 1, rate_limits: 1, x402_payments: 1, keeper_actions: 1 },
+        failures: [],
       });
 
       expect(await idempotencyKeys.get(db, "orders", "live")).not.toBeNull();
@@ -80,11 +78,61 @@ describe("sweepAll", () => {
       expect(await keeperActions.recent(db, 5042002)).toHaveLength(1);
 
       expect(await sweepAll(db)).toEqual({
-        idempotency_keys: 0,
-        rate_limits: 0,
-        x402_payments: 0,
-        keeper_actions: 0,
+        removed: { idempotency_keys: 0, rate_limits: 0, x402_payments: 0, keeper_actions: 0 },
+        failures: [],
       });
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("keeps sweeping when a payment carries a valid_before no timestamp can hold", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      await seedKeeperActions(db);
+      const poisoned: x402Payments.AcceptedPayment = {
+        chainId: 5042002,
+        asset: address(0xa0),
+        payer: address(0xb1),
+        nonce: hash32(0x77),
+        amount: 1n,
+        payTo: address(0xc2),
+        resource: "/v1/resolve",
+        validBefore: 2n ** 62n,
+      };
+      expect(await x402Payments.insertAccepted(db, poisoned)).toBe(true);
+
+      expect(await sweepAll(db)).toEqual({
+        removed: { idempotency_keys: 0, rate_limits: 0, x402_payments: 0, keeper_actions: 1 },
+        failures: [],
+      });
+
+      expect(await x402Payments.get(db, poisoned)).not.toBeNull();
+      expect(await keeperActions.recent(db, 5042002)).toHaveLength(1);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("reports the sweep that failed and still runs the ones after it", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      await seedKeeperActions(db);
+      const refusing: Database = {
+        ...db,
+        query(text: string, params?: unknown[]) {
+          if (text.includes("delete from x402_payments")) {
+            return Promise.reject(new Error('timestamp out of range: "4.61169e+18"'));
+          }
+          return db.query(text, params);
+        },
+      };
+
+      const swept = await sweepAll(refusing);
+
+      expect(swept.removed).toEqual({ idempotency_keys: 0, rate_limits: 0, x402_payments: 0, keeper_actions: 1 });
+      expect(swept.failures).toEqual([{ table: "x402_payments", message: 'timestamp out of range: "4.61169e+18"' }]);
+      expect(await keeperActions.recent(db, 5042002)).toHaveLength(1);
     } finally {
       await db.close();
     }

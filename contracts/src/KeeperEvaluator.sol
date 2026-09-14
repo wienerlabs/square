@@ -51,13 +51,13 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
         emit ArbitrationSet(arbitration_);
     }
 
-    function finalize(uint256 jobId, bytes calldata complianceProof) external nonReentrant {
+    function finalize(uint256 jobId) external nonReentrant {
         ISquareJob.JobRecord memory job = _submittedJob(jobId);
         if (_disputes[jobId].disputedAt != 0) revert Disputed();
         uint48 end = job.submittedAt + windowFor(job.submittedAt).challengeWindow;
         if (block.timestamp < end) revert WindowOpen(end);
 
-        _squareJob.complete(jobId, finalizeReason(jobId, job.deliverable), abi.encode(FULL_BPS, complianceProof));
+        _squareJob.complete(jobId, finalizeReason(jobId, job.deliverable), abi.encode(FULL_BPS, bytes("")));
         uint256 fee = _forwardFee();
         emit Finalized(jobId, msg.sender, fee);
     }
@@ -86,7 +86,7 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
         emit DecisionApplied(jobId, uint8(IArbitration.Outcome.Reject), 0, msg.sender, 0);
     }
 
-    function finalizeDecided(uint256 jobId, bytes calldata complianceProof) external nonReentrant {
+    function finalizeDecided(uint256 jobId) external nonReentrant {
         DisputeRef storage ref = _disputes[jobId];
         if (ref.disputedAt == 0) revert NotDisputed();
         if (ref.resolved) revert AlreadyResolved();
@@ -97,7 +97,7 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
         }
 
         ref.resolved = true;
-        _squareJob.complete(jobId, resolutionHash, abi.encode(providerBps, complianceProof));
+        _squareJob.complete(jobId, resolutionHash, abi.encode(providerBps, bytes("")));
         _arbitration.settleBond(jobId);
         uint256 fee = _forwardFee();
         emit DecisionApplied(jobId, uint8(outcome), providerBps, msg.sender, fee);

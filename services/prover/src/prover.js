@@ -6,9 +6,11 @@ import {
   padAddressList,
   padCategoryList,
   addressToField,
+  categoryBytes,
   hashCategory,
   hashUuid,
   daysToBitmask,
+  uuidHex,
 } from './hash.js';
 import { deriveSalts, POLICY_FIELDS } from './commitment.js';
 import { toFieldString, toHourString, toIdentifier, toPolicySaltString } from './normalize.js';
@@ -161,6 +163,35 @@ export function validateRequest(req) {
     assertWithinCircuitMaximum(req[key].length, max, key);
   }
 
+  // The format of every field, here and not first in buildCircuitInput.
+  //
+  // square#251 measured what happened otherwise: this function checked that the
+  // fields were present, and the helpers below checked what was in them, but only
+  // once proving had started. An operator_id of "acme-corp", a policy_id that is
+  // not a UUID, a negative amount or an empty category all reached the prover and
+  // came back 500, counted in square_proof_failures_total as `invalid_field`. A
+  // caller retries a 500 and a monitor pages on the failure rate, over a typo.
+  //
+  // These are the same helpers buildCircuitInput uses, so a value accepted here is
+  // one it accepts, and the messages are the ones it already raised: the field's
+  // name, never its value. The category and the UUID are checked without the
+  // Poseidon hash that follows them there.
+  for (const key of ['max_daily_spend', 'max_per_transaction', 'payment_amount', 'daily_spent_before', 'current_unix_timestamp']) {
+    toFieldString(req[key], key);
+  }
+  toFieldString(req.stripe_receipt_hash ?? '0', 'stripe_receipt_hash');
+  for (const key of ['operator_id', 'payment_recipient', 'payment_token']) {
+    addressToField(req[key], key);
+  }
+  for (const key of ['blocked_addresses', 'token_whitelist']) {
+    for (const entry of req[key]) addressToField(entry, key);
+  }
+  categoryBytes(req.payment_endpoint_category, 'payment_endpoint_category');
+  for (const category of req.allowed_endpoint_categories) {
+    categoryBytes(category, 'allowed_endpoint_categories');
+  }
+  uuidHex(req.policy_id, 'policy_id');
+
   // time_restrictions gets the same treatment as the three lists above.
   //
   // It did not, and the consequence was quiet: a value that is not an array was
@@ -261,6 +292,11 @@ export function validateRequest(req) {
           + 'time_restrictions entirely to leave the window unrestricted.',
         );
       }
+
+      // The day names, with the hours rather than after them. An hour of 25 was
+      // refused here with 400 and a day of "mondayy" was not, so one object
+      // answered two codes for the same kind of mistake (square#251).
+      daysToBitmask(restriction.allowed_days);
 
       // The timezone, here rather than in buildCircuitInput.
       //

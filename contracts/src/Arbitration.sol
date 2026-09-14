@@ -88,6 +88,10 @@ contract Arbitration is IArbitration, Ownable2Step, ReentrancyGuard {
         Dispute storage d = _disputes[jobId];
         if (d.disputedAt == 0) revert UnknownDispute();
         if (d.outcome != Outcome.None) revert AlreadyDecided();
+        ISquareJob.JobStatus status = _squareJob.getJobRecord(jobId).status;
+        if (status != ISquareJob.JobStatus.Submitted && status != ISquareJob.JobStatus.Funded) {
+            revert JobNoLongerVotable(uint8(status));
+        }
         if (outcome == Outcome.Complete) {
             if (providerBps == 0 || providerBps > FULL_BPS) revert BadResolution();
             if (providerBps != FULL_BPS && !_squareJob.getJobRecord(jobId).hookResolvesPayout) {
@@ -130,14 +134,18 @@ contract Arbitration is IArbitration, Ownable2Step, ReentrancyGuard {
         if (d.disputedAt == 0) revert UnknownDispute();
         ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
         if (job.status == ISquareJob.JobStatus.Expired) {
-            _settleBond(jobId, d, d.disputer);
+            _settleBond(jobId, d, _bondPayee(d, job));
             return;
         }
         if (d.outcome != Outcome.Complete && d.outcome != Outcome.Lapsed) revert NothingToSettle();
         if (job.status != ISquareJob.JobStatus.Completed) revert NothingToSettle();
-        address to = d.disputer;
-        if (d.outcome == Outcome.Complete && d.providerBps == FULL_BPS) to = job.payee;
-        _settleBond(jobId, d, to);
+        _settleBond(jobId, d, _bondPayee(d, job));
+    }
+
+    function _bondPayee(Dispute storage d, ISquareJob.JobRecord memory job) private view returns (address) {
+        if (d.outcome != Outcome.Complete || d.providerBps != FULL_BPS) return d.disputer;
+        if (job.payee != address(0)) return job.payee;
+        return job.provider == address(0) ? d.disputer : job.provider;
     }
 
     function withdraw() external {
@@ -197,7 +205,10 @@ contract Arbitration is IArbitration, Ownable2Step, ReentrancyGuard {
         d.resolutionHash = hash;
         emit DecisionReached(jobId, uint8(outcome), providerBps, hash);
         if (outcome == Outcome.Reject) {
-            _keeperEvaluator.applyRejection(jobId, hash);
+            try _keeperEvaluator.applyRejection(jobId, hash) {}
+            catch (bytes memory reason) {
+                emit RejectionNotApplied(jobId, reason);
+            }
             _settleBond(jobId, d, d.disputer);
         }
     }
