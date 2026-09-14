@@ -73,7 +73,10 @@ describe("decodeSquareLogs", () => {
       removed: false,
     } as Log;
 
-    expect(decodeSquareLogs([log], deployment)).toEqual([]);
+    // The local constant names DeployLocal's module, so it is taken out here to
+    // read as a stack that has none.
+    const { complianceModule: _named, ...withoutModule } = deployment;
+    expect(decodeSquareLogs([log], withoutModule)).toEqual([]);
 
     const [event] = decodeSquareLogs([log], { ...deployment, complianceModule: module });
     expect(event?.contract).toBe("ComplianceModule");
