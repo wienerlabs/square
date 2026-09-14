@@ -80,22 +80,31 @@ does need a funded key.
 ## Through the Universal Resolver
 
 ```console
-$ docker compose -f docs/smoke/universal-resolver.compose.yml up --build -d
+$ docker compose -f docs/smoke/universal-resolver.compose.yml up -d
 $ curl -s -H 'Accept: application/ld+json' \
     http://localhost:8090/1.0/identifiers/did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:892271
 $ docker compose -f docs/smoke/universal-resolver.compose.yml down
 ```
 
-The driver is built from this repository rather than pulled, because
-`ghcr.io/wienerlabs/driver-did-aip` is still private (#64) and the upstream
-driver entry still describes v1 (#65). Once both are done the same request works
-against the public Universal Resolver with no local build.
+The driver is the published image, `ghcr.io/wienerlabs/driver-did-aip:<version>`,
+pulled anonymously: the GHCR package is public (#64), and nothing is built
+locally. The upstream driver entry,
+[decentralized-identity/universal-resolver#561](https://github.com/decentralized-identity/universal-resolver/pull/561),
+describes this v2 driver (#65): its `docker-compose.yml` and `application.yml`
+entries are the ones this directory mirrors, and it links the specification at
+[`docs/did-aip/method-spec-v2.md`](../did-aip/method-spec-v2.md). Until it is
+merged, the public resolver at `dev.uniresolver.io` does not serve `did:aip`, and
+this compose file is how the same request is made.
 
 The resolver's driver table is baked into its image and no environment variable
 can add an entry, so [`uni-resolver-application.yml`](uni-resolver-application.yml)
 replaces the table wholesale through `SPRING_CONFIG_ADDITIONAL_LOCATION`. The
 result serves `did:aip` and nothing else, which is the point: the question is
 whether the driver behaves the same inside `uni-resolver-web` as it does alone.
+`GET /1.0/methods` answering `["aip"]` says the table was taken; the full
+upstream list means it was not. On Docker Desktop that happens when the checkout
+sits outside the paths shared with the VM: the bind mount then lands as an empty
+directory and the resolver keeps its own table.
 
 It does. For both agents the DID Document returned by the Universal Resolver is
 identical to the one `square resolve` returns, field for field.
@@ -116,5 +125,6 @@ Nothing is lost in the body: the response still carries
 `"error": {"type": "unsupportedVersion", ...}` with our message. Only the status
 line is coarser. Changing the driver to say `methodNotSupported` would get a
 tidier status by stating something false, since the method *is* supported and
-the identifier *is* well-formed. The status stays 501 on the driver, and #65
-records the difference so nobody reads a 500 as a broken driver.
+the identifier *is* well-formed. The status stays 501 on the driver, and the
+upstream pull request records the difference so nobody reads a 500 as a broken
+driver.

@@ -1,0 +1,49 @@
+{
+  "name": "@squaresdk/hosted",
+  "version": "0.1.0",
+  "description": "Run an institution's agent on the platform from a configuration: each capability is a Claude run with instructions and MCP tools, served as a Square agent whose tasks are paid through escrow, and able to hire other agents for subtasks within the institution's on-chain policy allowance.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "square-hosted": "dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:anvil": "ANVIL=1 vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "@squaresdk/a2a": "file:../a2a",
+    "@squaresdk/agent": "file:../agent",
+    "@squaresdk/core": "file:../core",
+    "@squaresdk/did-resolver": "file:../did-resolver",
+    "@squaresdk/mcp": "file:../mcp",
+    "viem": "^2.48.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^1.14.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@types/node": "^22.20.1",
+    "hono": "^4.7.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

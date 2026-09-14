@@ -139,7 +139,9 @@ packages/    did-resolver, cli, did-aip-driver, core (SDK, embedded ABIs), data 
              failover, signed actions), observability (logs, metrics, health, alerts),
              x402 (payment gateway), aa (ERC-4337 smart accounts), a2a (task protocol),
              agent (an agent in a few lines: card, A2A tasks paid through escrow, x402),
-             mcp (agents calling MCP tools; Square as an MCP server for Claude Desktop)
+             mcp (agents calling MCP tools; Square as an MCP server for Claude Desktop),
+             hosted (an institution's agent run from a configuration: Claude with MCP
+             tools per capability, delegation to other agents under its on-chain policy)
 services/    prover, indexer, keeper
 app/         Next.js reference application (static export, wagmi, Open Runde design system)
 site/        The website at https://square-protocol.vercel.app: what Square is, and the door to the app

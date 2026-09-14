@@ -411,7 +411,7 @@ async function finalize(s, { jobId, client, provider, encoded, label }) {
   // square#245 moved the proof onto the job: the module reads what the client
   // bound with `setComplianceProof`, and the bytes a crank passes to `finalize`
   // decide nothing. So the client binds it first, as refuse-and-replay-on-anvil
-  // does, and the same bytes still go to the crank. The baseline carries no
+  // does, and finalize carries nothing (square#307). The baseline carries no
   // proof and runs with no module installed, so it has nothing to bind.
   if (encoded !== '0x') await send(client, s.kernel, 'setComplianceProof', [jobId, encoded], `bind ${label}`);
   const before = {
@@ -419,7 +419,7 @@ async function finalize(s, { jobId, client, provider, encoded, label }) {
     client: await read(s.kernel, 'withdrawable', [client.address]),
     spent: await read(s.registry, 'spentToday', [client.address]),
   };
-  const receipt = await send(env.profile.funder, s.keeper, 'finalize', [jobId, encoded], `finalize ${label}`);
+  const receipt = await send(env.profile.funder, s.keeper, 'finalize', [jobId], `finalize ${label}`);
   const moduleEvents = s.module
     ? parseEventLogs({ abi: s.module.abi, logs: receipt.logs })
       .filter((e) => e.address.toLowerCase() === s.module.address.toLowerCase() && e.args.jobId === jobId)
@@ -514,7 +514,7 @@ async function settleOpenJobs(s) {
   let settled = 0;
   for (const jobId of open) {
     try {
-      await send(env.profile.funder, s.keeper, 'finalize', [jobId, '0x'], `recover: finalize ${jobId}`);
+      await send(env.profile.funder, s.keeper, 'finalize', [jobId], `recover: finalize ${jobId}`);
       settled += 1;
     } catch (error) {
       process.stderr.write(`could not settle job ${jobId}: ${error.message}\n`);

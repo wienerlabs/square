@@ -28,11 +28,12 @@ pull request.
 | `a2a` | `@squaresdk/a2a` typechecks and builds, and an agent still cannot pay itself. |
 | `agent (anvil)` | `@squaresdk/agent`: the card against the schema, admission and delivery against a stub chain, and the whole loop on anvil with `DeployLocal.s.sol`: a funded job, `task/create`, `DELIVERED` by the on-chain `submit`, the crank's `finalize`, the provider's withdrawal. **Not required** until it has run without flaking. |
 | `mcp (anvil)` | `@squaresdk/mcp`: the tool pool against a real MCP server over Streamable HTTP, the Square MCP server through an in-memory MCP client, and on anvil both directions at once: an agent whose capability is a bridged MCP tool, hired through `square-mcp` spawned over stdio. **Not required** until it has run without flaking. |
+| `hosted (anvil)` | `@squaresdk/hosted`: sealing, the configuration, the model loop against a scripted model, the allowance over a Map of a chain, the handlers with a real MCP server; and on anvil a hosted agent taking a funded job, delegating a subtask under escrow from its own wallet within its committed policy, refused past it, with `square-hosted` sealing a key and serving a configuration. **Not required** until it has run without flaking. |
 | `cli` | The resolver and the CLI build; the CLI's exit codes are unchanged. Hermetic. |
 | `did-aip-driver (unit)` | The driver's config parsing and envelope construction. |
 | `did-aip-driver image` | The container answers, and a malformed DID is still a 400 rather than a 500. On `main` it then publishes `:<version>` and `:sha-<commit>` to GHCR; the version tag is written once and never overwritten, so a version that already exists is left as it is and only the sha tag is pushed. |
 | `did-aip-driver version` | Pull requests only. If anything the Dockerfile copies into the image changed (the driver's and the resolver's sources, manifests and tsconfigs), `packages/did-aip-driver/package.json` must carry a new version, because the version tag is written once and a change without a bump would never be published under a version. **Not required**, see below. |
-| `local stack (make up)` | The four Dockerfiles build, the whole stack comes up on a runner, and every service answers `/health` with a passing status. Also asserts the contracts have bytecode on the chain and that the prover returns a real proof. **Listed in `branch-protection.json` but not required yet:** that file is applied by hand after a merge, so this one starts gating when the command below is next run. |
+| `local stack (make up)` | The four Dockerfiles build, the whole stack comes up on a runner, and every service answers `/health` with a passing status. Also asserts the contracts have bytecode on the chain and that the prover returns a real proof. Required since 2026-09-14, when the payload was applied with the review gate of [docs/decisions/review-gate.md](decisions/review-gate.md); its last five runs on `main` were green. |
 | `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. A red `secret scan` names the rule, the file and the line in the job log: gitleaks runs with `--verbose`, and with `--redact` beside it the value itself is never printed. It walks the git history, so the finding can sit in a commit the diff no longer shows. |
 
 Eight are **not** required to merge. Five of them are not required because their
@@ -291,6 +292,13 @@ gh api -X PUT repos/wienerlabs/square/branches/main/protection \
 `strict: true` means a branch has to be up to date with `main` before it can
 merge, so the checks that gate a merge are the ones that ran against the code
 that will actually land.
+
+`required_pull_request_reviews` is the review gate of
+[docs/decisions/review-gate.md](decisions/review-gate.md): a pull request that
+touches `contracts/` or `circuits/` needs an approving review from a code owner
+in `.github/CODEOWNERS` who did not author it; any other pull request needs
+none. After applying the payload, confirm both: a documentation pull request
+shows no review requirement, a contracts pull request shows one.
 
 Renaming a job renames its check. A required check that no longer reports blocks
 every merge, so the list above and the job names in the workflows have to move

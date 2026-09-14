@@ -340,7 +340,7 @@ contract SquareJobTest is BaseTest {
         vm.prank(client);
         kernel.claimRefund(submitted);
         vm.prank(provider);
-        keeper.finalize(submitted, "");
+        keeper.finalize(submitted);
         assertEq(uint8(status(submitted)), uint8(ISquareJob.JobStatus.Completed), "the provider cranks it alone");
         assertEq(kernel.withdrawable(provider), netOf(BUDGET));
         assertSolvent();
@@ -396,7 +396,7 @@ contract SquareJobTest is BaseTest {
         pastWindow(jobId);
         uint256 before = gasleft();
         vm.prank(cranker);
-        keeper.finalize(jobId, "");
+        keeper.finalize(jobId);
         uint256 used = before - gasleft();
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));
         assertLt(used, HOOK_GAS_LIMIT, "the whole finalize, hook included, stays under one hook budget");

@@ -1,4 +1,3 @@
-import type { Hex } from "viem";
 import { JobStatus, squareHookAbi, type SquareClient } from "@squaresdk/core";
 import { disputes, jobs, keeperActions, keeperJobState, type Database } from "@squaresdk/data";
 import { waitUnlessAborted, type Logger, type Metrics } from "@squaresdk/observability";
@@ -47,7 +46,6 @@ export interface KeeperOptions {
   expiryIntervalMs?: number;
   ephemeralMirror?: boolean;
   retryPolicy?: KeeperRetryPolicy;
-  complianceProofFor?: (jobId: bigint) => Promise<Hex>;
 }
 
 interface RetryState {
@@ -61,6 +59,7 @@ export interface TickReport {
   finalized: bigint[];
   applied: bigint[];
   lapsed: bigint[];
+  bondsSettled: bigint[];
   skipped: Array<{ jobId: bigint; reason: string }>;
   nearExpiry: bigint[];
   pending: number;
@@ -109,7 +108,7 @@ export class Keeper {
     return this.retries.get(jobId.toString());
   }
 
-  private async noteFailure(jobId: bigint, action: "finalize" | "finalizeDecided" | "lapse", message: string, now: bigint): Promise<boolean> {
+  private async noteFailure(jobId: bigint, action: "finalize" | "finalizeDecided" | "lapse" | "settleBond", message: string, now: bigint): Promise<boolean> {
     const { db, chainId, logger, metrics } = this.options;
     const policy = this.retryPolicy;
     const key = jobId.toString();
@@ -200,6 +199,7 @@ export class Keeper {
       finalized: [],
       applied: [],
       lapsed: [],
+      bondsSettled: [],
       skipped: [],
       nearExpiry: [],
       pending: 0,
@@ -285,9 +285,8 @@ export class Keeper {
         }
         continue;
       }
-      const proof = this.options.complianceProofFor ? await this.options.complianceProofFor(candidate.jobId) : "0x";
       try {
-        const result = action.kind === "finalize" ? await client.finalize(candidate.jobId, proof) : await client.finalizeDecided(candidate.jobId, proof);
+        const result = action.kind === "finalize" ? await client.finalize(candidate.jobId) : await client.finalizeDecided(candidate.jobId);
         const paid = result.events.find((e) => e.contract === "KeeperEvaluator" && (e.eventName === "Finalized" || e.eventName === "DecisionApplied"));
         const fee = paid && "keeperFee" in paid.args ? (paid.args.keeperFee as bigint) : 0n;
         await keeperActions.append(db, { chainId, jobId: candidate.jobId, action: action.kind, txHash: result.hash, gasUsed: result.receipt.gasUsed, feeEarned: fee });
@@ -306,8 +305,42 @@ export class Keeper {
       }
     }
 
+    await this.settleBondsOfExpiredJobs(now, report);
+
     metrics?.recordKeeperTick();
     return report;
+  }
+
+  private async settleBondsOfExpiredJobs(now: bigint, report: TickReport): Promise<void> {
+    const { db, chainId, client, logger, metrics } = this.options;
+    const rows = await jobs.listExpiredDisputed(db, chainId, client.deployment.keeperEvaluator);
+    for (const row of rows) {
+      const retry = this.retryOf(row.jobId);
+      if (retry?.gaveUp === true) {
+        report.skipped.push({ jobId: row.jobId, reason: "gaveUp" });
+        continue;
+      }
+      if (retry !== undefined && now < retry.nextAttemptAt) {
+        report.skipped.push({ jobId: row.jobId, reason: "backoff" });
+        continue;
+      }
+      const dispute = await client.disputeOf(row.jobId);
+      if (dispute.disputedAt === 0 || dispute.bondSettled) continue;
+      try {
+        const result = await client.settleBond(row.jobId);
+        await keeperActions.append(db, { chainId, jobId: row.jobId, action: "settleBond", txHash: result.hash, gasUsed: result.receipt.gasUsed });
+        metrics?.recordKeeperAction("settleBond", "success");
+        this.retries.delete(row.jobId.toString());
+        report.bondsSettled.push(row.jobId);
+        logger.info("keeper.bond_settled", {
+          jobId: row.jobId.toString(),
+          txHash: result.hash,
+          reason: "the job expired under its dispute, so the bond is routed the way the decision says and nobody had to know the ABI",
+        });
+      } catch (error) {
+        await this.noteFailure(row.jobId, "settleBond", error instanceof Error ? error.message : String(error), now);
+      }
+    }
   }
 
   private profitableInMirror(row: jobs.JobRecord, economics: KeeperEconomics): boolean {

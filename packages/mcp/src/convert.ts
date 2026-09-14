@@ -18,16 +18,30 @@ export function describeTool(tool: McpTool): string {
   return text.length > MAX_DESCRIPTION ? `${text.slice(0, MAX_DESCRIPTION - 1)}…` : text || `${tool.tool} on ${tool.server}`;
 }
 
-/** The schema as an object schema, with the `$schema` header the SDK adds removed: the model APIs do not want it. */
-function parameters(schema: JsonSchemaObject): Record<string, unknown> {
-  const { $schema: _schema, ...rest } = schema;
-  return { ...rest, type: "object", properties: (rest.properties as Record<string, unknown> | undefined) ?? {} };
+/** An object schema, as every tool's input schema is. */
+export interface ObjectSchema {
+  type: "object";
+  properties: Record<string, unknown>;
+  required?: string[];
+  [key: string]: unknown;
 }
 
+/** The schema as an object schema, with the `$schema` header the SDK adds removed: the model APIs do not want it. */
+function parameters(schema: JsonSchemaObject): ObjectSchema {
+  const { $schema: _schema, required, ...rest } = schema;
+  return {
+    ...rest,
+    type: "object",
+    properties: (rest.properties as Record<string, unknown> | undefined) ?? {},
+    ...(Array.isArray(required) ? { required: required.filter((r): r is string => typeof r === "string") } : {}),
+  };
+}
+
+/** The shape `@anthropic-ai/sdk`'s `Tool` takes; assignable to it. */
 export interface AnthropicTool {
   name: string;
   description: string;
-  input_schema: Record<string, unknown>;
+  input_schema: ObjectSchema;
 }
 
 /** Anthropic Messages API `tools[]`. */
@@ -37,7 +51,7 @@ export function toolsForAnthropic(tools: readonly McpTool[]): AnthropicTool[] {
 
 export interface OpenAITool {
   type: "function";
-  function: { name: string; description: string; parameters: Record<string, unknown> };
+  function: { name: string; description: string; parameters: ObjectSchema };
 }
 
 /** OpenAI Chat Completions `tools[]`. */
