@@ -16,7 +16,7 @@ pull request.
 | `build, test, gas` | The whole Foundry suite, `forge build --sizes`, a gas report on the pull request and a coverage table on the run summary. |
 | `@squaresdk/core against anvil` | The SDK drives all five settlement paths against a locally deployed stack, and the committed ABI modules match a fresh `forge build` and document every event they declare. |
 | `verifies on Arc Testnet` | A proof the prover produced verifies against Arc's own `0x06`/`0x07`/`0x08`, not revm's. |
-| `circuits` | `payment.circom` compiles, a proving key builds, and the whole constraint suite runs against them. How many tests passed is on the run summary, not in this table: a count written by hand here drifts the moment a test is added. |
+| `circuits` | `payment.circom` compiles, a proving key builds, and the whole constraint suite runs against them. The ceremony's pinned drand quicknet chain hash and group key are checked against `api.drand.sh` itself. How many tests passed is on the run summary, not in this table: a count written by hand here drifts the moment a test is added. |
 | `prover (real proving key)` | The prover agrees with the circuit, and its Solidity calldata matches `snarkjs`. |
 | `end-to-end (policy → proof → Arc)` | A policy, a proof built from it, and Arc accepting that proof — not from a fixture. **Not required**, see below. |
 | `refuse and replay (policy → proof → anvil)` | A payment over the policy's ceiling is proved, verified, and still pays the provider nothing; a compliant payment is released once and then refused on replay — as the same bytes and as a re-randomised copy. Every refusal is asserted by the module's own reason. **Not required**, see below. |
@@ -60,12 +60,20 @@ network and are not required only because they are new.
 and defends a claim the README makes, so it is required. If it turns out to
 flake, move it to the list above rather than deleting it.
 
+`circuits` depends on drand the same way, for the same reason (square#260). Its
+step `The drand pin, against the live chain` sends two free GETs to
+`api.drand.sh` and holds the chain hash and group key pinned in
+`circuits/scripts/ceremony.mjs` to what drand serves. The ceremony's beacon rests
+on that pin, and a wrong one would otherwise surface only when `beacon <round>`
+runs, with every contribution already made. The same rule applies: if it
+flakes, move that step to a job that is not required.
+
 ## A green run that tested nothing
 
 This is the failure this setup exists to prevent, and it is not hypothetical:
 `covenant` carried 5,952 lines of tests across 33 files that CI never executed.
 
-The shape it takes here is subtler than "no test job". Twelve suites guard
+The shape it takes here is subtler than "no test job". The suites below guard
 themselves with `skipIf`, and a job that does not satisfy the guard reports green
 having executed nothing. The full inventory, because a partial one is how the
 next instance of this hides:
@@ -75,6 +83,7 @@ next instance of this hides:
 | `!HAVE_WASM`, `!HAVE_ZKEY` | `circuits/test/payment.test.js` | `circuits` | satisfied — the job builds the circuit and a key |
 | `!HAVE_PTAU`, `!HAVE_ZKEY` | `circuits/test/ptau-adoption.test.js` | `circuits` | satisfied — the build fetches and hash-checks the ptau |
 | `!HAVE_BUILD` | `circuits/test/timestamp-soundness.test.js` | `circuits` | satisfied |
+| `!LIVE` | `circuits/test/drand-beacon.test.js` (the pinned quicknet chain hash and group key against `api.drand.sh`) | `circuits` | satisfied in its own step, `The drand pin, against the live chain`, which sets `LIVE=1` and fails unless both live tests ran. Skipped by design in the job's `Tests` step, which is offline apart from the ptau (square#260). |
 | `!HAVE_CIRCUIT` | `services/prover/test/circuit-agreement.test.js` | `prover (real proving key)` | satisfied |
 | `!hasArtifacts` | `services/prover/test/prove-route.e2e.test.js` | `prover (real proving key)` | satisfied |
 | `!HAVE_ARTIFACTS` | `services/prover/test/solidity-encoding.test.js` | `prover (real proving key)` | satisfied |
@@ -84,6 +93,8 @@ next instance of this hides:
 | `!forkUrl` | `packages/core/test/fork.test.ts` | `@squaresdk/core against anvil` | **not satisfied.** `ARC_FORK_RPC_URL` is set by no workflow, so the lifecycle has never been exercised against the real ERC-8004 registries in CI. Named on the run summary so the gap is visible. |
 | `!configured` | `packages/x402/test/live.test.ts` | `packages/x402 (anvil)` | **not satisfied.** Needs `ARC_TESTNET_RPC_URL` and two funded keys. |
 | `!process.env.LIVE` | `packages/did-resolver/test/integration.test.ts` | `cli` | **not satisfied, by design.** `cli` is hermetic; the live reads run in `end-to-end (Arc Testnet)`. |
+| `!live`, `!funded` | `packages/cli/test/live.test.ts` | `acceptance (Arc Testnet, funded key)` | satisfied there, which runs `npm run test:live`. The reads need only `LIVE=1`; the registration also needs `SQUARE_PRIVATE_KEY`, so it runs on pushes to `main` and same-repository pull requests and skips itself, named on the run summary, where the secret is absent. The job is path-filtered and not required. Skipped in `cli` by design, which is hermetic. |
+| `!process.env.SMOKE` | `packages/cli/test/smoke.test.ts` | `end-to-end (Arc Testnet)` | satisfied there, which runs `npm run test:smoke`. Skipped in `cli` by design. |
 | `!("stack" in ready)`, `notReady !== null` | `packages/policy/test/anvil.test.ts`, `packages/cli/test/policy.anvil.test.ts`, `packages/mcp/test/compliance.test.ts`, `packages/hosted/test/compliance.test.ts` | `policy → proof → release (anvil, every surface)` | satisfied — the job installs the module and starts the prover, and asserts both before the suites run. In `mcp (anvil)`, `hosted (anvil)` and `cli` the two compliance suites skip by design: those stacks hold no module. |
 | `!proverInstalled` | `packages/policy/test/commitment.test.ts` (the cross-check against the prover) | `packages/policy`, `policy → proof → release` | satisfied in the second, where the prover is installed; skipped in the first, by design. |
 

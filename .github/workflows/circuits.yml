@@ -125,6 +125,34 @@ jobs:
       - name: Tests
         run: npm test -- --reporter=default --reporter=json --outputFile.json=/tmp/circuits.json
 
+      # square#260. The beacon rests on the quicknet chain hash and group key
+      # pinned in scripts/ceremony.mjs, and the only tests that hold that pin to
+      # what drand actually serves are the LIVE ones in drand-beacon.test.js. The
+      # offline tests compare it with a fixture kept in the same test file, so a
+      # pin copied wrong, or a chain drand rotated, passed them. Two free GETs to
+      # api.drand.sh, no key. This makes a required check depend on drand being
+      # reachable; like `verifies on Arc Testnet` (docs/ci.md), if it flakes it
+      # moves to a job that is not required rather than being deleted.
+      #
+      # vitest exits 0 when a suite skips, so the step then reads the report and
+      # fails unless both live tests ran and passed.
+      - name: The drand pin, against the live chain
+        env:
+          LIVE: "1"
+        run: |
+          npx vitest run test/drand-beacon.test.js --reporter=default --reporter=json --outputFile.json=/tmp/drand.json
+          node -e '
+            const report = JSON.parse(require("fs").readFileSync("/tmp/drand.json", "utf8"));
+            const live = report.testResults.flatMap((f) => f.assertionResults)
+              .filter((t) => t.ancestorTitles.includes("against the live chain (LIVE=1)") && !t.title.startsWith("skipped: "));
+            const passed = live.filter((t) => t.status === "passed");
+            for (const t of live) console.log(`  ${t.status.padEnd(7)} ${t.title}`);
+            if (live.length !== 2 || passed.length !== 2) {
+              console.error(`expected the two live drand tests to run and pass; ${passed.length} of ${live.length} did`);
+              process.exit(1);
+            }
+          '
+
       - name: How many tests ran
         if: always()
         run: node ../.github/scripts/vitest-summary.mjs /tmp/circuits.json circuits
