@@ -89,6 +89,15 @@ as a settlement, not an error, and the escrow moves once either way. The
 keeper is not made aware of any of this: to it a job with a current proof is
 a job like any other.
 
+**On a hook that screens, the payee's record is read before the crank.** A
+hook with a screening registry pays nothing to a payee without a fresh, clean
+record, whatever the proof says (square#35). So the duty reads the record as
+the keeper does before it finalizes: a cleared payee is cranked, a payee a
+fresh record says is designated is cranked too, and a payee with no fresh
+record is asked about at the screener the duty was given and, still without
+one, held rather than cranked into the refusal (square#369;
+[sanctions-screening.md](sanctions-screening.md) §4).
+
 **A release the policy refuses is reported, not bound.** The circuit proves
 the six checks ran, not that they passed, and a proof with `is_compliant = 0`
 is refused at release the way no proof is. The prover names the rules that

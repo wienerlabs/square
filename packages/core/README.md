@@ -71,6 +71,19 @@ contracts (`decodeReceipt` does the same for a receipt you already hold).
 **A write needs a wallet; a read does not.** Construct with `publicClient` alone for a
 read-only client; a write on it throws `WalletRequiredError`.
 
+**`fund` screens the parties first, on a hook that screens.** A hook with a screening
+registry installed (`screening()` names it; [sanctions-screening.md](../../docs/decisions/sanctions-screening.md))
+refuses to fund a client or a provider without a fresh, clean record. So `fund` reads
+both records before it sends (`screeningOf(address)` answers `cleared`, `sanctioned`,
+`unscreened` or `no-screening`), asks the client's `screener` for whoever lacks one,
+reads again, and throws `PartyNotClearedError` naming the party and why when one is
+still not cleared. Nothing is sent then: the job stays `Open` with its budget set, the
+client keeps its USDC, and the same `fund` completes it once the party is cleared. Pass
+`screener: createScreenerClient({ url })` to `createSquareClient` to have it ask the
+screener service (services/screener); with no screener, an unscreened party is refused
+before sending rather than reverting on chain. A hook that predates screening is read as
+one that screens nobody, once.
+
 ## The spec hash
 
 A job's description is the commitment to what was ordered. `createJob({ spec })` writes
@@ -112,6 +125,9 @@ the ERC-20 one).
   bytes of `submit` (agent id and validation request) and `complete` (provider share and
   compliance proof).
 - `agentFromDid`: a `did:aip` v2 identifier as `{ chainId, registry, agentId }`.
+- `createScreenerClient({ url })`: `POST /screen` at the screener service, sixteen
+  addresses to a request, as a `Screener`; `ScreenerError` when it refuses or cannot be
+  reached. Any `{ screen(addresses) }` that puts records on chain serves as one.
 - The ABIs, from `@squaresdk/core/abi` as well, generated from the compiled contracts and
   checked in CI to still match them.
 
@@ -124,5 +140,7 @@ npm run lifecycle     # the five settlement paths end to end, written up as a re
 ```
 
 `test/fork.test.ts` runs the same lifecycle against a fork of Arc Testnet with the real
-ERC-8004 registries when `ARC_FORK_RPC_URL` is set. `npm run generate:abi` regenerates the
+ERC-8004 registries when `ARC_FORK_RPC_URL` is set. `test/screening.test.ts` is the
+funding screening against a table of registry answers; the anvil suite installs the
+stack's registry on the hook for one case and takes it off again. `npm run generate:abi` regenerates the
 ABIs from `contracts/out`; CI fails if the checked-in copy differs.

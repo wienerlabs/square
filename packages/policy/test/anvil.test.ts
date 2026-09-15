@@ -1,13 +1,14 @@
-import { JobStatus, approveBuyers, hashDeliverable } from "@squaresdk/core";
-import { parseUnits } from "viem";
-import { beforeAll, describe, expect, it } from "vitest";
+import { JobStatus, approveBuyers, hashDeliverable, screeningRegistryAbi, squareHookAbi, type Screener } from "@squaresdk/core";
+import { createWalletClient, http, keccak256, parseUnits, stringToHex, zeroAddress, type Address } from "viem";
+import { foundry } from "viem/chains";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ComplianceDuty, type DutyEvent } from "../src/duty.js";
 import { policyCommitment } from "../src/commitment.js";
 import { newPolicy, type Policy } from "../src/policy.js";
 import { decodeComplianceProof, signalsOf } from "../src/proof.js";
 import { createProverClient } from "../src/prover.js";
 import { bindComplianceProof, proofState, releaseFacts } from "../src/release.js";
-import { account, complianceStack, proverUrl, type Stack } from "./helpers/stack.js";
+import { account, complianceStack, proverUrl, rpcUrl, type Stack } from "./helpers/stack.js";
 
 /**
  * The institution's side of the gate, end to end on a stack with the module
@@ -126,6 +127,88 @@ describe.skipIf(!("stack" in ready))("policy → proof → release, on chain", (
     expect(events.filter((e) => e.type === "released" && e.jobId === jobId)).toMatchObject([{ verified: true, payee: account(3).address }]);
     expect((await buyer().withdrawable(account(3).address)) - before).toBe(facts.amount);
   }, 240_000);
+
+  describe("on a hook that screens (square#369)", () => {
+    const registry = () => stack.deployment.screeningRegistry;
+    const owner = () => createWalletClient({ chain: foundry, transport: http(rpcUrl), account: account(0) });
+    const screenerAccount = account(8);
+    const send = async (hash: Promise<`0x${string}`>) => stack.publicClient.waitForTransactionReceipt({ hash: await hash });
+    // What the screener service does, from a test: a clean record per subject, signed by a registered key and submitted, answered after the receipt.
+    const screenerAsked: Address[][] = [];
+    const screener: Screener = {
+      async screen(subjects) {
+        screenerAsked.push([...subjects]);
+        const block = await stack.publicClient.getBlock();
+        const screenings = subjects.map((subject) => ({ subject, sanctioned: false, screenedAt: block.timestamp, source: keccak256(stringToHex("test-screener")), evidence: keccak256(subject) }));
+        const signatures: `0x${string}`[] = [];
+        for (const screening of screenings) {
+          const digest = await stack.publicClient.readContract({ abi: screeningRegistryAbi, address: registry()!, functionName: "digestOf", args: [screening] });
+          signatures.push(await screenerAccount.sign({ hash: digest }));
+        }
+        const wallet = createWalletClient({ chain: foundry, transport: http(rpcUrl), account: screenerAccount });
+        await send(wallet.writeContract({ abi: screeningRegistryAbi, address: registry()!, functionName: "submitMany", args: [screenings, signatures] }));
+      },
+    };
+
+    beforeAll(async () => {
+      if (registry() === undefined) return;
+      await send(owner().writeContract({ abi: squareHookAbi, address: stack.deployment.squareHook, functionName: "setScreening", args: [registry()!] }));
+      await send(owner().writeContract({ abi: screeningRegistryAbi, address: registry()!, functionName: "setScreener", args: [screenerAccount.address, true] }));
+    }, 60_000);
+
+    afterAll(async () => {
+      if (registry() === undefined) return;
+      await send(owner().writeContract({ abi: squareHookAbi, address: stack.deployment.squareHook, functionName: "setScreening", args: [zeroAddress] }));
+      await send(owner().writeContract({ abi: screeningRegistryAbi, address: registry()!, functionName: "setScreener", args: [screenerAccount.address, false] }));
+    }, 60_000);
+
+    it("holds a payee whose record went stale instead of cranking it into the refusal, releases once a screening lands, and with a screener does both in one tick", async () => {
+      if (registry() === undefined) {
+        console.warn("the deployment record names no ScreeningRegistry: DeployLocal predates #222, the screening case is not run");
+        return;
+      }
+      const client = institution();
+      // Both parties screened, so the hire funds; a day later their records are older than maxAge.
+      await screener.screen([account(1).address, account(2).address]);
+      const jobId = await submittedJob();
+      await stack.testClient.increaseTime({ seconds: 86_400 + 1 });
+      await stack.testClient.mine({ blocks: 1 });
+      expect(await client.screeningOf(account(2).address)).toMatchObject({ state: "unscreened" });
+
+      const held: DutyEvent[] = [];
+      const duty = new ComplianceDuty({ client, policy, prover, onEvent: (e) => held.push(e), discover: false });
+      duty.track(jobId, "text.summarize");
+      const first = await duty.tick();
+      expect(first.bound).toEqual([jobId]);
+      expect(first.released).toEqual([]);
+      expect(first.held).toMatchObject([{ jobId, payee: account(2).address, reason: expect.stringContaining("no fresh, clean record for the payee") }]);
+      expect((await client.getJobRecord(jobId)).status).toBe(JobStatus.Submitted);
+      const second = await duty.tick();
+      expect(second.released).toEqual([]);
+      expect(held.filter((e) => e.type === "held")).toHaveLength(1);
+
+      // A screening lands: the next tick releases, and the hook paid the payee.
+      await screener.screen([account(2).address]);
+      const owed = await provider().withdrawable(account(2).address);
+      const third = await duty.tick();
+      expect(third.released).toEqual([jobId]);
+      expect(held.at(-1)).toMatchObject({ type: "released", jobId, verified: true, payeeCleared: true, payee: account(2).address });
+      expect((await provider().withdrawable(account(2).address)) - owed).toBe(await client.netPayout(jobId));
+
+      // The same again with a screener in hand: asked for the payee, released in the same tick.
+      await screener.screen([account(1).address, account(2).address]);
+      const next = await submittedJob();
+      await stack.testClient.increaseTime({ seconds: 86_400 + 1 });
+      await stack.testClient.mine({ blocks: 1 });
+      screenerAsked.length = 0;
+      const asking = new ComplianceDuty({ client, policy, prover, screener, discover: false });
+      asking.track(next, "text.summarize");
+      const report = await asking.tick();
+      expect(report.released).toEqual([next]);
+      expect(report.held).toEqual([]);
+      expect(screenerAsked).toEqual([[account(2).address]]);
+    }, 300_000);
+  });
 
   it("refuses to bind for a release the policy does not allow, naming the rule, and the module refuses a proofless release", async () => {
     const jobId = await submittedJob();

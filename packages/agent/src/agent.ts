@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { serve } from "@hono/node-server";
 import { A2AServer, type CapabilityHandler, type TaskSettlement } from "@squaresdk/a2a";
-import { createSquareClient, type SquareClient, type SquareDeployment, type SquareWalletClient } from "@squaresdk/core";
+import { createSquareClient, type Screener, type SquareClient, type SquareDeployment, type SquareWalletClient } from "@squaresdk/core";
 import { formatDid } from "@squaresdk/did-resolver";
 import { createGatewayApp, networkOf, type GatewayHandler } from "@squaresdk/x402";
 import type { FacilitatorClient } from "@x402/core/server";
@@ -56,6 +56,12 @@ export interface AgentOptions {
   x402?: X402Options | undefined;
   maxConcurrent?: number | undefined;
   handlerTimeoutMs?: number | undefined;
+  /**
+   * The screener this wallet's `SquareClient` asks before it funds a job on
+   * a hook that screens (square#368): an agent that delegates hires with the
+   * same client it settles with. Serving jobs needs none.
+   */
+  screener?: Screener | undefined;
 }
 
 export interface Listening {
@@ -101,6 +107,7 @@ export function createAgent(options: AgentOptions): Agent {
     publicClient: options.publicClient,
     walletClient: options.walletClient,
     ...(options.deployment !== undefined ? { deployment: options.deployment } : {}),
+    ...(options.screener !== undefined ? { screener: options.screener } : {}),
   });
   const address = client.account;
   const deployment = client.deployment;

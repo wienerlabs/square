@@ -4,7 +4,7 @@ import { ComplianceDuty, type DutyEvent, type DutyState, type TrackedJob } from 
 import { policyCommitment } from "../src/commitment.js";
 import { MIN_POLICY_SALT, parsePolicy } from "../src/policy.js";
 import { bindComplianceProof, proofState, releaseFacts } from "../src/release.js";
-import { BUYER, CLIENT, fakeChain, fundedJob, PROVIDER, proofWith, USDC, ZERO32 } from "./helpers/fakeChain.js";
+import { BUYER, CLIENT, fakeChain, fundedJob, PROVIDER, proofWith, REGISTRY, USDC, ZERO32 } from "./helpers/fakeChain.js";
 
 const policy = parsePolicy({
   policy_id: "6f1c2a7e-3b1d-4c5e-9a8b-0c1d2e3f4a5b",
@@ -254,6 +254,93 @@ describe("ComplianceDuty", () => {
     };
     expect(await d.tick()).toMatchObject({ bound: [7n], released: [], settled: [7n], errors: [] });
     chain.client.finalize = original;
+  });
+
+  describe("on a hook that screens (square#369)", () => {
+    // A closed window with a current proof: the only thing between the duty and a finalize is the payee's screening.
+    const closed = (screening: `0x${string}` | null = REGISTRY) => {
+      const chain = fakeChain({ commitment: commitment.hex, screening });
+      chain.jobs.set("7", { ...inWindow(chain, 0n), proof: proofWith({ commitment: commitment.hex, recipient: PROVIDER, amount: 985_000n, spent: 0n, timestamp: chain.now }) });
+      return chain;
+    };
+
+    it("releases a cleared payee as before", async () => {
+      const chain = closed();
+      chain.screenings.set(PROVIDER.toLowerCase(), { screenedAt: chain.now - 10n, sanctioned: false });
+      const events: DutyEvent[] = [];
+      const d = duty(chain, events);
+      d.track(7n, "text.summarize");
+      expect(await d.tick()).toMatchObject({ current: [7n], released: [7n], held: [] });
+      expect(chain.writes).toEqual(["finalize(7)"]);
+      expect(events.at(-1)).toMatchObject({ type: "released", jobId: 7n, payee: PROVIDER, payeeCleared: true });
+    });
+
+    it("holds a payee with no fresh record instead of cranking it into the refusal, and says so once", async () => {
+      const chain = closed();
+      chain.screenings.set(PROVIDER.toLowerCase(), { screenedAt: chain.now - 3_601n, sanctioned: false });
+      const events: DutyEvent[] = [];
+      const d = duty(chain, events);
+      d.track(7n, "text.summarize");
+      const reason = `the registry holds no fresh, clean record for the payee ${PROVIDER} and no screener is configured to ask; the hook would refuse the release`;
+      expect(await d.tick()).toMatchObject({ current: [7n], released: [], held: [{ jobId: 7n, payee: PROVIDER, reason }] });
+      expect(await d.tick()).toMatchObject({ released: [], held: [{ jobId: 7n, payee: PROVIDER, reason }] });
+      expect(chain.writes).toEqual([]);
+      expect(events.filter((e) => e.type === "held")).toEqual([{ type: "held", jobId: 7n, payee: PROVIDER, reason }]);
+      expect(d.jobs()).toHaveLength(1);
+      // A screening lands: the next tick releases, and the payee is paid.
+      chain.screenings.set(PROVIDER.toLowerCase(), { screenedAt: chain.now, sanctioned: false });
+      expect(await d.tick()).toMatchObject({ released: [7n], held: [] });
+      expect(chain.writes).toEqual(["finalize(7)"]);
+      expect(chain.spent).toBe(985_000n);
+    });
+
+    it("asks its screener for the missing record and releases in the same tick", async () => {
+      const chain = closed();
+      const asked: string[][] = [];
+      const d = duty(chain, [], {
+        screener: {
+          async screen(subjects) {
+            asked.push([...subjects]);
+            for (const subject of subjects) chain.screenings.set(subject.toLowerCase(), { screenedAt: chain.now, sanctioned: false });
+          },
+        },
+      });
+      d.track(7n, "text.summarize");
+      expect(await d.tick()).toMatchObject({ released: [7n], held: [] });
+      expect(asked).toEqual([[PROVIDER]]);
+      expect(chain.writes).toEqual(["finalize(7)"]);
+    });
+
+    it("holds when the screener was asked and the registry still clears nobody", async () => {
+      const chain = closed();
+      const d = duty(chain, [], { screener: { async screen() {} } });
+      d.track(7n, "text.summarize");
+      const report = await d.tick();
+      expect(report.released).toEqual([]);
+      expect(report.held).toMatchObject([{ jobId: 7n, reason: expect.stringContaining("the screener was asked and the registry still holds no fresh, clean record") }]);
+      expect(chain.writes).toEqual([]);
+    });
+
+    it("releases a payee a fresh record says is designated: the refusal is the outcome screening exists for", async () => {
+      const chain = closed();
+      chain.screenings.set(PROVIDER.toLowerCase(), { screenedAt: chain.now - 10n, sanctioned: true });
+      const events: DutyEvent[] = [];
+      const asked: string[][] = [];
+      const d = duty(chain, events, { screener: { async screen(subjects) { asked.push([...subjects]); } } });
+      d.track(7n, "text.summarize");
+      expect(await d.tick()).toMatchObject({ released: [7n], held: [] });
+      expect(asked).toEqual([]);
+      expect(chain.writes).toEqual(["finalize(7) refused"]);
+      expect(chain.spent).toBe(0n);
+      expect(events.at(-1)).toMatchObject({ type: "released", jobId: 7n, payeeCleared: false });
+    });
+
+    it("reads nobody's record on a hook that holds no registry", async () => {
+      const chain = closed(null);
+      const d = duty(chain, [], { screener: { async screen() { throw new Error("must not be asked"); } } });
+      d.track(7n, "text.summarize");
+      expect(await d.tick()).toMatchObject({ released: [7n], held: [] });
+    });
   });
 
   it("runs on a cadence until aborted, recovering first", async () => {

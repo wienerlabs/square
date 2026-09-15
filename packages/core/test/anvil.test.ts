@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createPublicClient, createTestClient, createWalletClient, http, parseUnits } from "viem";
+import { createPublicClient, createTestClient, createWalletClient, http, keccak256, parseUnits, stringToHex, zeroAddress, type Address } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { foundry } from "viem/chains";
 import { anvilAccount } from "./anvil.js";
@@ -18,6 +18,10 @@ import {
   hashDeliverable,
   JobStatus,
   Outcome,
+  PartyNotClearedError,
+  screeningRegistryAbi,
+  squareHookAbi,
+  type Screener,
   type SquareClient,
   type SquareDeployment,
 } from "../src/index.js";
@@ -219,6 +223,62 @@ describe.skipIf(!reachable)("lifecycle on anvil through the SDK", () => {
       expect(await client.previewRelease({ jobId, payee: provider.account, amount: 1n, client: client.account, proof })).toBe(false);
     }
   });
+
+  it("screening: on a hook that screens, fund stops before sending for a party with no record, and sends once a screener has recorded both (square#368)", async () => {
+    const registry = deployment.screeningRegistry;
+    if (registry === undefined) {
+      console.warn("the deployment record names no ScreeningRegistry: DeployLocal predates #222, the screening case is not run");
+      return;
+    }
+    // The stack's owner installs the registry on the hook and registers a screener key for the length of this case.
+    const owner = createWalletClient({ chain: foundry, transport: http(rpcUrl), account: anvilAccount(0) });
+    const screenerAccount = anvilAccount(8);
+    const screenerWallet = createWalletClient({ chain: foundry, transport: http(rpcUrl), account: screenerAccount });
+    const send = async (hash: Promise<`0x${string}`>) => publicClient.waitForTransactionReceipt({ hash: await hash });
+    await send(owner.writeContract({ abi: squareHookAbi, address: deployment.squareHook, functionName: "setScreening", args: [registry] }));
+    await send(owner.writeContract({ abi: screeningRegistryAbi, address: registry, functionName: "setScreener", args: [screenerAccount.address, true] }));
+    try {
+      const latest = await publicClient.getBlock();
+      const { jobId } = await client.createJob({ provider: provider.account, expiredAt: latest.timestamp + 30n * 24n * 3600n, spec: { task: "screened" } });
+      await provider.setBudget(jobId, budget);
+      // The registry is empty: the client itself is the first party the hook would refuse, and nothing is sent.
+      const balance = await client.usdcBalance(client.account);
+      const refused = await client.fund(jobId, budget).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(refused).toBeInstanceOf(PartyNotClearedError);
+      expect(refused).toMatchObject({ jobId, role: "client", subject: client.account, state: "unscreened" });
+      expect((await client.getJobRecord(jobId)).status).toBe(JobStatus.Open);
+      expect(await client.usdcBalance(client.account)).toBe(balance);
+      expect(await client.screeningOf(client.account)).toMatchObject({ state: "unscreened", registry });
+
+      // A screener that does what the service does: signs a clean record per subject and submits it, answering after the receipt.
+      const asked: Address[][] = [];
+      const screener: Screener = {
+        async screen(subjects) {
+          asked.push([...subjects]);
+          const block = await publicClient.getBlock();
+          const screenings = subjects.map((subject) => ({ subject, sanctioned: false, screenedAt: block.timestamp, source: keccak256(stringToHex("test-screener")), evidence: keccak256(subject) }));
+          const signatures: `0x${string}`[] = [];
+          for (const screening of screenings) {
+            const digest = await publicClient.readContract({ abi: screeningRegistryAbi, address: registry, functionName: "digestOf", args: [screening] });
+            signatures.push(await screenerAccount.sign({ hash: digest }));
+          }
+          await send(screenerWallet.writeContract({ abi: screeningRegistryAbi, address: registry, functionName: "submitMany", args: [screenings, signatures] }));
+        },
+      };
+      const screened = createSquareClient({ publicClient, deployment, walletClient: createWalletClient({ chain: foundry, transport: http(rpcUrl), account: anvilAccount(1) }), screener });
+      await screened.fund(jobId, budget);
+      expect(asked).toEqual([[client.account, provider.account]]);
+      expect((await client.getJobRecord(jobId)).status).toBe(JobStatus.Funded);
+      expect(await client.screeningOf(provider.account)).toMatchObject({ state: "cleared", registry });
+    } finally {
+      await send(owner.writeContract({ abi: squareHookAbi, address: deployment.squareHook, functionName: "setScreening", args: [zeroAddress] }));
+      await send(owner.writeContract({ abi: screeningRegistryAbi, address: registry, functionName: "setScreener", args: [screenerAccount.address, false] }));
+    }
+    expect(await client.screening()).toBeNull();
+  }, 60_000);
 
   it("spec hash written on chain matches the SDK", async () => {
     const spec = { task: "audit", scope: ["a", "b"] };

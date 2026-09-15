@@ -106,6 +106,7 @@ depends on). The server defaults to Arc Testnet; the whole environment:
 | `SQUARE_PROVER_URL` | The prover service the policy's secret may be sent to, `http://127.0.0.1:3003` for a local one. |
 | `SQUARE_COMPLIANCE_INTERVAL_MS` | How often the bound proofs are checked. `15000` by default; well inside the module's tolerance. |
 | `SQUARE_DUTY_STATE` | Where the jobs the duty watches are kept across restarts (square#348). `<SQUARE_POLICY_FILE>.duty.json` by default; `off` keeps none. Either way the chain is scanned for this wallet's open jobs at start. |
+| `SQUARE_SCREENER_URL` | The screener service ([`services/screener`](../../services/screener/README.md)) asked to screen a party the hook would refuse, before a hire is funded and before a release (square#368, #369). Only read on a hook that screens; without it such a hire stops before funding and names the party, and a release whose payee has no fresh record is held. |
 
 A key in an environment variable is a key in the process table, the same trade the CLI's
 unattended mode makes; it is the one a desktop client offers. Use a wallet funded for
@@ -153,6 +154,17 @@ the hosted agent), or not at all; and with a module in the hook, a wallet
 that has committed no policy is refused before any money moves, because the
 release would be refused for certain and the agent would work for nothing
 (square#350).
+
+On a hook that screens ([sanctions-screening.md](../../docs/decisions/sanctions-screening.md)),
+a hire is also screened: `fund` reads the client's and the agent's records
+and asks `SQUARE_SCREENER_URL` for whoever lacks a fresh one before it sends,
+and a party still not cleared stops the hire there, named in the error, with
+the job `Open` and its budget set for a later `square_hire` with `jobId`
+(square#368). The duty reads the payee's record again before it cranks and
+holds the job while it is missing, asking the same screener for a fresh one
+when it has it, so the institution's own tool never finalizes a release the
+hook would refuse over a stale record (square#369); `square_job` reports the
+payee's screening beside the proof.
 
 ### What a hire returns, and what it does not
 

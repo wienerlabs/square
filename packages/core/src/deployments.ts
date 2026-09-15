@@ -18,6 +18,15 @@ export interface SquareDeployment {
    * (#250).
    */
   complianceModule?: Address;
+  /**
+   * The sanctions screening registry the hook reads at funding and at
+   * release (#35), when the record names one. Optional for the same reason
+   * as the module: the shared Arc stack carries none, `DeployLocal` writes
+   * it. What the hook actually screens with is read from the hook
+   * (`SquareClient.screening`); this is the record's copy, for a caller that
+   * addresses the registry directly.
+   */
+  screeningRegistry?: Address;
   startBlock?: bigint;
 }
 
@@ -113,6 +122,7 @@ const localAnvil: SquareDeployment = {
   claimMarket: "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6",
   squareHook: "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318",
   complianceModule: "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e",
+  screeningRegistry: "0x9A676e781A523b5d0C0e43731313A708CB607508",
 };
 
 const arcTestnet: SquareDeployment = {
@@ -164,12 +174,16 @@ export function deploymentFromJson(json: unknown): SquareDeployment {
     }
     out[field] = getAddress(value);
   }
-  const module = record["ComplianceModule"];
-  if (module !== undefined && module !== null) {
-    if (typeof module !== "string" || !isAddress(module)) {
-      throw new InvalidDeploymentError("ComplianceModule is not an address");
+  for (const [field, key] of [
+    ["complianceModule", "ComplianceModule"],
+    ["screeningRegistry", "ScreeningRegistry"],
+  ] as const) {
+    const value = record[key];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== "string" || !isAddress(value)) {
+      throw new InvalidDeploymentError(`${key} is not an address`);
     }
-    out["complianceModule"] = getAddress(module);
+    out[field] = getAddress(value);
   }
   const block = record["block"];
   if (block !== undefined && block !== null) {

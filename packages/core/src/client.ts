@@ -23,6 +23,7 @@ import {
   keeperEvaluatorAbi,
   policyRegistryAbi,
   complianceModuleAbi,
+  screeningRegistryAbi,
   squareHookAbi,
   squareJobAbi,
 } from "./abi/index.js";
@@ -33,6 +34,7 @@ import { decodeSquareLogs, eventsNamed, type SquareEvent } from "./events.js";
 import { encodeCompleteOptParams, encodeSubmitOptParams, ZERO_HASH } from "./optParams.js";
 import { type OutcomeValue } from "./reasons.js";
 import { withSquareErrors } from "./revertAbi.js";
+import { PartyNotClearedError, type ScreenedRole, type Screener, type ScreeningVerdict } from "./screening.js";
 import { specDescription } from "./spec.js";
 
 export const JobStatus = {
@@ -52,6 +54,13 @@ export interface SquareClientConfig {
   publicClient: PublicClient;
   walletClient?: SquareWalletClient;
   deployment?: SquareDeployment;
+  /**
+   * The screener `fund` may ask to screen a party the hook would refuse
+   * (square#35, #368): `createScreenerClient` for the screener service. With
+   * none, `fund` on a hook that screens stops before sending when a party
+   * has no fresh record, naming it, rather than reverting on chain.
+   */
+  screener?: Screener | undefined;
 }
 
 export interface TransactionResult {
@@ -176,11 +185,13 @@ export class SquareClient {
   readonly publicClient: PublicClient;
   readonly walletClient: SquareWalletClient | undefined;
   readonly deployment: SquareDeployment;
+  readonly screener: Screener | undefined;
 
   constructor(config: SquareClientConfig) {
     this.publicClient = config.publicClient;
     this.walletClient = config.walletClient;
     this.deployment = config.deployment ?? deploymentFor(this.chainIdOf(config));
+    this.screener = config.screener;
     this.assertClientsAreOnDeploymentChain(config);
   }
 
@@ -502,7 +513,18 @@ export class SquareClient {
     });
   }
 
+  /**
+   * Fund a job this account is the client of. On a hook that screens, the
+   * hook refuses to fund a client or a provider without a fresh, clean
+   * screening record (square#35), so both are read first: a party that is
+   * not cleared is sent to the client's `screener` when it has one, and
+   * still not cleared afterwards, or with no screener to ask, nothing is
+   * sent and `PartyNotClearedError` names the party (square#368). The job
+   * is left as it was, `Open` with its budget set, and this account keeps
+   * its USDC; the same `fund` completes it once the party is cleared.
+   */
   async fund(jobId: bigint, expectedBudget: bigint, options: { autoApprove?: boolean; optParams?: Hex } = {}) {
+    await this.clearedForFunding(jobId);
     if (options.autoApprove ?? true) await this.ensureAllowance(this.deployment.squareJob, expectedBudget);
     return this.write({
       abi: squareJobAbi,
@@ -768,6 +790,97 @@ export class SquareClient {
     if (module === null) return null;
     const tolerance = await this.publicClient.readContract({ abi: complianceModuleAbi, address: module, functionName: "timestampTolerance" });
     return BigInt(tolerance);
+  }
+
+  /**
+   * Which hooks answer `screening()`, by address. A hook deployed before
+   * #222 has no such selector and screens nobody; the call reverts with no
+   * data, which is the one shape read as "older hook", once per hook.
+   */
+  private readonly hookAnswersScreening = new Map<string, boolean>();
+
+  /**
+   * The sanctions screening registry the hook reads at funding and at
+   * release (square#35), or null while it holds none: then nobody is
+   * screened and no funding or release is refused for it. The job's own hook
+   * may be passed; the deployment's is the default.
+   */
+  async screening(hook: Address = this.deployment.squareHook): Promise<Address | null> {
+    const key = hook.toLowerCase();
+    if (this.hookAnswersScreening.get(key) === false) return null;
+    let registry: Address;
+    try {
+      registry = await this.read({ abi: squareHookAbi, address: hook, functionName: "screening" });
+    } catch (error) {
+      if (!isUnknownSelectorRevert(error)) throw error;
+      this.hookAnswersScreening.set(key, false);
+      return null;
+    }
+    this.hookAnswersScreening.set(key, true);
+    return registry === zeroAddress ? null : registry;
+  }
+
+  /**
+   * Where an address stands with the screening, as the hook will read it:
+   * `cleared` funds and is paid; `sanctioned` and `unscreened` are refused,
+   * and only the second is changed by a fresh screening. Read from the
+   * registry the hook holds, or from `registry` when the caller already has
+   * it; `no-screening` when the hook holds none.
+   */
+  async screeningOf(subject: Address, registry?: Address | null): Promise<ScreeningVerdict> {
+    const address = registry === undefined ? await this.screening() : registry;
+    if (address === null) return { subject, state: "no-screening", registry: null };
+    const cleared = await this.read({ abi: screeningRegistryAbi, address, functionName: "isCleared", args: [subject] });
+    if (cleared) return { subject, state: "cleared", registry: address };
+    // Not cleared. A designation the registry still counts, a fresh record
+    // from a screener it still trusts, is a "no" that screening again would
+    // repeat; anything else (no record, a record past maxAge, a revoked
+    // screener) is a missing screening.
+    const [record, maxAge, latest] = await Promise.all([
+      this.read({ abi: screeningRegistryAbi, address, functionName: "screeningOf", args: [subject] }),
+      this.read({ abi: screeningRegistryAbi, address, functionName: "maxAge" }),
+      this.publicClient.getBlock(),
+    ]);
+    if (record.screenedAt !== 0n && record.sanctioned && latest.timestamp - record.screenedAt <= BigInt(maxAge)) {
+      const registered = await this.read({ abi: screeningRegistryAbi, address, functionName: "isScreener", args: [record.screener] });
+      if (registered) return { subject, state: "sanctioned", registry: address };
+    }
+    return { subject, state: "unscreened", registry: address };
+  }
+
+  /**
+   * The check `fund` makes before it sends (docs/decisions/sanctions-screening.md,
+   * §2): on a hook that screens, the client and the provider both need a
+   * fresh, clean record, in that order, which is the order the hook reads
+   * them. The screener is asked once, for whoever lacks one, and the
+   * registry is read again; what it says then is final here.
+   */
+  private async clearedForFunding(jobId: bigint): Promise<void> {
+    const record = await this.getJobRecord(jobId);
+    const registry = await this.screening(record.hook);
+    if (registry === null) return;
+    const parties: [ScreenedRole, Address][] = [
+      ["client", record.client],
+      ["provider", record.provider],
+    ];
+    const verdicts = new Map<ScreenedRole, ScreeningVerdict>();
+    for (const [role, subject] of parties) verdicts.set(role, await this.screeningOf(subject, registry));
+    const unscreened = parties.filter(([role]) => verdicts.get(role)!.state === "unscreened");
+    if (unscreened.length > 0 && this.screener) {
+      await this.screener.screen([...new Set(unscreened.map(([, subject]) => subject))]);
+      for (const [role, subject] of unscreened) verdicts.set(role, await this.screeningOf(subject, registry));
+    }
+    for (const [role, subject] of parties) {
+      const { state } = verdicts.get(role)!;
+      if (state === "cleared" || state === "no-screening") continue;
+      const detail =
+        state === "sanctioned"
+          ? "a fresh screening record says it is designated"
+          : this.screener
+            ? "the screener was asked and the registry still holds no fresh, clean record for it"
+            : "the registry holds no fresh, clean record for it and no screener is configured to ask";
+      throw new PartyNotClearedError(jobId, role, subject, state, detail);
+    }
   }
 
   /**

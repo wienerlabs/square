@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { A2AClient, WellKnownCache } from "@squaresdk/a2a";
 import { createAgent, type Agent, type CapabilityCall, type CapabilityOptions, type X402Options } from "@squaresdk/agent";
-import type { SquareDeployment, SquareWalletClient } from "@squaresdk/core";
+import type { Screener, SquareDeployment, SquareWalletClient } from "@squaresdk/core";
 import { AipDidResolver } from "@squaresdk/did-resolver";
 import { ToolPool, toolsForAnthropic, type DidResolverLike, type McpTool } from "@squaresdk/mcp";
 import { parseUnits, type PublicClient } from "viem";
@@ -41,6 +41,14 @@ export interface HostDeps {
   handlerTimeoutMs?: number | undefined;
   /** Where a run's outcome is reported, per task. */
   onRun?: ((event: { taskId: string; capability: string; outcome: RunOutcome }) => void) | undefined;
+  /**
+   * The screener asked to screen a party of a delegated job the hook would
+   * refuse, before it is funded and before it is released (square#368,
+   * #369): the config's `delegation.screenerUrl`, resolved by the binary, or
+   * given here. Without it, on a hook that screens, a delegation whose party
+   * has no fresh record stops before funding, naming the party.
+   */
+  screener?: Screener | undefined;
   /**
    * The policy and the prover for the jobs this agent delegates, resolved
    * from the config's `compliance` block by the binary, or given here. The
@@ -104,6 +112,7 @@ export async function hostAgent(config: HostedAgentConfig, deps: HostDeps): Prom
     x402: deps.x402,
     maxConcurrent: deps.maxConcurrent,
     handlerTimeoutMs: deps.handlerTimeoutMs,
+    screener: deps.screener,
   });
 
   const tools = config.tools && config.tools.length > 0 ? new ToolPool({ servers: config.tools }) : undefined;
@@ -135,6 +144,7 @@ export async function hostAgent(config: HostedAgentConfig, deps: HostDeps): Prom
         client: agent.client,
         policy: compliance.policy,
         prover: compliance.prover,
+        screener: deps.screener,
         serialize: serially,
         state: compliance.state,
         discover: compliance.discover,

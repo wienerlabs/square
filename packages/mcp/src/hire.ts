@@ -1,5 +1,5 @@
 import { A2AClient, A2AError, JOB_STATUS_NAMES, TaskState, type TaskStatusResult } from "@squaresdk/a2a";
-import { JobStatus, type JobStatusValue, type SquareClient } from "@squaresdk/core";
+import { JobStatus, PartyNotClearedError, type JobStatusValue, type SquareClient } from "@squaresdk/core";
 import { formatUnits, isAddressEqual, parseUnits, type Address, type Hex } from "viem";
 import type { AgentProfile } from "./agents.js";
 
@@ -186,6 +186,18 @@ export async function hire(options: HireOptions): Promise<HireResult> {
     }
     transactions.fund = (await client.fund(jobId, amount)).hash;
   } catch (error) {
+    // square#368: the hook screens and a party has no fresh, clean record.
+    // Nothing was sent; the job is Open with its budget set, and the same
+    // hire completes it once the party is cleared.
+    if (error instanceof PartyNotClearedError) {
+      throw new HireRefusedError(
+        `job ${error.jobId} was not funded: the ${error.role} ${error.subject} is ${error.state}, ${error.detail}; ` +
+          `the job stays Open with its budget set and this wallet keeps its USDC. ` +
+          (error.state === "sanctioned" ? "Hire another agent." : `Once the ${error.role} is screened, hire again with jobId ${error.jobId} to fund it.`),
+        "funding",
+        transactions,
+      );
+    }
     throw new HireRefusedError(`the job could not be funded: ${messageOf(error)}`, "funding", transactions);
   }
   await options.onFunded?.({ jobId, budget: amount, provider: profile.provider });

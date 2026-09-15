@@ -63,4 +63,13 @@ describe("deploymentFromJson and the compliance module", () => {
   it("refuses a ComplianceModule that is not an address", () => {
     expect(() => deploymentFromJson({ ...record, ComplianceModule: "0x1234" })).toThrow("ComplianceModule is not an address");
   });
+
+  // square#368: the screening registry the same way. `DeployLocal` writes it
+  // and the Arc record carries none.
+  it("reads ScreeningRegistry the same way, and leaves it out when the record names none", () => {
+    const registry = "0x00000000000000000000000000000000000005c4";
+    expect(deploymentFromJson({ ...record, ScreeningRegistry: registry }).screeningRegistry).toBe(getAddress(registry));
+    expect("screeningRegistry" in deploymentFromJson(record)).toBe(false);
+    expect(() => deploymentFromJson({ ...record, ScreeningRegistry: "0x1234" })).toThrow("ScreeningRegistry is not an address");
+  });
 });

@@ -8,6 +8,8 @@
 [i100]: https://github.com/wienerlabs/square/issues/100
 [i342]: https://github.com/wienerlabs/square/pull/342
 [i351]: https://github.com/wienerlabs/square/issues/351
+[i368]: https://github.com/wienerlabs/square/issues/368
+[i369]: https://github.com/wienerlabs/square/issues/369
 [r222]: https://github.com/wienerlabs/square/pull/222#issuecomment-5679957757
 
 **This document is not legal advice.** It decides how screening is wired into
@@ -80,32 +82,45 @@ described in §5.
 
 **Who asks for the funding screening: `SquareClient.fund`.** The hook refuses
 to fund parties without a fresh record, so something has to have them screened
-before `fund` is sent, and today nothing does. Every surface that funds a job
-sends `createJob`, `setBudget` and `fund` within seconds, and each funds through
-one call, `SquareClient.fund` in `packages/core`:
+before `fund` is sent. Every surface that funds a job sends `createJob`,
+`setBudget` and `fund` within seconds, and each funds through one call,
+`SquareClient.fund` in `packages/core`:
 
 - the app's funding step;
 - `square_hire` in `packages/mcp`;
 - the hosted agent's `delegate`, which uses the same hire;
 - the lifecycle runner.
 
-None of them calls the screener. On the day a registry is installed in the
-shared hook, every hire from those surfaces would revert at `fund` with
-`NotCleared`, and leave the job `Open` with its budget set: the half-funded path
-of [#351][i351].
+Before [#368][i368] none of them called the screener, and on the day a registry
+was installed in the shared hook every hire from those surfaces would have
+reverted at `fund` with `NotCleared`, leaving the job `Open` with its budget
+set: the half-funded path of [#351][i351].
 
-So the screening before funding belongs in `SquareClient.fund`, the one place
-all of them pass through:
+So the screening before funding is in `SquareClient.fund`, the one place all of
+them pass through ([#368][i368]):
 
-1. Before it sends, `fund` reads `hook.screening()`.
-2. On a hook that screens, it reads `isCleared` for the client and the provider.
-3. For a party that is not cleared, it asks a screener the caller configured to
-   screen it, and waits for the record to land.
-4. With no screener configured, it stops before sending, with an error that
-   names the party and says why, instead of a revert.
+1. Before it sends, `fund` reads the job's hook's `screening()`. A hook that
+   predates the function is read as one that screens nobody, once.
+2. On a hook that screens, it reads the client's and the provider's records,
+   in that order, the order the hook checks them (`screeningOf`: `cleared`,
+   `sanctioned`, `unscreened`).
+3. For a party with no fresh, clean record, it asks the `screener` the caller
+   configured to screen it, once for all such parties, and reads the registry
+   again; what the screener answered is not trusted, only what reached the
+   chain. A party a fresh record says is designated is not asked about again,
+   since the answer would be the same.
+4. A party still not cleared, or with no screener configured, stops it before
+   sending: `PartyNotClearedError` names the party, its role and why, and
+   nothing was sent. The job is where it was, and the same `fund` completes
+   it once the party is cleared; `square_hire` says so and names the `jobId`
+   to hire again with.
 
-The screener's address is the caller's to give, as the prover's already is
-(`NEXT_PUBLIC_PROVER_URL`, `LIFECYCLE_PROVER_URL`).
+The screener's address is the caller's to give, as the prover's already is:
+`createScreenerClient({ url })` handed to `createSquareClient` as `screener`,
+from `SQUARE_SCREENER_URL` (`square-mcp`), `delegation.screenerUrl`
+(`square-hosted`), `NEXT_PUBLIC_SCREENER_URL` (the app) and
+`LIFECYCLE_SCREENER_URL` (the runner). The app's caveat: the screener sets no
+CORS headers, so a browser reaches it from the same origin or through a proxy.
 
 Two alternatives were weighed in [the review of #222][r222]:
 
@@ -117,9 +132,9 @@ Two alternatives were weighed in [the review of #222][r222]:
   the gap between the three calls. So `fund` could still be sent before the
   record lands, and revert, unless every caller waited: the first option again.
 
-This is decided here and is not built in this change. Until it is, installing
-screening stops funding from every surface that uses the SDK, not only on a
-chain with no screener (§6).
+Installing screening on a hook whose clients run with no screener configured
+still stops their funding, now before sending and with the party named, not
+only on a chain with no screener (§6).
 
 ### 3. The answer reaches the chain as a signed record
 
@@ -227,13 +242,16 @@ the screening is stale and trigger the refusal. That is the same exposure a
 missing compliance proof already has under [#27][i27]. It is written here, not
 hidden.
 
-`ComplianceDuty` does not hold yet. It cranks once the window has closed and its
-proof is current, whatever the payee's screening. On a hook that screens, it can
-therefore finalize into the refusal the keeper waits out: the institution's own
-tool returns to the client a release an honest keeper would have held. It has to
-read `hook.screening()` and hold the job as the keeper does. That is follow-up
-work on the duty of [#342][i342] ([the review of #222][r222]), not part of this
-change.
+`ComplianceDuty`, the duty of [#342][i342], holds too ([#369][i369]). Before it
+cranks a job whose window has closed and whose proof is current, it reads the
+payee's record from the hook's registry, the keeper's three cases: cleared, it
+cranks; a fresh record that says designated, it cranks, since the refusal is
+the outcome screening exists for; missing or stale, it asks the screener it was
+given for a fresh one, reads again, and with none, or still no record, holds
+the job and says why once per reason. So the institution's own tool does not
+return to the client a release an honest keeper would have held; the `released`
+event carries what the hook's `ScreeningChecked` said of the payee. The screener
+is the same one the client funds through.
 
 The screener stamps each answer with the later of the chain's latest block
 time and its own clock less five seconds, because the registry judges
