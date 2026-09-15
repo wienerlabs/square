@@ -12,6 +12,7 @@ import {
   type KeeperCandidate,
   type KeeperEconomics,
 } from "./decide.js";
+import type { PayeeScreening, PayeeScreenings } from "./screening.js";
 
 export interface KeeperRetryPolicy {
   baseDelaySeconds: bigint;
@@ -46,6 +47,14 @@ export interface KeeperOptions {
   expiryIntervalMs?: number;
   ephemeralMirror?: boolean;
   retryPolicy?: KeeperRetryPolicy;
+  /**
+   * square#35. Asked once a tick, with every job about to be finalized: whether
+   * each payee is cleared by its job's screening registry, after the screener
+   * was asked for fresh screenings of all of them. A job it says not to proceed
+   * with is held, not refused. A job whose screening could not be read is a
+   * failed attempt, backed off like a failed send (payeeScreening).
+   */
+  screenPayees?: PayeeScreenings;
 }
 
 interface RetryState {
@@ -241,6 +250,7 @@ export class Keeper {
     metrics?.setDisputesOpen(await disputes.countOpen(db, chainId));
     this.forgetJobsThatLeft([...finalizable, ...underDispute].map((row) => row.jobId));
 
+    const sending: Array<{ candidate: KeeperCandidate; kind: "finalize" | "finalizeDecided" }> = [];
     for (const candidate of confirmed) {
       if (expiryIsNear(candidate, now)) {
         report.nearExpiry.push(candidate.jobId);
@@ -285,23 +295,61 @@ export class Keeper {
         }
         continue;
       }
+      sending.push({ candidate, kind: action.kind });
+    }
+
+    // square#35: the payees of every job about to be sent are screened together,
+    // before any of them is sent. One job's screening failing is that job's
+    // failed attempt; the others still go.
+    let screenings: Map<bigint, PayeeScreening | Error> | undefined;
+    if (this.options.screenPayees && sending.length > 0) {
       try {
-        const result = action.kind === "finalize" ? await client.finalize(candidate.jobId) : await client.finalizeDecided(candidate.jobId);
+        screenings = await this.options.screenPayees(sending.map(({ candidate }) => candidate.jobId));
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        screenings = new Map(sending.map(({ candidate }) => [candidate.jobId, failure]));
+      }
+    }
+
+    for (const { candidate, kind } of sending) {
+      if (screenings !== undefined) {
+        const screening = screenings.get(candidate.jobId) ?? new Error("the screening returned nothing for this job");
+        if (screening instanceof Error) {
+          await this.noteFailure(candidate.jobId, kind, `screening the payee failed: ${screening.message}`, now);
+          continue;
+        }
+        if (!screening.proceed) {
+          report.skipped.push({ jobId: candidate.jobId, reason: "unscreened" });
+          logger.warn("keeper.held", {
+            jobId: candidate.jobId.toString(),
+            reason: "the payee is not cleared and no fresh screening could be had; finalizing now would refuse the release",
+          });
+          continue;
+        }
+        if (screening.state === "sanctioned") {
+          logger.warn("keeper.refusing", {
+            jobId: candidate.jobId.toString(),
+            reason: "a fresh screening says the payee is designated; the release goes back to the client",
+          });
+        }
+      }
+      try {
+        const result = kind === "finalize" ? await client.finalize(candidate.jobId) : await client.finalizeDecided(candidate.jobId);
         const paid = result.events.find((e) => e.contract === "KeeperEvaluator" && (e.eventName === "Finalized" || e.eventName === "DecisionApplied"));
         const fee = paid && "keeperFee" in paid.args ? (paid.args.keeperFee as bigint) : 0n;
-        await keeperActions.append(db, { chainId, jobId: candidate.jobId, action: action.kind, txHash: result.hash, gasUsed: result.receipt.gasUsed, feeEarned: fee });
-        metrics?.recordKeeperAction(action.kind, "success");
+        await keeperActions.append(db, { chainId, jobId: candidate.jobId, action: kind, txHash: result.hash, gasUsed: result.receipt.gasUsed, feeEarned: fee });
+        metrics?.recordKeeperAction(kind, "success");
         metrics?.addKeeperFeeUsdc(usdc(fee));
         metrics?.recordFinalizeGas(
-          action.kind,
-          action.kind === "finalize" ? economics.finalizeGas : economics.finalizeDecidedGas,
+          kind,
+          kind === "finalize" ? economics.finalizeGas : economics.finalizeDecidedGas,
           result.receipt.gasUsed,
         );
         this.retries.delete(candidate.jobId.toString());
-        (action.kind === "finalize" ? report.finalized : report.applied).push(candidate.jobId);
+        (kind === "finalize" ? report.finalized : report.applied).push(candidate.jobId);
         logger.info("keeper.finalized", { jobId: candidate.jobId.toString(), txHash: result.hash, gasUsed: Number(result.receipt.gasUsed), fee: usdc(fee) });
       } catch (error) {
-        await this.noteFailure(candidate.jobId, action.kind, error instanceof Error ? error.message : String(error), now);
+        await this.noteFailure(candidate.jobId, kind, error instanceof Error ? error.message : String(error), now);
       }
     }
 
