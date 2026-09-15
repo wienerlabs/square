@@ -22,9 +22,14 @@ policy behind the commitment never leaves them
 ([prover-trust-boundary.md](docs/decisions/prover-trust-boundary.md)). The app's job page
 is the exception: it sends the policy to the prover it is configured with, whose operator
 sees it. Identified agents execute against the mandate. The hook that releases escrow carries a compliance slot: with a module
-installed, a release must first prove, in zero knowledge, that it fits the mandate.
-The receivable created during the challenge window is discountable, and sells only to
-a buyer the institution's policy approved.
+installed, a release must first prove, in zero knowledge, that it fits the mandate. Escrow
+protects the provider against everything except that mandate: a payment the mandate forbids
+returns to the client with the reason on chain, and a proof that is merely missing holds the
+escrow until the institution does its duty (decided in
+[proof-required.md](docs/decisions/proof-required.md), built by
+[#382](https://github.com/wienerlabs/square/issues/382); until then the hook refunds a missing
+proof as it refunds a refused one). The receivable created during the challenge window is
+discountable, and sells only to a buyer the institution's policy approved.
 
 The slot is empty on the shared deployed hook, so no release on that stack is proof
 gated: `SquareHook.complianceModule()` returns the zero address, and the app's
@@ -105,6 +110,7 @@ Design notes, each the record of a decision:
 - [ERC-4337: is sponsorship needed](docs/decisions/erc4337-sponsorship.md)
 - [The daily ceiling is public, the policy behind it is not](docs/decisions/public-daily-ceiling.md)
 - [The proof is made where the policy lives](docs/decisions/prover-trust-boundary.md)
+- [A missing proof holds the escrow; only the mandate refunds](docs/decisions/proof-required.md)
 - [A hook informs, it never vetoes, on the way out of escrow](docs/decisions/hook-failure-modes.md)
 - [A lapsed dispute returns the bond](docs/decisions/lapsed-bond.md)
 - [Gas, measured](docs/deploy/gas.md)

@@ -1,6 +1,7 @@
 # How the services are hosted
 
-**Status**: the shape is decided, the provider is not.
+**Status**: the shape is decided, and the provider: Railway (2026-09-15). The
+account, the keeper's key and the alert target are still to be named.
 
 ## What is decided
 
@@ -12,6 +13,7 @@ this repository, and nothing in any of them is specific to a hosting provider:
 | prover | `services/prover/Dockerfile` | 3003 | `payment.wasm` and `payment.zkey` on a mounted path; serves the app's job page and development, not the institutions' own tools |
 | indexer | `services/indexer/Dockerfile` | 3010 | Postgres, an RPC endpoint, a deployment file |
 | keeper | `services/keeper/Dockerfile` | 3011 | Postgres, an RPC endpoint, a deployment file, a funded key |
+| screener | `services/screener/Dockerfile` (to be added, [#370](https://github.com/wienerlabs/square/issues/370)) | 3012 | an RPC endpoint, the registry's address, a registered signing key, a canary; TRM reachable |
 | app | `app/Dockerfile` | 80 | Nothing at run time; it is static files |
 
 Every one of them takes its whole configuration from environment variables and
@@ -46,17 +48,30 @@ every policy sent to it from that page.
   deployment addresses are a mounted file, written by the deploy script rather
   than compiled into anything.
 
+## The provider: Railway
+
+Decided on 2026-09-15 ([#336](https://github.com/wienerlabs/square/issues/336)),
+between Railway and a Hostinger VPS. What the choice had to satisfy is above:
+a container runtime that keeps a process alive, a managed Postgres or one we
+run, outbound access to an RPC endpoint, a secret store for one private key,
+and an HTTP health probe. Railway meets all five directly: a service per
+Dockerfile, a managed Postgres, variables and secrets per service, a health
+check path per service, and outbound network. A VPS would have run
+`compose.yaml` as it is, with Postgres, backups and updates ours to run; the
+difference is operations, not code, and the smaller operations won.
+
+The screener joins the four images the moment the shared stack installs
+screening ([#372](https://github.com/wienerlabs/square/issues/372), decided
+yes), and it needs TRM reachable from the provider's network. The prover
+serves the app's job page only (above).
+
 ## What is not decided
 
-Which provider actually runs them. That choice is about cost, region, who holds
-the keeper's key and what the operations team already runs -- none of which is
-a property of this code, and all of which is the project's call rather than
-this document's.
-
-What the choice has to satisfy is above: a container runtime that keeps a
-process alive, a managed Postgres or one we run, outbound access to an RPC
-endpoint, a secret store for one private key, and an HTTP health probe. The
-application is separate and simpler, because it is static files and can go
+The Railway account and project the services live in, who holds the keeper's
+key and funds it, and where `ALERT_WEBHOOK_URL` points. Those are named in
+[#336](https://github.com/wienerlabs/square/issues/336) when the services are
+brought up, and the record of that run is `docs/deploy/services-5042002-<date>.md`.
+The application is separate and simpler, because it is static files and can go
 anywhere that serves them.
 
 ## The application today
