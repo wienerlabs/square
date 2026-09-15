@@ -14,19 +14,33 @@
 //   PROVER_ARTIFACTS_DIR=/path/to/artifacts node script/regenerate-fixtures.mjs
 //
 // The artifacts are payment.wasm and payment.zkey — see circuits/README.md.
+//
+// It writes every proof the contract tests read, including
+// `compliant_rerandomised`, so one run leaves a consistent file. square#271: it
+// used to write only the two cases below, from scratch, which deleted the
+// re-randomised copy that test/Malleability.t.sol and ComplianceModule.t.sol
+// read — and a copy restored from git comes from the old key and fails the
+// pairing. The copy is built by circuits/scripts/rerandomise.mjs, whose
+// @noble/curves is a devDependency of circuits/ (`npm ci` there, as building
+// the key already needs).
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const OUT = path.join(ROOT, 'test', 'fixtures', 'proofs.json');
+const PROVER = path.resolve(ROOT, '..', 'services', 'prover');
 
-const { generateProof } = await import(
-  path.resolve(ROOT, '..', 'services', 'prover', 'src', 'prover.js')
+const { generateProof } = await import(path.join(PROVER, 'src', 'prover.js'));
+const { rerandomise, deltaFromVerificationKey } = await import(
+  path.resolve(ROOT, '..', 'circuits', 'scripts', 'rerandomise.mjs')
 );
+// The prover's own snarkjs, the one that just produced the proofs.
+const snarkjs = createRequire(path.join(PROVER, 'package.json'))('snarkjs');
 
 const USDC = '0x3600000000000000000000000000000000000000';
 const BLOCKED = '0x2222222222222222222222222222222222222222';
@@ -89,6 +103,54 @@ for (const [name, overrides] of Object.entries(CASES)) {
   proofs[name] = { is_compliant: result.is_compliant, ...result.solidity };
   process.stdout.write(`${name.padEnd(10)} is_compliant=${result.is_compliant}\n`);
 }
+
+// The re-randomised copy: `compliant`'s eight signals, different bytes. delta
+// is read from the key that just produced `compliant`, because delta is exactly
+// the point a new phase-2 key moves, and a copy built against any other delta
+// does not verify. It is checked against that key before anything is written,
+// so this script cannot leave a copy the verifier from the same key rejects.
+if (!fs.existsSync(zkey)) {
+  process.stderr.write(`compliant_rerandomised needs delta from the proving key, and ${zkey} is not there\n`);
+  process.exit(1);
+}
+const vk = await snarkjs.zKey.exportVerificationKey(zkey);
+const toHex32 = (value) => `0x${BigInt(value).toString(16).padStart(64, '0')}`;
+const copy = rerandomise(proofs.compliant, deltaFromVerificationKey(vk));
+proofs.compliant_rerandomised = {
+  a: copy.a.map(toHex32),
+  b: copy.b.map((row) => row.map(toHex32)),
+  c: copy.c.map(toHex32),
+  input: proofs.compliant.input,
+  note:
+    'Same eight signals as compliant, different bytes. Built by circuits/scripts/rerandomise.mjs '
+    + 'against the delta of the key that produced compliant, and checked against that key by '
+    + 'script/regenerate-fixtures.mjs before it was written; see test/Malleability.t.sol.',
+};
+
+const sameBytes = ['a', 'b', 'c'].every(
+  (part) => JSON.stringify(proofs.compliant_rerandomised[part]) === JSON.stringify(proofs.compliant[part]),
+);
+// The calldata layout back into snarkjs's: G1 gains z = 1, and each G2
+// coordinate returns to (re, im).
+const accepted = await snarkjs.groth16.verify(
+  vk,
+  copy.input,
+  {
+    protocol: 'groth16',
+    curve: 'bn128',
+    pi_a: [...copy.a, '1'],
+    pi_b: [[copy.b[0][1], copy.b[0][0]], [copy.b[1][1], copy.b[1][0]], ['1', '0']],
+    pi_c: [...copy.c, '1'],
+  },
+);
+if (sameBytes || !accepted) {
+  process.stderr.write(
+    `compliant_rerandomised ${sameBytes ? 'came out byte for byte the same as compliant' : 'does not verify against the key'}; `
+    + `${path.relative(ROOT, OUT)} was not written\n`,
+  );
+  process.exit(1);
+}
+process.stdout.write('compliant_rerandomised verifies against the same key, different bytes\n');
 
 const out = {
   _provenance: {
