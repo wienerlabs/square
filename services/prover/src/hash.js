@@ -19,19 +19,21 @@
 
 import { buildPoseidon } from 'circomlibjs';
 
-let poseidonInstance = null;
+// Built when the module loads, not on the first hash.
+//
+// square#253: the request gate has to know whether payment_endpoint_category
+// encodes to zero, and validateRequest is synchronous. Building the instance is
+// the only asynchronous step -- a hash on a built instance returns directly -- so
+// it happens here, once, and categoryToField can be called from the gate.
+const poseidonInstance = await buildPoseidon();
 
-async function getPoseidon() {
-  if (!poseidonInstance) {
-    poseidonInstance = await buildPoseidon();
-  }
-  return poseidonInstance;
+function poseidonField(inputs) {
+  return poseidonInstance.F.toString(poseidonInstance(inputs.map((x) => BigInt(x))));
 }
 
 // Poseidon over a list of field elements, as a decimal string.
 export async function poseidon(inputs) {
-  const p = await getPoseidon();
-  return p.F.toString(p(inputs.map((x) => BigInt(x))));
+  return poseidonField(inputs);
 }
 
 // A 20-byte EVM address as a field element.
@@ -73,13 +75,21 @@ export function categoryBytes(categoryString, label = 'category') {
 // Right-padded to 32 bytes and split into halves before hashing, because 32
 // bytes exceeds the field. The shape is fixed by the circuit and the policy
 // service, so it cannot be simplified independently of both.
-export async function hashCategory(categoryString, label = 'category') {
+//
+// Synchronous, so validateRequest can refuse a category whose field element is
+// zero, the value the circuit constrains non-zero (square#253).
+export function categoryToField(categoryString, label = 'category') {
   const utf8 = categoryBytes(categoryString, label);
   const padded = Buffer.alloc(32);
   utf8.copy(padded);
   const high = BigInt(`0x${padded.subarray(0, 16).toString('hex')}`);
   const low = BigInt(`0x${padded.subarray(16, 32).toString('hex')}`);
-  return poseidon([high, low]);
+  return poseidonField([high, low]);
+}
+
+// The same element, for the callers that await it.
+export async function hashCategory(categoryString, label = 'category') {
+  return categoryToField(categoryString, label);
 }
 
 // A UUID's 32 hex digits, once it is known to be one. The gate calls it without

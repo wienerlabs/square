@@ -102,6 +102,27 @@ describe('observability endpoints', () => {
     expect(await failures()).toBe(before);
   });
 
+  // square#253. The zero address is well formed, so it passed the gate, failed in
+  // the rule evaluator with a message that named nothing, and was counted as
+  // witness_failed: the reason that reads as a broken proving key or circuit.
+  it('refuses a zero payment_token or payment_recipient by name, and counts neither as witness_failed', async () => {
+    const witnessFailed = async () => {
+      const response = await request(app).get('/metrics');
+      const match = /square_proof_failures_total\{[^}]*reason="witness_failed"[^}]*\} (\d+)/.exec(response.text);
+      return match ? Number(match[1]) : 0;
+    };
+    for (const field of ['payment_token', 'payment_recipient']) {
+      const before = { all: await failures(), witness: await witnessFailed() };
+      const response = await request(app)
+        .post('/prove')
+        .send({ ...VALID_SHAPE, [field]: `0x${'0'.repeat(40)}` });
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe(`${field}: must not be the zero address; the circuit rejects a zero lookup key`);
+      expect(await witnessFailed()).toBe(before.witness);
+      expect(await failures()).toBe(before.all);
+    }
+  });
+
   it('does not count a refused request as a failed proof', async () => {
     const before = await failures();
     const response = await request(app).post('/prove').send({});

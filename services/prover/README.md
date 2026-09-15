@@ -135,6 +135,14 @@ over-long endpoint category was echoed verbatim, and `BigInt("abc")` throws
 log the same way. Every request value now passes through `src/normalize.js`
 first, and every error names the field and never the value.
 
+A value can be well formed and still be one no proof can come out of. The
+circuit constrains the three values it looks up in the policy lists to be
+non-zero: `payment_token`, `payment_recipient` and the endpoint category's hash.
+`0x0000…0000` is a well-formed address, so it used to pass the gate and come back
+500 from the rule evaluator with a message that named no field, counted as
+`witness_failed` (square#253). `validateRequest` now refuses each of them with 400
+by name, and the evaluator's own refusal, still behind it, names the key too.
+
 A body the service cannot read at all fails before any of that runs.
 `express.json` raises it: a body that is not JSON, one over the 256 kb limit, a
 charset it will not decode. With no handler for it, Express answered with an

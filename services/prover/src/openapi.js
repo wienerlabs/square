@@ -120,7 +120,8 @@ export const openapiSpec = {
               'The request was refused before any proving started: the body is not valid ' +
               'JSON, a required field is missing, a list is not a list, a time ' +
               'restriction is out of range, or a field is not in its format (an address ' +
-              'that is not 20 bytes of hex, a policy_id that is not a UUID, an amount that ' +
+              'that is not 20 bytes of hex, a payment_token or payment_recipient that is ' +
+              'the zero address, a policy_id that is not a UUID, an amount that ' +
               'is not a non-negative whole number, a category that is empty or over 32 ' +
               'bytes, an unknown weekday). ' +
               'The message names the offending field but never its value. Retrying an ' +
