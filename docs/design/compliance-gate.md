@@ -38,6 +38,14 @@ nothing and returns the whole net to the client. The job still settles, so the
 state machine never stalls, and nobody's money is stranded. "The proof locks
 the release" is true in the only sense that does not also lock the escrow.
 
+That is what the module does today, and it pays a client for binding nothing
+(#346). [proof-required.md](../decisions/proof-required.md) decides the
+split of that sentence: a proof the mandate refuses still returns the net to
+the client; a proof that is merely missing, malformed or from another key
+holds the escrow, and the client, who alone can bind one, ends the hold. The
+hold is the evaluator's refusal to settle, not a hook revert, so the contract
+above stands. #382 builds it.
+
 ## Where the verdict has to be computed
 
 `SquareJob.complete` does two things in order:
