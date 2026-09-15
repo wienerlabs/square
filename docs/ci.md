@@ -89,6 +89,7 @@ next instance of this hides:
 | `!HAVE_WASM`, `!HAVE_ZKEY` | `circuits/test/payment.test.js` | `circuits` | satisfied — the job builds the circuit and a key |
 | `!HAVE_PTAU`, `!HAVE_ZKEY` | `circuits/test/ptau-adoption.test.js` | `circuits` | satisfied — the build fetches and hash-checks the ptau |
 | `!HAVE_BUILD` | `circuits/test/timestamp-soundness.test.js` | `circuits` | satisfied |
+| `!HAVE_BUILD` | `circuits/test/constraint-cost.test.js` (the constraint table in `circuits/README.md` and every other quoted size of the circuit, against `build/*.r1cs`; square#238) | `circuits` | satisfied — the job compiles the circuits before its tests. The table's own arithmetic is checked without a build. |
 | `!LIVE` | `circuits/test/drand-beacon.test.js` (the pinned quicknet chain hash and group key against `api.drand.sh`) | `circuits` | satisfied in its own step, `The drand pin, against the live chain`, which sets `LIVE=1` and fails unless both live tests ran. Skipped by design in the job's `Tests` step, which is offline apart from the ptau (square#260). |
 | `!HAVE_CIRCUIT` | `services/prover/test/circuit-agreement.test.js` | `prover (real proving key)` | satisfied |
 | `!hasArtifacts` | `services/prover/test/prove-route.e2e.test.js` | `prover (real proving key)` | satisfied |
@@ -109,7 +110,7 @@ next instance of this hides:
 | `!("stack" in ready)`, `notReady !== null` | `packages/policy/test/anvil.test.ts`, `packages/cli/test/policy.anvil.test.ts`, `packages/mcp/test/compliance.test.ts`, `packages/hosted/test/compliance.test.ts` | `policy → proof → release (anvil, every surface)` | satisfied — the job installs the module and starts the prover, and asserts both before the suites run. In `mcp (anvil)`, `hosted (anvil)` and `cli` the two compliance suites skip by design: those stacks hold no module. |
 | `!proverInstalled` | `packages/policy/test/commitment.test.ts` (the cross-check against the prover) | `packages/policy`, `policy → proof → release` | satisfied in the second, where the prover is installed; skipped in the first, by design. |
 
-Further guards are *inverse*: measured on 2026-09-15, seven in `circuits/test`
+Further guards are *inverse*: measured on 2026-09-15, eight in `circuits/test`
 and five in the prover, one beside each guarded prover suite above
 (`circuit-agreement`, `prove-route.e2e`, `solidity-encoding`, `disclosure`,
 `prove-backpressure.e2e`). Each is a single test titled `skipped: …` that runs

@@ -100,5 +100,54 @@ export function publicSignalsOf(circuit = 'payment', buildDir = BUILD) {
   return { ...header, publicSignals: published };
 }
 
+/**
+ * The counts circom prints when it compiles, read back out of the r1cs.
+ *
+ * square#238: circuits/README.md quoted a constraint table two circuit changes
+ * old, and nothing compared it with the compiler. Section 2 holds every
+ * constraint as three linear combinations A, B, C, each a u32 term count and
+ * that many (u32 wire, field-size coefficient) terms. circom counts a constraint
+ * non-linear when both A and B carry terms, which is A·B = C with a real
+ * product; the rest are linear.
+ */
+export function r1csConstraintCounts(file) {
+  const buf = fs.readFileSync(file);
+  if (buf.toString('utf8', 0, 4) !== 'r1cs') throw new Error(`${file} is not an r1cs file`);
+  const sections = buf.readUInt32LE(8);
+  let at = 12;
+  let fieldSize;
+  let wires;
+  let constraints;
+  let body2;
+  for (let i = 0; i < sections; i += 1) {
+    const type = buf.readUInt32LE(at);
+    const size = Number(buf.readBigUInt64LE(at + 4));
+    const body = at + 12;
+    if (type === 1) {
+      fieldSize = buf.readUInt32LE(body);
+      const p = body + 4 + fieldSize;
+      wires = buf.readUInt32LE(p);
+      constraints = buf.readUInt32LE(p + 24);
+    }
+    if (type === 2) body2 = body;
+    at = body + size;
+  }
+  if (fieldSize === undefined || body2 === undefined) throw new Error(`${file} has no header or no constraints section`);
+  let p = body2;
+  const terms = () => {
+    const n = buf.readUInt32LE(p);
+    p += 4 + n * (4 + fieldSize);
+    return n;
+  };
+  let nonLinear = 0;
+  for (let i = 0; i < constraints; i += 1) {
+    const a = terms();
+    const b = terms();
+    terms();
+    if (a > 0 && b > 0) nonLinear += 1;
+  }
+  return { nonLinear, linear: constraints - nonLinear, wires, constraints };
+}
+
 export const isCompiled = (circuit = 'payment', buildDir = BUILD) =>
   fs.existsSync(path.join(buildDir, `${circuit}.r1cs`)) && fs.existsSync(path.join(buildDir, `${circuit}.sym`));

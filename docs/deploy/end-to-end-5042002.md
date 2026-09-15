@@ -130,9 +130,10 @@ Policy committed, proof built from it, accepted by chain 5042002 (arc/v1).
 | verify | 78 ms | one `eth_call` to Arc with a state override. |
 | **total** | **1,670 ms** | |
 
-The circuit is larger than it was when this was first measured: [#98][i98]
-rebuilt the commitment on salted leaves, taking it from 6,608 witness variables
-to 11,584 and the domain from 8,192 to 16,384. Proving costs about 260 ms more.
+The circuit is larger than it was when this was first measured: [#98][i98]'s
+salted leaves (square#45) and square#119's bounds on the two ceilings took it
+from 6,608 witness variables to 11,584, 4,848 and 128 of them respectively, and
+the domain from 8,192 to 16,384. Proving costs about 260 ms more.
 Gas did not move, because the proof is still three curve points over eight
 public signals whatever the circuit behind it costs.
 

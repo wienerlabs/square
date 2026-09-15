@@ -115,8 +115,8 @@ describe.skipIf(!HAVE_ZKEY)('a key built here', () => {
   // The trap that caught that change: circom prints "non-linear constraints"
   // and it is tempting to size the ptau from it, but snarkjs sizes the domain
   // from the *total* constraint count. The salted commitment took non-linear
-  // constraints from 2,609 to 4,721 — comfortably inside 8,192 — while the
-  // total went from 6,586 to 11,426, which is not. `groth16 setup` refused,
+  // constraints from 2,737 to 4,849 — comfortably inside 8,192 — while the
+  // total went from 6,716 to 11,556, which is not. `groth16 setup` refused,
   // which is the right failure, but it refused at build time in CI rather than
   // here where it can say why.
   it('is exactly the smallest power the built key needs', () => {
