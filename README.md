@@ -175,6 +175,7 @@ and which are required to merge.
 | RPC | `https://rpc.testnet.arc.io` |
 | Explorer | `https://testnet.arcscan.app` |
 | Gas token | USDC (18 decimals native, 6 decimals ERC-20 at `0x3600000000000000000000000000000000000000`) |
+| USDC from elsewhere | Circle's CCTP V2, domain `26`: burned on Ethereum, Base or Arbitrum Sepolia, attested by Circle, minted here, then funded into a job ([docs/design/cctp-funding.md](docs/design/cctp-funding.md)) |
 | ERC-8004 | Identity `0x8004A818BFB912233c491871b3d84c89A494BD9e`, Reputation `0x8004B663056A597Dffe9eCcC1965A193B7388713`, Validation `0x8004Cb1BF31DAf7788923b405b754f57acEB4272` |
 | ERC-4337 | EntryPoint v0.7 `0x0000000071727De22E5E9d8BAf0edAc6f37da032`, SimpleAccountFactory `0x91E60e0613810449d098b0b5Ec8b51A0FE8c8985` |
 

@@ -53,3 +53,17 @@ seyi kontrol etmez. Istisna YOL degil DEGER bazinda: .env.example'a baska bir
 anahtar girilirse gitleaks onu yine yakalar."""
 regexTarget = "line"
 regexes = ['''0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80''']
+
+[[allowlists]]
+description = """Circle'in CCTP V2 sozlesme adresleri (TokenMessengerV2, TokenMinterV2)
+ve testnet USDC'leri, square#32: herkese acik, Circle'in belgelerinde yayimli ve
+zincirden okunarak dogrulanmis adresler. generic-api-key kurali, degerlerin
+20 baytlik hex olmasi ve alan adlarinin `token` icermesi (`tokenMessenger`,
+`tokenMinter`, `burnToken`) yuzunden takiliyor. Istisna YOL degil DEGER bazinda:
+ayni dosyalara girecek baska bir 0x degeri yine yakalanir."""
+regexTarget = "line"
+regexes = [
+  '''0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA''',
+  '''0xb43db544E2c27092c107639Ad201b3dEfAbcF192''',
+  '''0x1c7[dD]4[bB]196[cC][bB]0[cC]7[bB]01[dD]743[fF][bB][cC]6116[aA]902379[cC]7238''',
+]

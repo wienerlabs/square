@@ -128,6 +128,13 @@ the ERC-20 one).
 - `createScreenerClient({ url })`: `POST /screen` at the screener service, sixteen
   addresses to a request, as a `Screener`; `ScreenerError` when it refuses or cannot be
   reached. Any `{ screen(addresses) }` that puts records on chain serves as one.
+- USDC into Arc from Ethereum, Base or Arbitrum Sepolia over Circle's CCTP V2 (square#32):
+  `depositForBurn` on the source chain, `waitForAttestation` at Circle's service,
+  `receiveMessage` on Arc, `bridgeUsdcToArc` for the three in a row, `reattest` for an
+  attestation that lapsed, `decodeCctpMessage` for the bytes, `cctpFees` and `maxFeeFor`
+  for the fee; `CCTP_TESTNET_DOMAINS` and `CCTP_V2_TESTNET` are the domains and the shared
+  contract addresses, read back from the chains
+  ([docs/design/cctp-funding.md](../../docs/design/cctp-funding.md)).
 - The ABIs, from `@squaresdk/core/abi` as well, generated from the compiled contracts and
   checked in CI to still match them.
 
@@ -137,10 +144,14 @@ the ERC-20 one).
 npm test              # unit, no network
 npm run test:anvil    # the lifecycle against a local anvil with DeployLocal.s.sol on it
 npm run lifecycle     # the five settlement paths end to end, written up as a report
+npm run bridge        # USDC from another testnet into Arc over CCTP V2, and into a job; needs two funded keys
 ```
 
 `test/fork.test.ts` runs the same lifecycle against a fork of Arc Testnet with the real
 ERC-8004 registries when `ARC_FORK_RPC_URL` is set. `test/screening.test.ts` is the
 funding screening against a table of registry answers; the anvil suite installs the
-stack's registry on the hook for one case and takes it off again. `npm run generate:abi` regenerates the
+stack's registry on the hook for one case and takes it off again. `test/cctp.fork.test.ts`
+burns through Circle's real `TokenMessengerV2` on a fork of Ethereum Sepolia when
+`CCTP_SEPOLIA_FORK_RPC_URL` points at one (`anvil --fork-url <sepolia rpc>`), and reads a
+message Arc already minted from the live chain. `npm run generate:abi` regenerates the
 ABIs from `contracts/out`; CI fails if the checked-in copy differs.
