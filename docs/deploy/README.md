@@ -79,7 +79,11 @@ day of catching up from genesis with the lag check red throughout.
 3. Run the lifecycle against the new stack
    (`packages/core/scripts/lifecycle-arc-testnet.sh`). The report is written as
    a dated file, `docs/deploy/lifecycle-5042002-<date>.md`, and
-   `docs/deploy/lifecycle-5042002.md` points at the latest.
+   `docs/deploy/lifecycle-5042002.md` points at the latest. With a keeper
+   running against the stack (#336), run it with `LIFECYCLE_FINALIZER=keeper`
+   and a budget above the keeper's bar, so that the keeper's transactions are
+   the report's and its "The eight steps" table is #31's evidence
+   ([docs/design/mandate-to-payment.md](../design/mandate-to-payment.md)).
 4. Write `docs/deploy/redeploy-<date>.md`: addresses, deploy transactions, the
    parameter table, the read-back, the sweep, and a link to the lifecycle report.
 5. Deploy the app and the site (`vercel --prod` at the repository root and in

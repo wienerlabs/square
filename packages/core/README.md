@@ -143,12 +143,16 @@ the ERC-20 one).
 ```bash
 npm test              # unit, no network
 npm run test:anvil    # the lifecycle against a local anvil with DeployLocal.s.sol on it
-npm run lifecycle     # the five settlement paths end to end, written up as a report
+npm run lifecycle     # the settlement paths end to end, written up as a report; LIFECYCLE_FINALIZER=keeper on a chain a keeper watches
 npm run bridge        # USDC from another testnet into Arc over CCTP V2, and into a job; needs two funded keys
 ```
 
 `test/fork.test.ts` runs the same lifecycle against a fork of Arc Testnet with the real
-ERC-8004 registries when `ARC_FORK_RPC_URL` is set. `test/screening.test.ts` is the
+ERC-8004 registries when `ARC_FORK_RPC_URL` is set. The lifecycle's report carries
+square#31's eight steps, from the mandate to the payment, as a table of their own, read
+off the receivable path; with `LIFECYCLE_FINALIZER=keeper` the runner leaves every
+settlement to the keeper watching the chain and records the keeper's transaction
+([docs/design/mandate-to-payment.md](../../docs/design/mandate-to-payment.md)). `test/screening.test.ts` is the
 funding screening against a table of registry answers; the anvil suite installs the
 stack's registry on the hook for one case and takes it off again. `test/cctp.fork.test.ts`
 burns through Circle's real `TokenMessengerV2` on a fork of Ethereum Sepolia when
