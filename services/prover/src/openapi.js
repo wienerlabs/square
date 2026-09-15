@@ -1,6 +1,12 @@
 // Minimal OpenAPI 3.0 spec describing the HTTP surface this service exposes.
 // Returned verbatim from GET /api-docs.json. Kept inline (no codegen) because
-// the API is tiny — two endpoints.
+// the API is tiny: four endpoints, and this document.
+//
+// square#254 measured it against the running service: /health answered 503 and
+// declared only 200, Health declared a `backend` no response carried and left out
+// `checks` and `uptimeSeconds`, and /metrics and /version were served and absent.
+// test/openapi-coverage.test.js now holds every status the service is seen to
+// answer, and the body it answers with, to what is declared here.
 //
 // The spec inherited from aperture had drifted away from its implementation and
 // was rewritten against the code in #4. #18 then re-parameterised the service
@@ -29,12 +35,60 @@ export const openapiSpec = {
   paths: {
     '/health': {
       get: {
-        summary: 'Liveness probe',
+        summary: 'Health, with the check that the circuit artifacts are readable',
+        description:
+          'The same report on every status. `status` is `unhealthy` when a critical ' +
+          'check fails, and the artifact check is critical, so the answer is then 503. ' +
+          '`degraded` means only a non-critical check failed, and still answers 200. ' +
+          '`checks.artifacts.detail` names the files the prover opens, for the ' +
+          'operator; POST /prove never does.',
         tags: ['Meta'],
         responses: {
           200: {
-            description: 'Service is up',
+            description: 'Healthy or degraded: every critical check passed.',
             content: { 'application/json': { schema: { $ref: '#/components/schemas/Health' } } },
+          },
+          503: {
+            description:
+              'Unhealthy: a critical check failed. For this service that is the circuit ' +
+              'artifacts, missing or unreadable, and no proof can be produced until they ' +
+              'are back.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Health' } } },
+          },
+          500: {
+            description: 'The health report itself could not be produced.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+        },
+      },
+    },
+    '/metrics': {
+      get: {
+        summary: 'Prometheus exposition',
+        description:
+          'Proof duration histogram, proof failures by reason, the proof slots in use, ' +
+          'and process metrics.',
+        tags: ['Meta'],
+        responses: {
+          200: {
+            description: 'The metrics, in the Prometheus text format version 0.0.4.',
+            content: { 'text/plain': { schema: { type: 'string' } } },
+          },
+          500: {
+            description: 'The metrics could not be rendered.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
+          },
+        },
+      },
+    },
+    '/version': {
+      get: {
+        summary: 'Service, version, commit and Node version',
+        tags: ['Meta'],
+        responses: {
+          200: {
+            description: 'What is running.',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/VersionInfo' } } },
           },
         },
       },
@@ -89,7 +143,10 @@ export const openapiSpec = {
             description:
               'The prover failed after accepting the request — hashing, witness ' +
               'generation or the proving system. The message names the offending field ' +
-              'but never its value, so it is safe to surface and to log.',
+              'but never its value, so it is safe to surface and to log. When the circuit ' +
+              'artifacts are missing or unreadable the message is `circuit artifacts are ' +
+              'not available` and nothing more: GET /health names the files, for the ' +
+              'operator, and no path is given to a caller.',
             content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } },
           },
           503: {
@@ -125,11 +182,43 @@ export const openapiSpec = {
     schemas: {
       Health: {
         type: 'object',
+        required: ['status', 'service', 'version', 'checks', 'uptimeSeconds'],
         properties: {
-          status: { type: 'string', example: 'healthy' },
+          status: { type: 'string', enum: ['healthy', 'degraded', 'unhealthy'], example: 'healthy' },
           service: { type: 'string', example: 'square-prover' },
           version: { type: 'string', example: '0.1.0' },
-          backend: { type: 'string', example: 'circom+snarkjs' },
+          checks: {
+            type: 'object',
+            description: 'One report per check, by name. This service runs one, `artifacts`.',
+            additionalProperties: { $ref: '#/components/schemas/HealthCheck' },
+          },
+          uptimeSeconds: { type: 'integer', example: 3600 },
+        },
+      },
+      HealthCheck: {
+        type: 'object',
+        required: ['ok', 'critical', 'latencyMs'],
+        properties: {
+          ok: { type: 'boolean' },
+          critical: {
+            type: 'boolean',
+            description: 'A critical check that fails makes the service unhealthy, and /health answer 503.',
+          },
+          latencyMs: { type: 'integer' },
+          detail: {
+            type: 'string',
+            description: 'What the check found, when it says. For `artifacts` it names the files.',
+          },
+        },
+      },
+      VersionInfo: {
+        type: 'object',
+        required: ['service', 'version', 'node'],
+        properties: {
+          service: { type: 'string', example: 'square-prover' },
+          version: { type: 'string', example: '0.1.0' },
+          commit: { type: 'string', description: 'The commit, when GIT_SHA is set.' },
+          node: { type: 'string', example: 'v22.23.2' },
         },
       },
       TimeRestriction: {

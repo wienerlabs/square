@@ -16,7 +16,7 @@ compliance-violation log leak fixed on the way in — see
 | `GET /health` | Health with the artifact check, from `@squaresdk/observability`. |
 | `GET /metrics` | Prometheus exposition: proof duration histogram, failures by reason, process metrics. |
 | `GET /version` | Service, version, commit and Node version. |
-| `GET /api-docs.json` | OpenAPI 3.0 spec for the two endpoints below it. |
+| `GET /api-docs.json` | OpenAPI 3.0 spec for the other four: every status each of them answers, and the body. |
 | `POST /prove` | Generate a proof for one payment. |
 
 `POST /prove` returns 200 with a proof whether or not the payment is compliant:
@@ -143,6 +143,11 @@ the first bytes of the raw body (square#252). The error handler at the end of
 `src/index.js` keeps the status body-parser chose, answers `{"error": …}` with a
 message picked by the kind of error rather than read off it, and logs one
 `request_rejected` line.
+
+A proving key that is not there fails inside snarkjs, and the filesystem's error
+used to carry the file's absolute path into the 500's body (square#254). A failure
+to open `payment.wasm` or `payment.zkey` is now answered as `circuit artifacts are
+not available`, with no path; `GET /health` names the files, for the operator.
 
 ### OpenAPI spec
 
