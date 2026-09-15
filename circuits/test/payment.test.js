@@ -191,11 +191,15 @@ describe.skipIf(!HAVE_WASM)('payment.circom', () => {
         .rejects.toThrow();
     });
 
-    it('rule 4: a blocked entry cannot be switched off', async () => {
+    it('rule 4: rejects an unknown input signal, such as the removed blocked_addresses_mask', async () => {
       // The bypass this replaced: the lists used to carry parallel mask arrays
       // that policy_data_hash did not commit to, so zeroing blocked_addresses_mask
       // left the commitment byte-identical while rule 4 stopped matching. There
       // is no mask to zero now, and an unknown input is rejected.
+      //
+      // What this establishes is that last sentence: the witness calculator
+      // refuses a signal the circuit does not declare. It is not a rule 4
+      // constraint at work, and the name used to promise one (square#257).
       const input = await buildInput({ recipient: ADDRESSES.blocked });
       expect(input.blocked_addresses_mask).toBeUndefined();
       await expect(
@@ -285,6 +289,19 @@ describe.skipIf(!HAVE_WASM)('payment.circom', () => {
 
     it('refuses a daily-spent figure at or beyond 2^64', async () => {
       await expect(run({ dailySpentBefore: (2n ** 64n).toString() })).rejects.toThrow();
+    });
+
+    // square#119 put the two ceilings under the same bound: a comparator bounds
+    // the difference of its operands, so an unbounded ceiling near the modulus
+    // made rule 1 or rule 2 answer about a value other than the one it appeared
+    // to be. Nothing tested those two range checks, so deleting them left this
+    // suite green (square#257).
+    it('refuses a per-transaction ceiling at or beyond 2^64', async () => {
+      await expect(run({ maxPerTx: (2n ** 64n).toString() })).rejects.toThrow();
+    });
+
+    it('refuses a daily ceiling at or beyond 2^64', async () => {
+      await expect(run({ maxDaily: (2n ** 64n).toString() })).rejects.toThrow();
     });
 
     it('accepts the largest amount the interface can express', async () => {
