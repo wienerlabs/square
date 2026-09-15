@@ -72,6 +72,7 @@ read to 64 KiB and no further; TRM answered the largest request, 17 entries, in
 | `PORT` | no, default 3012 | |
 | `SUBMIT_GAS`, `MIN_SUBMITS_FUNDED` | no, defaults 400000 and 3 | what the balance health check measures against |
 | `RECEIPT_POLL_MS` | no, default 250 | how often a submission's receipt is polled for. viem's own default, for a chain that declares no block time, is 4 seconds, which on Arc is several times the confirmation it waits for |
+| `CORS_ORIGINS` | no | comma-separated origins a browser may call `POST /screen` and `GET /health` from, such as the app's (`NEXT_PUBLIC_SCREENER_URL`); `localhost` on any port is always allowed. Any other origin gets no CORS headers, so its browser stops the call |
 
 `GET /health` reports three things: the RPC answers with the configured chain,
 the registry recognises this screener, and the account can pay for a few

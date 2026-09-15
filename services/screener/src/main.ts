@@ -4,7 +4,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { ARC_TESTNET_CHAIN_ID, networks } from "@squaresdk/core";
 import { assertPublicUrl } from "@squaresdk/hardening";
 import { createHealth, createLogger, createMetrics } from "@squaresdk/observability";
-import { screenerApp } from "./app.js";
+import { corsOriginsFrom, screenerApp } from "./app.js";
 import { screenerChecks } from "./checks.js";
 import { screenAndSign } from "./screen.js";
 import { TRM_DEFAULT_BASE_URL, TrmSanctionsSource } from "./source.js";
@@ -72,6 +72,7 @@ async function main(): Promise<void> {
     logger,
     health,
     metrics,
+    corsOrigins: corsOriginsFrom(process.env["CORS_ORIGINS"]),
     service: {
       async screen(subjects) {
         const { screenings, sourceMs } = await screenAndSign(

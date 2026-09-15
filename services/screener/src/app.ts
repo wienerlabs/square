@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import type { Address, Hex } from "viem";
 import type { createHealth, createLogger, createMetrics } from "@squaresdk/observability";
 import { observabilityRoutes } from "@squaresdk/observability/hono";
@@ -21,6 +22,29 @@ export interface ScreenerAppOptions {
   health: ReturnType<typeof createHealth>;
   metrics: ReturnType<typeof createMetrics>;
   logger: ReturnType<typeof createLogger>;
+  /**
+   * Origins a browser may call this service from, beyond `localhost` on any
+   * port, which is always allowed: `CORS_ORIGINS`, read by `corsOriginsFrom`.
+   */
+  corsOrigins?: readonly string[];
+}
+
+const LOCALHOST = /^http:\/\/localhost:\d+$/;
+
+/**
+ * `CORS_ORIGINS`, comma-separated, as a list.
+ *
+ * square#374: the app's fund step calls `POST /screen` from the browser
+ * (square#373, `NEXT_PUBLIC_SCREENER_URL`), and a service that writes no CORS
+ * headers stops that call at the preflight. The prover has had the same rule
+ * all along (services/prover/src/index.js): localhost on any port, and the
+ * origins this variable names.
+ */
+export function corsOriginsFrom(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -33,6 +57,15 @@ export interface ScreenerAppOptions {
  */
 export function screenerApp(options: ScreenerAppOptions): Hono {
   const app = new Hono();
+  // The two routes a browser calls. An origin that is neither localhost nor
+  // named gets no Access-Control-Allow-Origin, so its browser stops the call.
+  const extra = options.corsOrigins ?? [];
+  const browsers = cors({
+    origin: (origin) => (LOCALHOST.test(origin) || extra.includes(origin) ? origin : null),
+    allowMethods: ["GET", "POST"],
+  });
+  app.use("/screen", browsers);
+  app.use("/health", browsers);
   app.route("/", observabilityRoutes({ health: options.health, metrics: options.metrics }));
   app.post("/screen", async (c) => {
     let body: unknown;
