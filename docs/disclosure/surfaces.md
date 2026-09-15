@@ -1,8 +1,9 @@
 # Surfaces: where the demo-setup disclosure has to appear
 
-Issue [#3][i3] lists five surfaces. This file is the working record for all
-five: what the audit found on each, what replaces it, and whether the change
-has landed.
+Issue [#3][i3] lists five surfaces, and [#262][i262] added a sixth: this
+repository's own app and site, which #3's audit did not cover. This file is the
+working record for all six: what the audit found on each, what replaces it, and
+whether the change has landed.
 
 The wording all of it quotes from is [zk-setup-status.md](./zk-setup-status.md).
 Change that file first, then propagate here.
@@ -12,6 +13,7 @@ the CI guard lets the quotation through while still refusing the claim
 anywhere else. An exception you can grep for is the point.
 
 [i3]: https://github.com/wienerlabs/square/issues/3
+[i262]: https://github.com/wienerlabs/square/issues/262
 
 | # | Surface | Audit result | Deliverable | Landed |
 |---|---|---|---|---|
@@ -20,6 +22,7 @@ anywhere else. An exception you can grep for is the point.
 | 3 | Presentation materials | No artifact exists in any reachable repository | Disclosure block, below | Copy ready |
 | 4 | 1:1 notes / talk track | No artifact exists in any reachable repository | Spoken script, below | Copy ready |
 | 5 | a-perture.com | 3 claims, live now, served from `aperture/dashboard/src/app/docs/page.tsx` | 1 applicable patch | Patch ready |
+| 6 | This repository's `app/` and `site/` | 1 claim in `app/`, the same claim in `README.md`; `site/` clean | Fixed here, and a pattern that catches the claim | Landed ([#262][i262]) |
 
 "Copy ready" means the text is written and approved here; applying it to a deck
 or a website deployment is a publishing step outside this repository. "Patches
@@ -68,6 +71,18 @@ Covenant's proofs come from a separate SP1 word-count circuit
 trusted setup, so the failure described in #3 does not apply to it, and no
 "production" claim about proofs appears in `covenant/README.md`. Nothing to
 change.
+
+### This repository's app and site — 1 claim, fixed
+
+Audited for [#262][i262], by grep against this repository and by reading the
+chain the claim is about.
+
+| File | Line | Found | Why it is wrong |
+|---|---|---|---|
+| `app/src/components/ComplianceSlot.tsx` | 14–15 | `The circuit, the prover and the on-chain verifier are live; settlement is not wired to them.` <!-- ci-allow-phrase --> | The only verifier on chain, `0x35d7B65B…` on Arc Testnet, is superseded. An `eth_call` of `verifyProof` with `contracts/test/fixtures/proofs.json`'s `compliant` proof returns `false`. "Not wired" also reads as the one missing step, when wiring that address would refuse every release. |
+| `README.md` | 33–34 | `The circuit, the prover and the on-chain verifier are live (#14, #18, #17)` <!-- ci-allow-phrase --> | The same claim. The Status table further down the same file already marks the verifier superseded. |
+
+`site/` has no claim about the verifier or the setup.
 
 ### Adjacent findings, deliberately not changed
 
@@ -254,3 +269,20 @@ Groth16 and timings without an assurance claim.
 Applying the patch is not enough on its own: the site has to be redeployed for
 the change to reach a reader. Confirm with the same `curl` above returning
 nothing before treating this surface as done.
+
+## 6. This repository's app and site
+
+Fixed in this repository by [#262][i262], so there is nothing to publish
+separately beyond the app's normal deployment.
+
+| Line | Found | Replacement |
+|---|---|---|
+| `app/src/components/ComplianceSlot.tsx:14-15` | "the on-chain verifier are live" <!-- ci-allow-phrase --> | The slot read live, as before. The circuit and the prover are live, and a proof built from them verifies against the pairing precompiles on Arc Testnet. The Groth16 verifier deployed there is superseded and rejects every proof this build produces; the ceremony in #16 fixes the key that gets a permanent address. |
+| `README.md:33-34` | the same <!-- ci-allow-phrase --> | The same facts, with the `verifies on Arc Testnet` check named as what shows the precompile verification on every pull request. |
+
+The claim shape is in [forbidden-phrases.txt](./forbidden-phrases.txt) now: a
+verifier named as deployed, on-chain or Groth16, followed by is/are live. Both
+lines above are in `guard-fixtures/violations.txt`, and the honest replacements
+are in `allowed.txt`. So the guard's self-test fails if the pattern stops
+catching them, and the next time the sentence is written it fails
+`forbidden strings`.
