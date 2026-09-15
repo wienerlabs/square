@@ -87,6 +87,8 @@ next instance of this hides:
 | `!HAVE_CIRCUIT` | `services/prover/test/circuit-agreement.test.js` | `prover (real proving key)` | satisfied |
 | `!hasArtifacts` | `services/prover/test/prove-route.e2e.test.js` | `prover (real proving key)` | satisfied |
 | `!HAVE_ARTIFACTS` | `services/prover/test/solidity-encoding.test.js` | `prover (real proving key)` | satisfied |
+| `!HAVE_ARTIFACTS` | `services/prover/test/disclosure.test.js` (the disclosure root against a real proof's `policy_data_hash`, square#45) | `prover (real proving key)` | satisfied |
+| `!hasArtifacts` | `services/prover/test/prove-backpressure.e2e.test.js` | `prover (real proving key)` | satisfied |
 | `!reachable` | `services/indexer/test/{anvil,sync}.test.ts` | `services/indexer (anvil)` | satisfied — the job now starts anvil and deploys |
 | `!reachable` | `services/keeper/test/anvil.test.ts` | `services/keeper (anvil)` | satisfied — same |
 | `!reachable` | `packages/core/test/anvil.test.ts` | `@squaresdk/core against anvil` | satisfied — that job already started one |
@@ -98,9 +100,13 @@ next instance of this hides:
 | `!("stack" in ready)`, `notReady !== null` | `packages/policy/test/anvil.test.ts`, `packages/cli/test/policy.anvil.test.ts`, `packages/mcp/test/compliance.test.ts`, `packages/hosted/test/compliance.test.ts` | `policy → proof → release (anvil, every surface)` | satisfied — the job installs the module and starts the prover, and asserts both before the suites run. In `mcp (anvil)`, `hosted (anvil)` and `cli` the two compliance suites skip by design: those stacks hold no module. |
 | `!proverInstalled` | `packages/policy/test/commitment.test.ts` (the cross-check against the prover) | `packages/policy`, `policy → proof → release` | satisfied in the second, where the prover is installed; skipped in the first, by design. |
 
-Four further guards are *inverse* — `skipIf(HAVE_BUILD)` and the prover's three
-`skipIf(HAVE_*)`. They fire only when the artifact is **absent** and exist to say
-so out loud. Seeing one skipped is the correct state.
+Further guards are *inverse*: measured on 2026-09-15, seven in `circuits/test`
+and five in the prover, one beside each guarded prover suite above
+(`circuit-agreement`, `prove-route.e2e`, `solidity-encoding`, `disclosure`,
+`prove-backpressure.e2e`). Each is a single test titled `skipped: …` that runs
+only when the artifact is **absent**, to say so out loud. Seeing one skipped is
+the correct state, and in `prover (real proving key)` it is the only skip allowed
+(below).
 
 Measured on 2026-09-07, with the artifacts moved aside and the suites unchanged,
 on a clean checkout after `npm ci`. The figure in brackets is what vitest
@@ -148,8 +154,14 @@ So, two mechanisms:
 
 `services/prover (hermetic)` in `packages.yml` is the no-artifacts run and is
 kept: it is the contributor's `npm test` and it should stay green. It is not a
-substitute for `prover (real proving key)`, which runs the five tests the
-hermetic job skips.
+substitute for `prover (real proving key)`, which runs what the hermetic job
+skips. On 2026-09-15 that was eleven tests in four suites that need a proving key
+(`prove-route.e2e`, `solidity-encoding`, `disclosure`, `prove-backpressure.e2e`)
+and ten in `circuit-agreement.test.js` that need the compiled circuit. The figure
+is not kept here to be checked by hand: that job's `Every guarded test ran` step,
+`.github/scripts/vitest-unexpected-skips.mjs`, fails when a test skips there that
+is not a `skipped: …` placeholder (square#259). This file said "five" while there
+were seven.
 
 ## Documented events
 
