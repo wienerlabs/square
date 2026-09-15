@@ -52,35 +52,51 @@ describe.skipIf(!("stack" in ready))("policy → proof → release, on chain", (
     return jobId;
   }
 
-  it("binds a real proof the module verifies, and releases the net to the provider once the window closes", async () => {
+  it("waits while the window has a day to run, then binds a real proof the module verifies and releases the net to the provider", async () => {
     const jobId = await submittedJob();
     const client = institution();
     const duty = new ComplianceDuty({ client, policy, prover, onEvent: (e) => events.push(e) });
     duty.track(jobId, "text.summarize");
 
+    // A day to the close and an hour's tolerance: nothing to bind yet (square#349).
     const first = await duty.tick();
-    expect(first.bound).toEqual([jobId]);
-    expect(first.released).toEqual([]);
-    const bound = await client.complianceProofOf(jobId);
-    const signals = signalsOf(decodeComplianceProof(bound)!);
-    expect(signals.isCompliant).toBe(true);
-    expect(signals.recipient.toLowerCase()).toBe(account(2).address.toLowerCase());
-    expect(signals.amount).toBe(await client.netPayout(jobId));
-    expect(await client.previewRelease({ jobId, payee: account(2).address, amount: signals.amount, client: account(1).address, proof: bound })).toBe(true);
+    expect(first).toMatchObject({ waiting: [jobId], bound: [], released: [] });
+    expect(await client.complianceProofOf(jobId)).toBe("0x");
 
     await stack.testClient.increaseTime({ seconds: 86_400 + 1 });
     await stack.testClient.mine({ blocks: 1 });
-    // A day passed: the proof is stale by the clock, so the duty rebinds and then cranks.
+    // The window closed: one bind, one finalize.
     const second = await duty.tick();
     expect(second.bound).toEqual([jobId]);
     expect(second.released).toEqual([jobId]);
+    const net = await client.netPayout(jobId);
     const released = events.find((e) => e.type === "released" && e.jobId === jobId);
-    expect(released).toMatchObject({ type: "released", verified: true, payee: account(2).address, amount: signals.amount });
+    expect(released).toMatchObject({ type: "released", verified: true, payee: account(2).address, amount: net });
     expect((await client.getJobRecord(jobId)).status).toBe(JobStatus.Completed);
-    expect(await provider().withdrawable(account(2).address)).toBeGreaterThanOrEqual(signals.amount);
-    expect(await client.spentToday(account(1).address)).toBeGreaterThanOrEqual(signals.amount);
+    expect(await provider().withdrawable(account(2).address)).toBeGreaterThanOrEqual(net);
+    expect(await client.spentToday(account(1).address)).toBeGreaterThanOrEqual(net);
     expect(duty.jobs()).toEqual([]);
+    // The proof the crank consumed named this payee and this net, and was compliant.
+    const bound = events.filter((e) => e.type === "bound" && e.jobId === jobId);
+    expect(bound).toHaveLength(1);
   }, 180_000);
+
+  it("finds a job it was never told about on the chain, and releases it under the category the proof resolves", async () => {
+    const jobId = await submittedJob();
+    const client = institution();
+    await stack.testClient.increaseTime({ seconds: 86_400 + 1 });
+    await stack.testClient.mine({ blocks: 1 });
+    // A duty that starts after the hire, with no state file: the chain is what it has (square#348).
+    const fresh = new ComplianceDuty({ client, policy, prover, onEvent: (e) => events.push(e) });
+    const recovered = await fresh.recover();
+    expect(recovered.discovered).toContain(jobId);
+    expect(fresh.jobs().find((j) => j.jobId === jobId)).toEqual({ jobId, category: undefined });
+    const report = await fresh.tick();
+    expect(report.released).toContain(jobId);
+    const signals = signalsOf(decodeComplianceProof(await client.complianceProofOf(jobId))!);
+    expect(signals.isCompliant).toBe(true);
+    expect((await client.getJobRecord(jobId)).status).toBe(JobStatus.Completed);
+  }, 240_000);
 
   it("names the buyer of a sold receivable as the payee, and the module releases to the buyer", async () => {
     const jobId = await submittedJob();
@@ -102,7 +118,7 @@ describe.skipIf(!("stack" in ready))("policy → proof → release, on chain", (
 
     await stack.testClient.increaseTime({ seconds: 86_400 + 1 });
     await stack.testClient.mine({ blocks: 1 });
-    const duty = new ComplianceDuty({ client, policy, prover, onEvent: (e) => events.push(e) });
+    const duty = new ComplianceDuty({ client, policy, prover, onEvent: (e) => events.push(e), discover: false });
     duty.track(jobId, "text.summarize");
     const before = await buyer().withdrawable(account(3).address);
     const report = await duty.tick();

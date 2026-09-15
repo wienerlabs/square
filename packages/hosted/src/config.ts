@@ -45,6 +45,13 @@ export interface ComplianceConfig {
   proverUrl: string;
   /** How often the bound proofs are checked, ms; well inside the module's tolerance. Default 15000. */
   intervalMs?: number | undefined;
+  /**
+   * Where the duty keeps the delegated jobs across restarts, relative to the
+   * config file (square#348): a window outlives the process. Default
+   * `<config file>.duty.json`; `false` keeps none, and the chain is still
+   * scanned for this wallet's open jobs at start.
+   */
+  stateFile?: string | false | undefined;
 }
 
 export interface HostedAgentConfig {
@@ -113,6 +120,7 @@ const schema = z.object({
       policyFile: z.string().min(1),
       proverUrl: z.string().url(),
       intervalMs: z.number().int().min(1000).optional(),
+      stateFile: z.union([z.string().min(1), z.literal(false)]).optional(),
     })
     .optional(),
   maxTurns: z.number().int().min(1).max(100).optional(),

@@ -45,8 +45,8 @@ const callTool = async (client: Client, name: string, args: Record<string, unkno
 const textOf = (result: CallToolResult) => result.content.map((c) => (c.type === "text" ? c.text : "")).join("");
 
 /** The whole stage: a chain, an agent on it, a resolver that knows the agent, and a server that pays. */
-function stage(options: { balance?: bigint; horizon?: number; minimum?: (capability: string) => bigint | undefined; deactivated?: boolean; wallet?: boolean } = {}) {
-  const chain = fakeChain({ balance: options.balance, horizon: options.horizon, now: () => Math.floor(now() / 1000), wallet: options.wallet });
+function stage(options: { balance?: bigint; horizon?: number; minimum?: (capability: string) => bigint | undefined; deactivated?: boolean; wallet?: boolean; now?: () => number } = {}) {
+  const chain = fakeChain({ balance: options.balance, horizon: options.horizon, now: options.now ?? (() => Math.floor(now() / 1000)), wallet: options.wallet });
   const seen: string[] = [];
   const agent = fakeAgent({
     card: card({ agentId: 7n, capabilities: [{ id: "text.summarize", description: "Summarise a document.", price: "0.05" }, { id: "free.echo", description: "Echoes." }] }),
@@ -87,7 +87,7 @@ describe("what the server offers", () => {
   it("with a wallet, hiring too, and paying per call only with x402 configured", async () => {
     const { serverOptions } = stage();
     const client = await connect(serverOptions);
-    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual(["square_agent", "square_hire", "square_job", "square_task"]);
+    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual(["square_agent", "square_dispatch", "square_hire", "square_job", "square_refund", "square_task"]);
     expect(client.getInstructions()).toContain(`Paying wallet: ${serverOptions.client.account}`);
     const hire = (await client.listTools()).tools.find((t) => t.name === "square_hire");
     expect(hire?.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: true });
@@ -215,7 +215,7 @@ describe("square_hire", () => {
     const result = await callTool(client, "square_hire", { agent: ATLAS, capability: "text.summarize", input: "x" });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("Job 1 funded with 0.05 USDC for Atlas");
-    expect(textOf(result)).toContain("The task could not be dispatched. The escrow stays on job 1");
+    expect(textOf(result)).toContain("The task could not be handed to the agent. The escrow stays on job 1: try again later with square_dispatch");
     expect(textOf(result)).toContain("task/create rejected: job 1 is funded with 50000 but text.summarize costs 1000000");
     expect(result.structuredContent).toMatchObject({ jobId: "1", taskId: "square-job-1", transactions: { fund: expect.any(String) } });
     expect(chain.writes).toHaveLength(3);
@@ -227,7 +227,7 @@ describe("square_hire", () => {
     const result = await callTool(client, "square_hire", { agent: ATLAS, capability: "text.summarize", input: "fail" });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("Task square-job-1: FAILED; job Funded on chain\nreason: the document is empty");
-    expect(textOf(result)).toContain("claimRefund returns it to this wallet once the job expires");
+    expect(textOf(result)).toContain("once the job expires, square_refund takes it back to this wallet");
     expect(result.structuredContent).toMatchObject({ jobId: "1", task: { state: "FAILED", reason: "the document is empty" }, job: { status: "Funded" } });
   });
 
@@ -255,6 +255,94 @@ describe("square_hire", () => {
     // Every write of job 1 precedes every write of job 2.
     const jobOf = (write: string) => Number(/\((\d+)/.exec(write)?.[1]);
     expect(chain.writes.map(jobOf)).toEqual([1, 1, 1, 1, 2, 2, 2, 2]);
+  });
+});
+
+describe("square_dispatch and square_refund (square#351)", () => {
+  it("hands a funded job's task to the agent again, under the same task id, and spends nothing", async () => {
+    const { chain, serverOptions, seen } = stage({ minimum: () => parseUnits("1.00", 6) });
+    const client = await connect(serverOptions);
+    // The agent refused the task at 0.05 (its floor is 1.00): the job is Funded and undispatched.
+    const hired = await callTool(client, "square_hire", { agent: ATLAS, capability: "text.summarize", input: "a b c" });
+    expect(hired.isError).toBe(true);
+    expect(chain.records.get(1n)?.status).toBe(JobStatus.Funded);
+    const writes = chain.writes.length;
+    // The agent lowers its floor; the same job is handed over again.
+    const again = await callTool(client, "square_dispatch", { agent: ATLAS, jobId: "1", capability: "text.summarize", input: "a b c" });
+    expect(again.isError).toBe(true); // still refused: the stage's floor is fixed
+    expect(textOf(again)).toContain("try again later with square_dispatch");
+    expect(chain.writes.length).toBe(writes);
+    expect(seen).toEqual([]);
+
+    const easy = stage();
+    const easyClient = await connect(easy.serverOptions);
+    // A funded job nobody dispatched: created through the same chain by hand.
+    await easy.chain.client.createJob({ provider: WALLET, expiredAt: BigInt(Math.floor(now() / 1000) + 86_400 * 7), spec: {} });
+    await easy.chain.client.setBudget(1n, parseUnits("0.05", 6));
+    await easy.chain.client.fund(1n, parseUnits("0.05", 6));
+    const handed = await callTool(easyClient, "square_dispatch", { agent: ATLAS, jobId: "1", capability: "text.summarize", input: "a b c" });
+    expect(handed.isError).toBeFalsy();
+    expect(textOf(handed)).toContain("Job 1 (0.05 USDC in escrow) handed to Atlas again.");
+    expect(handed.structuredContent).toMatchObject({ jobId: "1", taskId: "square-job-1", task: { state: "DELIVERED" } });
+    expect(easy.chain.records.get(1n)?.status).toBe(JobStatus.Submitted);
+
+    // Not an Open job, not somebody else's.
+    await easy.chain.client.createJob({ provider: WALLET, expiredAt: BigInt(Math.floor(now() / 1000) + 86_400 * 7), spec: {} });
+    const open = await callTool(easyClient, "square_dispatch", { agent: ATLAS, jobId: "2", capability: "text.summarize", input: "x" });
+    expect(open.isError).toBe(true);
+    expect(textOf(open)).toContain("job 2 is Open, not Funded");
+  });
+
+  it("says when an escrow becomes claimable, and after the expiry claims and withdraws it", async () => {
+    const clock = { now: Math.floor(now() / 1000) };
+    const { chain, serverOptions } = stage({ minimum: () => parseUnits("1.00", 6), now: () => clock.now });
+    const client = await connect(serverOptions);
+    const hired = await callTool(client, "square_hire", { agent: ATLAS, capability: "text.summarize", input: "a b c", expiresInDays: 7 });
+    expect(hired.isError).toBe(true);
+    const before = await callTool(client, "square_refund", { jobId: "1" });
+    expect(before.isError).toBeFalsy();
+    expect(textOf(before)).toContain("Job 1 is Funded and expires");
+    expect(before.structuredContent).toMatchObject({ claimable: false, budget: "0.05" });
+    const balance = chain.state.balance;
+
+    clock.now += 8 * 86_400;
+    const after = await callTool(client, "square_refund", { jobId: "1" });
+    expect(after.isError).toBeFalsy();
+    expect(textOf(after)).toMatch(/refund claimed in 0x[0-9a-f]+ and withdrawn to/);
+    expect(after.structuredContent).toMatchObject({ status: "Expired", transactions: { claimRefund: expect.any(String), withdraw: expect.any(String) } });
+    expect(chain.writes.slice(-2)).toEqual(["claimRefund(1)", `withdraw(${parseUnits("0.05", 6)})`]);
+    expect(chain.state.balance).toBe(balance + parseUnits("0.05", 6));
+
+    const settled = await callTool(client, "square_refund", { jobId: "1" });
+    expect(settled.isError).toBe(true);
+    expect(textOf(settled)).toContain("job 1 is Expired; the escrow has already been settled");
+    await chain.client.createJob({ provider: WALLET, expiredAt: BigInt(clock.now + 86_400 * 7), spec: {} });
+    const open = await callTool(client, "square_refund", { jobId: "2" });
+    expect(open.isError).toBeFalsy();
+    expect(textOf(open)).toContain("Job 2 is Open: nothing is escrowed on it");
+  });
+
+  it("square_hire carries on with the Open job a failed funding left, when told its id", async () => {
+    const { chain, serverOptions } = stage({ balance: 0n });
+    const client = await connect(serverOptions);
+    const short = await callTool(client, "square_hire", { agent: ATLAS, capability: "text.summarize", input: "a b c" });
+    expect(short.isError).toBe(true);
+    expect(textOf(short)).toContain("the wallet holds 0 USDC");
+    expect(chain.records.size).toBe(0);
+    // A funding that fails after the job is open leaves it Open: the answer names the way back.
+    chain.state.balance = parseUnits("0.05", 6);
+    const fund = chain.client.fund;
+    chain.client.fund = async () => {
+      throw new Error("ERC20InsufficientBalance");
+    };
+    const half = await callTool(client, "square_hire", { agent: ATLAS, capability: "text.summarize", input: "a b c" });
+    expect(half.isError).toBe(true);
+    expect(half.structuredContent).toMatchObject({ transactions: { createJob: expect.any(String), setBudget: expect.any(String) }, hint: expect.stringContaining("call square_hire again with its jobId") });
+    chain.client.fund = fund;
+    const resumed = await callTool(client, "square_hire", { agent: ATLAS, capability: "text.summarize", input: "a b c", jobId: "1" });
+    expect(resumed.isError).toBeFalsy();
+    expect(resumed.structuredContent).toMatchObject({ jobId: "1", task: { state: "DELIVERED" } });
+    expect(chain.records.size).toBe(1);
   });
 });
 

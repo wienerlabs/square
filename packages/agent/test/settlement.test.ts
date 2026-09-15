@@ -12,12 +12,19 @@ const OTHER = "0x90F79bf6EB2c4f870365E785982E1f101E93b906" as const;
 const TX = ("0x" + "11".repeat(32)) as Hex;
 const NOW = 1_800_000_000n;
 
-type Record_ = { status: number; provider: `0x${string}`; budget: bigint; expiredAt: number; settlementHorizon: number };
+type Record_ = { status: number; client: `0x${string}`; provider: `0x${string}`; budget: bigint; expiredAt: number; settlementHorizon: number };
+const CLIENT = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" as const;
 
-function stub(records: Record<string, Record_>, submitEvents: (jobId: bigint, deliverable: Hex) => unknown[] = () => [], chainNow = NOW) {
+function stub(records: Record<string, Record_>, submitEvents: (jobId: bigint, deliverable: Hex) => unknown[] = () => [], chainNow = NOW, gate: { module?: boolean; policy?: boolean } = {}) {
   const submits: unknown[] = [];
   const client = {
     account: AGENT,
+    async complianceModule() {
+      return gate.module ? "0x000000000000000000000000000000000000c0de" : null;
+    },
+    async policyOf() {
+      return { commitment: gate.policy ? `0x${"ab".repeat(32)}` : `0x${"0".repeat(64)}`, dailyLimit: 0n, updatedAt: 0n, epoch: 0n };
+    },
     publicClient: {
       async getBlock() {
         return { timestamp: chainNow };
@@ -38,7 +45,7 @@ function stub(records: Record<string, Record_>, submitEvents: (jobId: bigint, de
 
 // A day's settlement horizon; the kernel floors anything shorter at 15 minutes.
 const HORIZON = 86_400;
-const funded = (overrides: Partial<Record_> = {}): Record_ => ({ status: JobStatus.Funded, provider: AGENT, budget: 5_000_000n, expiredAt: 1_900_000_000, settlementHorizon: HORIZON, ...overrides });
+const funded = (overrides: Partial<Record_> = {}): Record_ => ({ status: JobStatus.Funded, client: CLIENT, provider: AGENT, budget: 5_000_000n, expiredAt: 1_900_000_000, settlementHorizon: HORIZON, ...overrides });
 const submitted = (jobId: bigint, deliverable: Hex) => [{ contract: "SquareJob", eventName: "JobSubmitted", args: { jobId, provider: AGENT, deliverable } }];
 const task = { capability: "text.summarize", callerDid: "did:aip:eip155:31337:0x0000000000000000000000000000000000000001:9" };
 
@@ -96,6 +103,18 @@ describe("admit", () => {
     const { client } = stub({ "42": funded() });
     const settlement = squareSettlement({ client, agentId: 1n, now: () => Promise.reject(new Error("HTTP request failed")) });
     expect(await settlement.admit("42", task)).toEqual({ ok: false, reason: "the chain's clock could not be read for job 42: HTTP request failed" });
+  });
+
+  it("refuses a job whose client has no policy on a hook with a compliance module, and takes it once the client commits (square#350)", async () => {
+    const gated = stub({ "42": funded() }, () => [], NOW, { module: true });
+    expect(await squareSettlement({ client: gated.client, agentId: 1n, now: () => NOW }).admit("42", task)).toEqual({
+      ok: false,
+      reason: `job 42 cannot pay: the hook holds a compliance module and its client ${CLIENT} has no policy on the registry, so the release would be refused; the client has to commit a policy first`,
+    });
+    const committed = stub({ "42": funded() }, () => [], NOW, { module: true, policy: true });
+    expect(await squareSettlement({ client: committed.client, agentId: 1n, now: () => NOW }).admit("42", task)).toEqual({ ok: true });
+    const open = stub({ "42": funded() });
+    expect(await squareSettlement({ client: open.client, agentId: 1n, now: () => NOW }).admit("42", task)).toEqual({ ok: true });
   });
 
   it("takes any funded amount when the capability carries no price", async () => {
