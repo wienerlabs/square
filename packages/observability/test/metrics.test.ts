@@ -243,7 +243,7 @@ describe("labels stay bounded", () => {
       "Missing required field(s): operator_id, policy",
       "ENOENT: no such file or directory, open 'artifacts/payment.zkey'",
       "Circuit produced 4 public signals, expected 6 - circuit and prover service are out of sync.",
-      "lookup key is zero; the circuit rejects this witness",
+      "payment_token (token_in): lookup key is zero; the circuit rejects this witness",
       "request timed out after 30000ms",
       "JavaScript heap out of memory",
       "something nobody has seen before",
