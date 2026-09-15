@@ -132,6 +132,23 @@ parameters served and compares it to the announced
 `52db9ba7…e971`, which binds the public key, the genesis time, the period and
 the group seed to one value nobody serving the response controls.
 
+The pin itself was checked against the live chain before #16 was opened, on
+2026-09-15 at 14:13 UTC:
+
+```console
+$ LIVE=1 npx vitest run test/drand-beacon.test.js -t "against the live chain"
+ ✓ against the live chain (LIVE=1) > serves parameters that hash to the pinned chain
+ ✓ against the live chain (LIVE=1) > signs rounds verifiably under the pinned key
+ Tests  2 passed | 15 skipped (17)
+```
+
+Both claims are about drand as it answered then. `api.drand.sh`'s quicknet
+parameters hash to the pinned chain hash, and the latest round's signature
+verifies under the pinned group key but not as the round before it. The
+`circuits` job repeats the check on every pull request, in its own step
+(square#260), so a pin copied wrong or a chain drand has rotated turns a
+required check red before a ceremony depends on it.
+
 [verifying.md](./verifying.md) walks the same ground with individual `snarkjs`
 commands, for anyone who would rather not run our script to check our ceremony.
 That is the better instinct and the reason both exist.
