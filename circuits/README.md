@@ -291,13 +291,13 @@ and `time_active` is forced boolean, since rule 6 switches on it.
 
 ## Constraint cost, measured
 
-`circom` output, not estimates:
+`circom` 2.2.3 output, the version CI pins, not estimates:
 
 | Circuit | Non-linear | Linear | Wires |
 |---|---|---|---|
 | Aperture's original `payment.circom` | 2863 | 4514 | 7441 |
-| This `payment.circom` | **2609** | **3977** | **6608** |
-| Change | **−254** | **−537** | **−833** |
+| This `payment.circom` | **4849** | **6707** | **11584** |
+| Change | **+1986** | **+2193** | **+4143** |
 
 Attribution, each measured by compiling the variant rather than reasoned about:
 
@@ -305,16 +305,26 @@ Attribution, each measured by compiling the variant rather than reasoned about:
 |---|---|
 | Rule 6 constrained properly | **+118** |
 | `Num2Bits(64)` on the two amounts | **+128** |
+| `Num2Bits(64)` on the two ceilings ([#119](https://github.com/wienerlabs/square/issues/119)) | **+128** |
 | Non-zero lookup keys, window hour bounds, boolean `time_active` | **+14** |
+| Salted leaves, eight `Poseidon(3)` under the root ([#45](https://github.com/wienerlabs/square/issues/45)) | **+2112** |
 | Mask arrays removed (28 multiplications) | **−28** |
 | Addresses collapsed to one field, list Poseidons dropped | **−486** |
-| net | **−254** |
+| net | **+1986** |
 
 The soundness figure is the difference between the two templates in
 `test/circuits/`, compiled standalone: `timestamp_checked` is 166 non-linear
 against `timestamp_unchecked`'s 48. The rest are this circuit compiled with and
-without the block in question. The net is negative — the port paid for four
-soundness fixes and still came out smaller than what it replaced.
+without the block in question: without #45's leaves it is 2737 non-linear,
+without #119's ceiling bounds 4721, without both 2609.
+
+The net is positive, and almost all of it is the commitment. The soundness
+fixes cost 388 and the collapsed addresses and dropped masks saved 514, so the
+port on its own came out 126 smaller than what it replaced. #45's salted leaves,
+which let one committed field be disclosed without opening the other seven, cost
+2112 on top of that, and the circuit is 69% larger than Aperture's in non-linear
+constraints. `test/constraint-cost.test.js` holds this table to the compiled
+circuit, so the figures cannot go stale again without the build saying so.
 
 ## Building and testing
 

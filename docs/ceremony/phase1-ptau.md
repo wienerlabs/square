@@ -26,25 +26,26 @@ unidentified tau.
 
 ## Why power 14
 
-`payment.circom` compiles to 11,426 constraints, so its domain is 16384 = 2^14
+`payment.circom` compiles to 11,556 constraints, so its domain is 16384 = 2^14
 and 14 is the smallest truncation that fits. A larger one is not safer — the
 extra powers are never read — and doubles the download again.
 
 ### It was power 13, and the move is the record working
 
-Until [#45][i45] the circuit was 6,586 constraints and fitted 2^13, and this
-document said 13 was the smallest that fits and that a larger one bought
-nothing. Both were true. #45's salted commitment took the circuit past 8,192,
-`snarkjs groth16 setup` refused, and the adoption moved:
+Until [#45][i45] the circuit fitted 2^13: 6,586 constraints, and 6,716 once
+[#119][i119] bounded the two ceilings. This document said 13 was the smallest
+that fits and that a larger one bought nothing. Both were true. #45's salted
+commitment took the circuit to 11,556, past 8,192, `snarkjs groth16 setup`
+refused, and the adoption moved. Today's circuit against the power-13 file:
 
 ```
-circuit too big for this power of tau ceremony. 11426*2 > 2**13
+circuit too big for this power of tau ceremony. 11556*2 > 2**13
 ```
 
 Worth recording how nearly that went unnoticed. `circom` prints *non-linear*
-constraints and it is tempting to size the ptau from them — those went from
-2,609 to 4,721, comfortably inside 8,192. snarkjs sizes the domain from the
-**total**, which went from 6,586 to 11,426. The first number said there was room
+constraints and it is tempting to size the ptau from them — #45 took those from
+2,737 to 4,849, comfortably inside 8,192. snarkjs sizes the domain from the
+**total**, which went from 6,716 to 11,556. The first number said there was room
 and there was not. `ptau-adoption.test.js` now derives the required power from
 the built key rather than asserting it, so the two cannot drift again.
 
@@ -53,6 +54,7 @@ truncation larger. What changed is how many powers of tau come with it, and the
 size of the download.
 
 [i45]: https://github.com/wienerlabs/square/issues/45
+[i119]: https://github.com/wienerlabs/square/issues/119
 
 ## Why contribution 80 rather than the file everyone links to
 

@@ -31,11 +31,13 @@ const BUILD = path.join(ROOT, 'build');
 // The adopted phase-1 file.
 //
 // Power 14 is the smallest that fits payment.circom. snarkjs sizes the domain
-// from the total constraint count, not the non-linear count, and square#45's
-// salted commitment took that from 6,586 to 11,426 — past 2^13 = 8,192 and into
-// 2^14 = 16,384. `groth16 setup` says so plainly rather than degrading:
+// from the total constraint count, not the non-linear count: 11,556, past
+// 2^13 = 8,192 and into 2^14 = 16,384. square#45's salted commitment is what
+// crossed the line, taking the total from 6,716 to 11,556 (square#119's two
+// ceiling bounds are the other 130 over the 6,586 before either). `groth16
+// setup` says so plainly rather than degrading, against the power-13 file:
 //
-//   circuit too big for this power of tau ceremony. 11426*2 > 2**13
+//   circuit too big for this power of tau ceremony. 11556*2 > 2**13
 //
 // The download doubles, from 9.5 MB to 19. That is the whole cost: it is the
 // same ceremony and the same contribution 80, one truncation larger, so nothing
