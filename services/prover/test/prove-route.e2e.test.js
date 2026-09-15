@@ -17,6 +17,7 @@ import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { expectDeclared } from './openapi-declared.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ARTIFACTS = process.env.PROVER_ARTIFACTS_DIR
@@ -98,6 +99,8 @@ describe.skipIf(!hasArtifacts)('POST /prove, real proof', () => {
     console.error = original.error;
 
     expect(response.status).toBe(200);
+    // square#254: the 200 only a real proof produces, held to what openapi.js declares.
+    expectDeclared('POST', '/prove', response);
     expect(response.body.is_compliant).toBe(false);
     expect(response.body.violated_rules).toEqual(
       expect.arrayContaining(['per_transaction_limit', 'daily_limit', 'token_whitelist']),
@@ -135,6 +138,7 @@ describe.skipIf(!hasArtifacts)('POST /prove, real proof', () => {
     console.error = original.error;
 
     expect(response.status).toBe(200);
+    expectDeclared('POST', '/prove', response);
     expect(response.body.is_compliant).toBe(true);
     expect(response.body.violated_rules).toEqual([]);
 

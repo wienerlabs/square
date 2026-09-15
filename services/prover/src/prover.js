@@ -460,6 +460,9 @@ export async function buildCircuitInput(request) {
   };
 }
 
+// The filesystem errors that mean the prover could not open one of its two files.
+const ARTIFACT_OPEN_FAILURES = new Set(['ENOENT', 'EACCES', 'EPERM', 'EISDIR', 'ENOTDIR']);
+
 export async function generateProof(request) {
   // Narrow the operator id before anything else touches it, so the value the
   // violation log is allowed to print has already been checked.
@@ -472,11 +475,28 @@ export async function generateProof(request) {
   // violation log is allowed to say out loud.
   const evaluation = await evaluateRules(circuitInput);
 
-  const { proof, publicSignals } = await snarkjs.groth16.fullProve(
-    circuitInput,
-    WASM_PATH,
-    ZKEY_PATH,
-  );
+  // A proving key that is not there is named, not quoted.
+  //
+  // square#254. snarkjs opens both files itself, and what it threw when one was
+  // missing was the filesystem's own error: "ENOENT: no such file or directory,
+  // open '/…/artifacts/payment.wasm'". That message became the 500's body, so
+  // any caller who reached /prove during an artifact outage learned the
+  // container's mount layout, and the 500's documented promise -- a field name,
+  // never a value -- did not hold. The error carries the path it failed on, so
+  // only a failure to open one of these two files is renamed; anything else
+  // from the proving system is still reported as it was. The files are named on
+  // GET /health, for the operator. "artifacts" stays in the message, so
+  // classifyProofFailure still files it under `artifacts_missing`.
+  let proved;
+  try {
+    proved = await snarkjs.groth16.fullProve(circuitInput, WASM_PATH, ZKEY_PATH);
+  } catch (error) {
+    if (ARTIFACT_OPEN_FAILURES.has(error?.code) && [WASM_PATH, ZKEY_PATH].includes(error?.path)) {
+      throw new Error('circuit artifacts are not available');
+    }
+    throw error;
+  }
+  const { proof, publicSignals } = proved;
 
   if (publicSignals.length !== EXPECTED_PUBLIC_SIGNALS) {
     throw new Error(
