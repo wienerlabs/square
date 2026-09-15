@@ -100,6 +100,7 @@ next instance of this hides:
 | `!reachable` | `services/screener/test/anvil.test.ts` | `services/screener (anvil)` | satisfied — same |
 | `!reachable` | `packages/core/test/anvil.test.ts` | `@squaresdk/core against anvil` | satisfied — that job already started one |
 | `!forkUrl` | `packages/core/test/fork.test.ts` | `@squaresdk/core against anvil` | **not satisfied.** `ARC_FORK_RPC_URL` is set by no workflow, so the lifecycle has never been exercised against the real ERC-8004 registries in CI. Named on the run summary so the gap is visible. |
+| `!forkUrl` | `packages/core/test/cctp.fork.test.ts` | `@squaresdk/core against anvil` | **not satisfied**, the same way: `CCTP_SEPOLIA_FORK_RPC_URL` is set by no workflow, so the burn against Circle's real `TokenMessengerV2` (square#32) runs only where someone starts a Sepolia fork. The hermetic half, `test/cctp.test.ts`, runs everywhere. |
 | `!configured` | `packages/x402/test/live.test.ts` | `packages/x402 (anvil)` | **not satisfied.** Needs `ARC_TESTNET_RPC_URL` and two funded keys. |
 | `!process.env.LIVE` | `packages/did-resolver/test/integration.test.ts` | `cli` | **not satisfied, by design.** `cli` is hermetic; the live reads run in `end-to-end (Arc Testnet)`. |
 | `!process.env.LIVE` | `services/screener/test/live.test.ts` | `sanctions screening (TRM → anvil)` | satisfied there, which runs `test:live`. Skipped in `services/screener (anvil)` by design, which is hermetic. |
