@@ -80,6 +80,16 @@ const CASES = {
   // ran, not that it passed — so the verifier accepts it and the hook is what
   // refuses to release.
   blocked: { payment_recipient: BLOCKED },
+  // Passes all six rules and carries a receipt. square#237: every other fixture
+  // has stripe_receipt_hash = 0, so ComplianceModule's binding of signal 7 (it
+  // must be 0 on this chain) could be deleted with the whole suite still green.
+  // This is `compliant` in every other signal, so the stripe binding is the only
+  // one it breaks. The value is a fixed field element, 31 bytes of a hash, so a
+  // regenerated fixture differs only where the proof does.
+  compliant_with_receipt: {
+    payment_recipient: '0x1111111111111111111111111111111111111111',
+    stripe_receipt_hash: BigInt(`0x${crypto.createHash('sha256').update('square#237 stripe receipt').digest('hex').slice(0, 62)}`).toString(),
+  },
 };
 
 // Which key these proofs came from.
