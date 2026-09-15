@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { A2AClient, WellKnownCache } from "@squaresdk/a2a";
-import { hashDeliverable } from "@squaresdk/core";
+import { hashDeliverable, JobStatus } from "@squaresdk/core";
 import { parseUnits } from "viem";
 import { lookupAgent } from "../src/agents.js";
 import { hire, HireRefusedError } from "../src/hire.js";
@@ -14,8 +14,8 @@ import { CHAIN_ID, WALLET, card, deployment, didOf, resolution, resolverOf } fro
 const ATLAS = didOf(7);
 const ORIGIN = "https://atlas.example";
 
-function stage() {
-  const chain = fakeChain();
+function stage(options: { module?: `0x${string}`; policy?: boolean; a2aFailures?: number } = {}) {
+  const chain = fakeChain({ module: options.module, policy: options.policy });
   const agent = fakeAgent({
     card: card({ agentId: 7n }),
     provider: WALLET,
@@ -23,12 +23,25 @@ function stage() {
     chain,
     handlers: { "text.summarize": async ({ input }) => `${input.split(" ").length} words` },
   });
-  const fetch = fetchRouting({ [ORIGIN]: agent.app });
+  const routed = fetchRouting({ [ORIGIN]: agent.app });
+  // The first `a2aFailures` requests to the agent's endpoint are refused at the socket, as an endpoint that is down refuses them.
+  const failures = { left: options.a2aFailures ?? 0, seen: 0 };
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === `${ORIGIN}/a2a`) {
+      failures.seen += 1;
+      if (failures.left > 0) {
+        failures.left -= 1;
+        throw new Error("connect ECONNREFUSED");
+      }
+    }
+    return routed(input, init);
+  };
   const resolver = resolverOf({ [ATLAS]: resolution(ATLAS, { wallet: WALLET, services: [{ name: "A2A", endpoint: `${ORIGIN}/a2a` }] }) });
   const cards = new WellKnownCache({ fetch });
-  const a2a = new A2AClient({ fetch, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))) });
+  const a2a = new A2AClient({ fetch, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))), maxRetries: 1 });
   const profile = () => lookupAgent(ATLAS, { resolver, cards, chainId: CHAIN_ID, usdc: deployment.usdc });
-  return { chain, a2a, profile };
+  return { chain, a2a, profile, failures };
 }
 
 describe("hire", () => {
@@ -73,6 +86,62 @@ describe("hire", () => {
     await expect(attempt).rejects.toThrow(HireRefusedError);
     await expect(attempt).rejects.toMatchObject({ message: "the allowance says no", stage: "before-funding", transactions: {} });
     expect(chain.writes).toEqual([]);
+  });
+
+  it("refuses, before any money moves, a wallet with no policy on a stack whose hook holds a module (square#350)", async () => {
+    const gated = stage({ module: "0x000000000000000000000000000000000000c0de" });
+    const attempt = hire({ client: gated.chain.client, a2a: gated.a2a, profile: await gated.profile(), capability: "text.summarize", input: "a b c", callerDid: "did:x" });
+    await expect(attempt).rejects.toMatchObject({ stage: "before-funding", message: expect.stringContaining("no policy on the registry and the stack gates releases") });
+    expect(gated.chain.writes).toEqual([]);
+    // With a policy committed, the same stack hires.
+    const committed = stage({ module: "0x000000000000000000000000000000000000c0de", policy: true });
+    const result = await hire({ client: committed.chain.client, a2a: committed.a2a, profile: await committed.profile(), capability: "text.summarize", input: "a b c", callerDid: "did:x", pollIntervalMs: 5 });
+    expect(result.dispatch).toBe("delivered");
+    // And a stack with no module asks nothing of the registry.
+    const open = stage();
+    const plain = await hire({ client: open.chain.client, a2a: open.a2a, profile: await open.profile(), capability: "text.summarize", input: "a b c", callerDid: "did:x", pollIntervalMs: 5 });
+    expect(plain.dispatch).toBe("delivered");
+  });
+
+  it("asks an endpoint that was down once more before coming back undispatched, and not an agent that refused (square#351)", async () => {
+    const down = stage({ a2aFailures: 1 });
+    const result = await hire({ client: down.chain.client, a2a: down.a2a, profile: await down.profile(), capability: "text.summarize", input: "a b c", callerDid: "did:x", pollIntervalMs: 5, redispatchDelayMs: 0 });
+    expect(result.dispatch).toBe("delivered");
+    expect(down.failures.seen).toBeGreaterThanOrEqual(2);
+
+    const stillDown = stage({ a2aFailures: 10 });
+    const twice = await hire({ client: stillDown.chain.client, a2a: stillDown.a2a, profile: await stillDown.profile(), capability: "text.summarize", input: "a b c", callerDid: "did:x", pollIntervalMs: 5, redispatchDelayMs: 0 });
+    expect(twice).toMatchObject({ dispatch: "undispatched", reason: expect.stringContaining("(asked twice)") });
+    expect(stillDown.chain.records.get(1n)?.status).toBe(JobStatus.Funded); // the escrow stayed on the job
+  });
+
+  it("carries on with an Open job this wallet already created instead of opening another (square#351)", async () => {
+    const { chain, a2a, profile } = stage();
+    const p = await profile();
+    // A hire whose fund failed: the job is Open with its budget set.
+    const client = chain.client;
+    const noFunds = {
+      ...client,
+      fund: async () => {
+        throw new Error("ERC20InsufficientBalance");
+      },
+    } as unknown as typeof client;
+    Object.defineProperty(noFunds, "account", { get: () => client.account });
+    await expect(hire({ client: noFunds, a2a, profile: p, capability: "text.summarize", input: "x", callerDid: "did:x" })).rejects.toMatchObject({ stage: "funding" });
+    expect(chain.records.get(1n)).toMatchObject({ status: JobStatus.Open, budget: parseUnits("0.05", 6) });
+
+    const funded: bigint[] = [];
+    const result = await hire({ client, a2a, profile: p, capability: "text.summarize", input: "x", callerDid: "did:x", pollIntervalMs: 5, jobId: 1n, onFunded: (job) => { funded.push(job.jobId); } });
+    expect(result).toMatchObject({ jobId: 1n, dispatch: "delivered" });
+    expect(funded).toEqual([1n]);
+    expect(chain.records.size).toBe(1);
+    // The budget was already set, so only fund and the agent's submit were written after the first attempt's two.
+    expect(chain.writes.slice(2)).toEqual([`fund(1, ${parseUnits("0.05", 6)})`, expect.stringMatching(/^submit\(1, /)]);
+
+    // Not somebody else's, not a funded one, not for another agent.
+    chain.records.set(9n, { ...chain.records.get(1n)!, status: JobStatus.Open, client: "0x0000000000000000000000000000000000000009" });
+    await expect(hire({ client, a2a, profile: p, capability: "text.summarize", input: "x", callerDid: "did:x", jobId: 9n })).rejects.toMatchObject({ stage: "before-funding", message: expect.stringContaining("not this wallet") });
+    await expect(hire({ client, a2a, profile: p, capability: "text.summarize", input: "x", callerDid: "did:x", jobId: 1n })).rejects.toMatchObject({ message: expect.stringContaining("is Submitted, not Open") });
   });
 
   it("reports a funding that failed part way with what landed", async () => {

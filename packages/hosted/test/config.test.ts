@@ -32,6 +32,10 @@ describe("parseHostedConfig", () => {
     expect(() => parseHostedConfig({ ...base, compliance })).toThrow(/compliance: names a policy and a prover, but the config delegates nothing/);
     expect(() => parseHostedConfig({ ...base, delegation, compliance: { ...compliance, proverUrl: "nowhere" } })).toThrow(/compliance.proverUrl/);
     expect(() => parseHostedConfig({ ...base, delegation, compliance: { ...compliance, intervalMs: 10 } })).toThrow(/compliance.intervalMs/);
+    // Where the duty keeps its jobs across restarts: a path beside the config, or none at all (square#348).
+    expect(parseHostedConfig({ ...base, delegation, compliance: { ...compliance, stateFile: "jobs.json" } }).compliance?.stateFile).toBe("jobs.json");
+    expect(parseHostedConfig({ ...base, delegation, compliance: { ...compliance, stateFile: false } }).compliance?.stateFile).toBe(false);
+    expect(() => parseHostedConfig({ ...base, delegation, compliance: { ...compliance, stateFile: "" } })).toThrow(/compliance.stateFile/);
   });
 
   it("names what is wrong, by path", () => {

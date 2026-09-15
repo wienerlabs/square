@@ -78,6 +78,13 @@ export function fakeSquare(options: { account?: Address; balance?: bigint; horiz
     async policyOf(poster: Address) {
       return policies.get(poster.toLowerCase()) ?? { commitment: ZERO, dailyLimit: 0n, updatedAt: 0n, epoch: 0n };
     },
+    // No module in the hook's slot: a hire asks nothing more of the registry than the allowance does.
+    async complianceModule() {
+      return null;
+    },
+    async complianceTolerance() {
+      return null;
+    },
     async spentToday(poster: Address) {
       return spent.get(poster.toLowerCase()) ?? 0n;
     },

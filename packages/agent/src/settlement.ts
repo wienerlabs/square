@@ -29,6 +29,7 @@ export interface SquareSettlementOptions {
  * read; test/anvil.test.ts holds the mirror to the deployed kernel.
  */
 export const MIN_SETTLEMENT_WINDOW = 15n * 60n;
+const ZERO32 = `0x${"0".repeat(64)}`;
 
 /** `_settlementWindow(horizon)` of SquareJob: the horizon, floored. */
 export function settlementWindowOf(settlementHorizon: bigint): bigint {
@@ -39,10 +40,12 @@ export function settlementWindowOf(settlementHorizon: bigint): bigint {
  * `@squaresdk/a2a`'s settlement seam, over `@squaresdk/core` (square#79).
  *
  * The three answers are the chain's. Admission reads the job record and
- * requires it Funded, for this wallet, above the capability's price and
+ * requires it Funded, for this wallet, above the capability's price,
  * still submittable: `submit` refuses a job with less than its settlement
  * window left before `expiredAt` (`ExpiryTooShort`), so a job the agent could
- * take but never deliver is refused before any work is done (square#334); the
+ * take but never deliver is refused before any work is done (square#334); and
+ * payable: on a hook with a compliance module, a client with no policy on the
+ * registry cannot be released to (square#350). The
  * deliverable is `hashDeliverable` of the handler's output,
  * put on chain with `submit` and bound to `agentId`, and DELIVERED carries
  * the hash that the `JobSubmitted` event confirms; the job's status is read
@@ -97,6 +100,22 @@ export function squareSettlement(options: SquareSettlementOptions): TaskSettleme
       const minimum = options.minimumBudgetFor?.(task.capability);
       if (minimum !== undefined && record.budget < minimum) {
         return { ok: false, reason: `job ${jobId} is funded with ${record.budget} but ${task.capability} costs ${minimum}` };
+      }
+      // On a stack whose hook holds a compliance module, a release to a
+      // client with no policy on the registry is refused for certain (the
+      // module's `policy commitment` binding), and the whole net goes back to
+      // the client: the work would be done for nothing (square#350). Read at
+      // admission, before the handler runs. A client may commit later, so the
+      // refusal says what would make the job payable.
+      try {
+        if ((await client.complianceModule()) !== null && (await client.policyOf(record.client)).commitment === ZERO32) {
+          return {
+            ok: false,
+            reason: `job ${jobId} cannot pay: the hook holds a compliance module and its client ${record.client} has no policy on the registry, so the release would be refused; the client has to commit a policy first`,
+          };
+        }
+      } catch (error) {
+        return { ok: false, reason: `the compliance gate could not be read for job ${jobId}: ${error instanceof Error ? error.message : String(error)}` };
       }
       return { ok: true };
     },

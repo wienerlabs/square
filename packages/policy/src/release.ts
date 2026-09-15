@@ -107,15 +107,22 @@ export interface BindOptions {
   policy: Policy;
   prover: Prover;
   jobId: bigint;
-  /** The capability the job bought; one of the policy's `allowed_endpoint_categories`. */
-  category: string;
+  /**
+   * The capability the job bought; one of the policy's
+   * `allowed_endpoint_categories`. Undefined when it is not known, as it is
+   * not for a job found on the chain after a restart (square#348): the spec
+   * is hashed on chain, so the category is tried from the policy's list, in
+   * order, until the prover stops naming `endpoint_category` as the rule
+   * broken. The category that answered is in the outcome.
+   */
+  category: string | undefined;
   facts?: ReleaseFacts | undefined;
   signal?: AbortSignal | undefined;
 }
 
 export type BindOutcome =
-  | { bound: true; proof: Hex; transaction: Hex; facts: ReleaseFacts }
-  | { bound: false; reason: "not-compliant"; violated: ViolatedRule[] | null; facts: ReleaseFacts }
+  | { bound: true; proof: Hex; transaction: Hex; facts: ReleaseFacts; category: string }
+  | { bound: false; reason: "not-compliant"; violated: ViolatedRule[] | null; facts: ReleaseFacts; category: string }
   | { bound: false; reason: "policy-not-committed" | "policy-differs" | "not-this-client" | "module-refuses" | "terminal"; detail: string; facts: ReleaseFacts };
 
 /**
@@ -146,25 +153,30 @@ export async function bindComplianceProof(options: BindOptions): Promise<BindOut
   if (commitment.hex.toLowerCase() !== facts.commitment.toLowerCase()) {
     return { bound: false, reason: "policy-differs", detail: `the chain holds commitment ${facts.commitment}, this policy computes ${commitment.hex}`, facts };
   }
-  const response = await prover.prove(
-    proveRequest(policy, {
-      recipient: facts.payee,
-      amount: facts.amount,
-      token: facts.token,
-      category: options.category,
-      dailySpentBefore: facts.dailySpentBefore,
-      timestamp: facts.now,
-    }),
-    { signal: options.signal },
-  );
-  if (!response.is_compliant) return { bound: false, reason: "not-compliant", violated: response.violated_rules, facts };
+  const payment = { recipient: facts.payee, amount: facts.amount, token: facts.token, dailySpentBefore: facts.dailySpentBefore, timestamp: facts.now };
+  // A known category is asked once. An unknown one is looked for in the
+  // policy's list: the first the prover does not refuse as the category is
+  // the job's, and a refusal for any other rule is the answer for the job,
+  // whichever category it names. A policy of one category costs one proof.
+  const candidates = options.category !== undefined ? [options.category] : policy.allowed_endpoint_categories;
+  let category = candidates[0] ?? "";
+  let response = await prover.prove(proveRequest(policy, { ...payment, category }), { signal: options.signal });
+  for (let i = 1; i < candidates.length && onlyTheCategoryFailed(response); i += 1) {
+    category = candidates[i]!;
+    response = await prover.prove(proveRequest(policy, { ...payment, category }), { signal: options.signal });
+  }
+  if (!response.is_compliant) return { bound: false, reason: "not-compliant", violated: response.violated_rules, facts, category };
   const proof = encodeComplianceProof(response.solidity);
   const preview = await client.previewRelease({ jobId, payee: facts.payee, amount: facts.amount, client: facts.client, proof });
   if (preview === false) {
     return { bound: false, reason: "module-refuses", detail: "the installed module refuses the proof it was built for; the verifier and the prover's key may differ", facts };
   }
   const result = await client.setComplianceProof(jobId, proof);
-  return { bound: true, proof, transaction: result.hash, facts };
+  return { bound: true, proof, transaction: result.hash, facts, category };
+}
+
+function onlyTheCategoryFailed(response: { is_compliant: boolean; violated_rules: ViolatedRule[] | null }): boolean {
+  return !response.is_compliant && response.violated_rules !== null && response.violated_rules.length === 1 && response.violated_rules[0] === "endpoint_category";
 }
 
 /** What the module said when a job was released, read from the receipt. */
