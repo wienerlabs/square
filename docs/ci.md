@@ -16,14 +16,14 @@ pull request.
 | `build, test, gas` | The whole Foundry suite, `forge build --sizes`, a gas report on the pull request and a coverage table on the run summary. |
 | `@squaresdk/core against anvil` | The SDK drives all five settlement paths against a locally deployed stack, and the committed ABI modules match a fresh `forge build` and document every event they declare. |
 | `verifies on Arc Testnet` | A proof the prover produced verifies against Arc's own `0x06`/`0x07`/`0x08`, not revm's. |
-| `circuits` | `payment.circom` compiles, a proving key builds, and the whole constraint suite runs against them. How many tests passed is on the run summary, not in this table: a count written by hand here drifts the moment a test is added. |
+| `circuits` | `payment.circom` compiles, a proving key builds, and the whole constraint suite runs against them. The ceremony's pinned drand quicknet chain hash and group key are checked against `api.drand.sh` itself. How many tests passed is on the run summary, not in this table: a count written by hand here drifts the moment a test is added. |
 | `prover (real proving key)` | The prover agrees with the circuit, and its Solidity calldata matches `snarkjs`. |
 | `end-to-end (policy → proof → Arc)` | A policy, a proof built from it, and Arc accepting that proof — not from a fixture. **Not required**, see below. |
 | `refuse and replay (policy → proof → anvil)` | A payment over the policy's ceiling is proved, verified, and still pays the provider nothing; a compliant payment is released once and then refused on replay — as the same bytes and as a re-randomised copy. Every refusal is asserted by the module's own reason. **Not required**, see below. |
 | `six refusal scenarios (policy → proof → anvil)` | The six scenarios of #28 against a stack the run deploys itself, waiting out a real challenge window: a compliant payment is released, and a payment over the daily cap, to a blocked recipient, against a replaced policy, outside its time window, or carrying another job's proof is refused, each by the module's own reason. The same script runs on Arc; see `six refusal scenarios (Arc Testnet, funded key)` below. **Not required**, see below. |
 | `services/prover (hermetic)` | The rule evaluator and the encoding with no artifacts — a contributor's `npm test`. |
 | `packages/data`, `packages/hardening`, `packages/observability`, `packages/policy` | Hermetic package suites. The policy package's includes the commitment held to the prover's own construction whenever the prover is installed beside it, which the compliance path job is. |
-| `packages/x402 (anvil)`, `services/indexer (anvil)`, `services/keeper (anvil)` | Against a local chain the job starts itself: anvil plus `DeployLocal.s.sol`, asserted before the suites run. |
+| `packages/x402 (anvil)`, `services/indexer (anvil)`, `services/keeper (anvil)`, `services/screener (anvil)` | Against a local chain the job starts itself: anvil plus `DeployLocal.s.sol`, asserted before the suites run. `services/screener (anvil)` is **not required**, see below. |
 | `app (static export)`, `site (static export)` | The reference application and the site still build. |
 | `a2a` | `@squaresdk/a2a` typechecks and builds, and an agent still cannot pay itself. |
 | `agent (anvil)` | `@squaresdk/agent`: the card against the schema, admission and delivery against a stub chain, and the whole loop on anvil with `DeployLocal.s.sol`: a funded job, `task/create`, `DELIVERED` by the on-chain `submit`, the crank's `finalize`, the provider's withdrawal. **Not required** until it has run without flaking. |
@@ -37,12 +37,14 @@ pull request.
 | `local stack (make up)` | The four Dockerfiles build, the whole stack comes up on a runner, and every service answers `/health` with a passing status. Also asserts the contracts have bytecode on the chain and that the prover returns a real proof. Required since 2026-09-14, when the payload was applied with the review gate of [docs/decisions/review-gate.md](decisions/review-gate.md); its last five runs on `main` were green. |
 | `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. A red `secret scan` names the rule, the file and the line in the job log: gitleaks runs with `--verbose`, and with `--redact` beside it the value itself is never printed. It walks the git history, so the finding can sit in a commit the diff no longer shows. |
 
-Eight are **not** required to merge. Five of them are not required because their
-red is a statement about Arc Testnet being reachable, or about a funded account,
-rather than about the change, and a young testnet having a bad afternoon should
-not block unrelated work. The other three, `refuse and replay`, `six refusal
-scenarios (policy → proof → anvil)` and `did-aip-driver version`, reach no
-network and are not required only because they are new.
+Eleven are **not** required to merge. Six of them are not required because their
+red is a statement about Arc Testnet being reachable, TRM's sanctions API
+answering, or a funded account, rather than about the change, and an outside
+service having a bad afternoon should not block unrelated work. The other five,
+`refuse and replay`, `six refusal scenarios (policy → proof → anvil)`,
+`did-aip-driver version`, `policy → proof → release (anvil, every surface)` and
+`services/screener (anvil)`, reach no network and are not required only because
+they are new.
 
 | Check | Why it is not required |
 |---|---|
@@ -55,17 +57,27 @@ network and are not required only because they are new.
 | `packages/aa (anvil)` | Named for a local chain, but `test/globalSetup.ts` calls `startAnvilFork()`, which defaults to `https://rpc.testnet.arc.io` (`scripts/fork.ts:144`) with no override and no fallback, and rethrows on failure. Arc being down would block a documentation pull request. |
 | `acceptance (Arc Testnet, funded key)` | Spends real testnet gas, needs a secret, does not run on fork pull requests, and lives in its own path-filtered workflow. |
 | `six refusal scenarios (Arc Testnet, funded key)` | #28's six scenarios on Arc itself. Spends real testnet USDC: the first run on Arc was 26.2M gas and cost its funder 0.588 USDC. Needs `SCENARIO_FUNDER_PRIVATE_KEY` and refuses to start without it or on a short balance. Lives in its own workflow (`arc-refusal-scenarios.yml`) and runs on pushes to `main`, by hand, and on same-repository pull requests that change the script or the workflow, one run at a time. |
+| `services/screener (anvil)` | New. Like the rest of its matrix it reaches nothing but the anvil the job starts; the live tests against TRM are skipped here by design and run in the row below. Promote it the same way. |
+| `sanctions screening (TRM → anvil)` | #35's screener against TRM's real sanctions API, and the end-to-end run with OFAC-listed addresses against the real hook. TRM's keyless tier allows 100 requests a day and a run makes about ten, so a red can mean TRM did not answer. Lives in its own path-filtered workflow (`sanctions-screening.yml`). |
 
 `verifies on Arc Testnet` also depends on Arc's RPC, but it is cheap, read-only
 and defends a claim the README makes, so it is required. If it turns out to
 flake, move it to the list above rather than deleting it.
+
+`circuits` depends on drand the same way, for the same reason (square#260). Its
+step `The drand pin, against the live chain` sends two free GETs to
+`api.drand.sh` and holds the chain hash and group key pinned in
+`circuits/scripts/ceremony.mjs` to what drand serves. The ceremony's beacon rests
+on that pin, and a wrong one would otherwise surface only when `beacon <round>`
+runs, with every contribution already made. The same rule applies: if it
+flakes, move that step to a job that is not required.
 
 ## A green run that tested nothing
 
 This is the failure this setup exists to prevent, and it is not hypothetical:
 `covenant` carried 5,952 lines of tests across 33 files that CI never executed.
 
-The shape it takes here is subtler than "no test job". Twelve suites guard
+The shape it takes here is subtler than "no test job". The suites below guard
 themselves with `skipIf`, and a job that does not satisfy the guard reports green
 having executed nothing. The full inventory, because a partial one is how the
 next instance of this hides:
@@ -75,21 +87,32 @@ next instance of this hides:
 | `!HAVE_WASM`, `!HAVE_ZKEY` | `circuits/test/payment.test.js` | `circuits` | satisfied — the job builds the circuit and a key |
 | `!HAVE_PTAU`, `!HAVE_ZKEY` | `circuits/test/ptau-adoption.test.js` | `circuits` | satisfied — the build fetches and hash-checks the ptau |
 | `!HAVE_BUILD` | `circuits/test/timestamp-soundness.test.js` | `circuits` | satisfied |
+| `!LIVE` | `circuits/test/drand-beacon.test.js` (the pinned quicknet chain hash and group key against `api.drand.sh`) | `circuits` | satisfied in its own step, `The drand pin, against the live chain`, which sets `LIVE=1` and fails unless both live tests ran. Skipped by design in the job's `Tests` step, which is offline apart from the ptau (square#260). |
 | `!HAVE_CIRCUIT` | `services/prover/test/circuit-agreement.test.js` | `prover (real proving key)` | satisfied |
 | `!hasArtifacts` | `services/prover/test/prove-route.e2e.test.js` | `prover (real proving key)` | satisfied |
 | `!HAVE_ARTIFACTS` | `services/prover/test/solidity-encoding.test.js` | `prover (real proving key)` | satisfied |
+| `!HAVE_ARTIFACTS` | `services/prover/test/disclosure.test.js` (the disclosure root against a real proof's `policy_data_hash`, square#45) | `prover (real proving key)` | satisfied |
+| `!hasArtifacts` | `services/prover/test/prove-backpressure.e2e.test.js` | `prover (real proving key)` | satisfied |
 | `!reachable` | `services/indexer/test/{anvil,sync}.test.ts` | `services/indexer (anvil)` | satisfied — the job now starts anvil and deploys |
-| `!reachable` | `services/keeper/test/anvil.test.ts` | `services/keeper (anvil)` | satisfied — same |
+| `!reachable` | `services/keeper/test/{anvil,screening}.test.ts` | `services/keeper (anvil)` | satisfied — same |
+| `!reachable` | `services/screener/test/anvil.test.ts` | `services/screener (anvil)` | satisfied — same |
 | `!reachable` | `packages/core/test/anvil.test.ts` | `@squaresdk/core against anvil` | satisfied — that job already started one |
 | `!forkUrl` | `packages/core/test/fork.test.ts` | `@squaresdk/core against anvil` | **not satisfied.** `ARC_FORK_RPC_URL` is set by no workflow, so the lifecycle has never been exercised against the real ERC-8004 registries in CI. Named on the run summary so the gap is visible. |
 | `!configured` | `packages/x402/test/live.test.ts` | `packages/x402 (anvil)` | **not satisfied.** Needs `ARC_TESTNET_RPC_URL` and two funded keys. |
 | `!process.env.LIVE` | `packages/did-resolver/test/integration.test.ts` | `cli` | **not satisfied, by design.** `cli` is hermetic; the live reads run in `end-to-end (Arc Testnet)`. |
+| `!process.env.LIVE` | `services/screener/test/live.test.ts` | `sanctions screening (TRM → anvil)` | satisfied there, which runs `test:live`. Skipped in `services/screener (anvil)` by design, which is hermetic. |
+| `!live`, `!funded` | `packages/cli/test/live.test.ts` | `acceptance (Arc Testnet, funded key)` | satisfied there, which runs `npm run test:live`. The reads need only `LIVE=1`; the registration also needs `SQUARE_PRIVATE_KEY`, so it runs on pushes to `main` and same-repository pull requests and skips itself, named on the run summary, where the secret is absent. The job is path-filtered and not required. Skipped in `cli` by design, which is hermetic. |
+| `!process.env.SMOKE` | `packages/cli/test/smoke.test.ts` | `end-to-end (Arc Testnet)` | satisfied there, which runs `npm run test:smoke`. Skipped in `cli` by design. |
 | `!("stack" in ready)`, `notReady !== null` | `packages/policy/test/anvil.test.ts`, `packages/cli/test/policy.anvil.test.ts`, `packages/mcp/test/compliance.test.ts`, `packages/hosted/test/compliance.test.ts` | `policy → proof → release (anvil, every surface)` | satisfied — the job installs the module and starts the prover, and asserts both before the suites run. In `mcp (anvil)`, `hosted (anvil)` and `cli` the two compliance suites skip by design: those stacks hold no module. |
 | `!proverInstalled` | `packages/policy/test/commitment.test.ts` (the cross-check against the prover) | `packages/policy`, `policy → proof → release` | satisfied in the second, where the prover is installed; skipped in the first, by design. |
 
-Four further guards are *inverse* — `skipIf(HAVE_BUILD)` and the prover's three
-`skipIf(HAVE_*)`. They fire only when the artifact is **absent** and exist to say
-so out loud. Seeing one skipped is the correct state.
+Further guards are *inverse*: measured on 2026-09-15, seven in `circuits/test`
+and five in the prover, one beside each guarded prover suite above
+(`circuit-agreement`, `prove-route.e2e`, `solidity-encoding`, `disclosure`,
+`prove-backpressure.e2e`). Each is a single test titled `skipped: …` that runs
+only when the artifact is **absent**, to say so out loud. Seeing one skipped is
+the correct state, and in `prover (real proving key)` it is the only skip allowed
+(below).
 
 Measured on 2026-09-07, with the artifacts moved aside and the suites unchanged,
 on a clean checkout after `npm ci`. The figure in brackets is what vitest
@@ -137,8 +160,14 @@ So, two mechanisms:
 
 `services/prover (hermetic)` in `packages.yml` is the no-artifacts run and is
 kept: it is the contributor's `npm test` and it should stay green. It is not a
-substitute for `prover (real proving key)`, which runs the five tests the
-hermetic job skips.
+substitute for `prover (real proving key)`, which runs what the hermetic job
+skips. On 2026-09-15 that was eleven tests in four suites that need a proving key
+(`prove-route.e2e`, `solidity-encoding`, `disclosure`, `prove-backpressure.e2e`)
+and ten in `circuit-agreement.test.js` that need the compiled circuit. The figure
+is not kept here to be checked by hand: that job's `Every guarded test ran` step,
+`.github/scripts/vitest-unexpected-skips.mjs`, fails when a test skips there that
+is not a `skipped: …` placeholder (square#259). This file said "five" while there
+were seven.
 
 ## Documented events
 

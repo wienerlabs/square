@@ -40,6 +40,7 @@ other is implemented. The two questions #6 was asked answer as follows.
 | `SquareHook` | the single whitelisted `IACPHook`: payout routing, compliance slot, reputation and validation writes | no |
 | `PolicyRegistry` | the policy commitment and the daily spend counter the compliance module reads and moves, and each poster's buyer list root | no |
 | `ComplianceModule` | the proof gate `SquareHook` calls: verifies the Groth16 proof, binds its eight signals to the job, marks the statement spent and advances the policy counter. Absent from the shared deployment while the slot is empty; the SDK carries its ABI (`complianceModuleAbi`) for the tools that bind proofs | no |
+| `ScreeningRegistry` | signed sanctions screenings the hook reads at funding and at release (#35) | no |
 
 `SquareJob` never reads a live token balance. Every transfer out is computed
 from the stored `budget` and the fee basis points snapshotted at funding.
@@ -213,6 +214,7 @@ the address the kernel will pay
 ```
 squareJob, claimMarket, identityRegistry, reputationRegistry, validationRegistry   immutable
 complianceModule   address                       zero until #27 plugs in
+screening          address                       ScreeningRegistry; zero means no screening (#35)
 boundAgentPlusOne  mapping(uint256 jobId => uint256)                 bound at submit; the agent id plus one, zero = none (agent 0 exists, #300)
 validationOf       mapping(uint256 jobId => bytes32 requestHash)     bound at submit
 recorded           mapping(uint256 jobId => bool)                    reputation written once
@@ -245,6 +247,27 @@ The reset is lazy: a stored `day` that is not today reads as zero and nothing ha
 to run at midnight. It is a calendar day, not a rolling window — see
 [public-daily-ceiling.md](../decisions/public-daily-ceiling.md).
 
+## ScreeningRegistry storage
+
+Keyed by the address screened, not by `jobId`. Written by anyone holding a
+registered screener's EIP-712 signature; read by the hook
+([sanctions-screening.md](../decisions/sanctions-screening.md)).
+
+```
+records    mapping(address subject => Record)
+             screener    address   who signed it; revoking the screener revokes the record
+             screenedAt  uint64    when the source answered; a newer record replaces, an older one reverts
+             sanctioned  bool      what the source answered
+             source      bytes32   which source and API, e.g. "trm-sanctions-v1"
+             evidence    bytes32   keccak256 of the source's raw response
+screeners  mapping(address => bool)
+maxAge     uint64                 how long a record clears its subject, 1 minute to 7 days
+```
+
+`isCleared(subject)` is true only for a record that exists, is not sanctioned,
+is younger than `maxAge`, and was signed by a screener still registered. An
+empty registry clears nobody.
+
 ## Events
 
 Most events carry `jobId` as their first indexed topic, so one filter per contract
@@ -270,13 +293,14 @@ do the same.
 `FeesScheduled`, `Skimmed` and `HookWhitelistUpdated` on `SquareJob`; `ArbitrationSet`,
 `WindowsConfigured` and `FinalizeGraceConfigured` on `KeeperEvaluator`;
 `ArbitersUpdated` and `BondParametersUpdated` on `Arbitration`;
-`ComplianceModuleUpdated` and `ReputationPolicyUpdated` on `SquareHook`;
-`HookUpdated` and `TimestampToleranceUpdated` on `ComplianceModule`; and the
-`Ownable2Step` pair below, which six of the seven contracts inherit.
+`ComplianceModuleUpdated`, `ScreeningUpdated` and `ReputationPolicyUpdated` on
+`SquareHook`; `HookUpdated` and `TimestampToleranceUpdated` on `ComplianceModule`;
+`ScreenerUpdated` and `MaxAgeUpdated` on `ScreeningRegistry`; and the
+`Ownable2Step` pair below, which seven of the eight contracts inherit.
 `PolicyRegistry` is a case of its own, in its section further down: it is keyed
 by the institution throughout and has no `jobId` anywhere.
 
-Every event any of the seven contracts declares appears in the tables below, and
+Every event any of the eight contracts declares appears in the tables below, and
 `packages/core/scripts/check-events-documented.mjs` fails the `contracts`
 workflow when one does not.
 
@@ -360,12 +384,14 @@ What the normative set does not carry and the indexer needs.
 | `ComplianceChecked(uint256 indexed jobId, address indexed payee, uint256 amount, bool verified)` | at complete; `verified` is false while no module is installed |
 | `ReputationRecorded(uint256 indexed jobId, uint256 indexed agentId, uint8 outcome, int128 value)` | |
 | `ReputationWriteFailed(uint256 indexed jobId, uint256 indexed agentId, bytes reason)` | the registry reverted; settlement was not rolled back |
-| `ValidationRecorded(uint256 indexed jobId, bytes32 indexed requestHash, uint8 response)` | |
+| `ValidationRecorded(uint256 indexed jobId, bytes32 indexed requestHash, uint8 response)` | the hook's ERC-8004 validation response for the job's request, written. At complete it is the gate's verdict on the release, the same one `resolvePayout` made the split: 100 when every installed check passed and the payee was paid, 0 when the proof or the payee's screening refused it. With screening installed its `responseHash` commits to the screening record the verdict read (#35). At reject, 0. Not written when no check is installed or no request is bound |
 | `ValidationWriteFailed(uint256 indexed jobId, bytes32 indexed requestHash, bytes reason)` | |
 | `ComplianceCheckFailed(uint256 indexed jobId, bytes reason)` | the installed compliance module reverted while `beforeAction` was checking the release. The revert data is carried, the `ComplianceChecked` that follows reports `verified = false`, and settlement continues |
 | `ReleaseUnconfirmed(uint256 indexed jobId, address indexed payee, uint256 amount)` | at complete, from `afterAction`: the kernel paid `amount` to `payee` on a compliance preview that passed, and the check that books the release, the counter and the replay mark, did not pass. It should never fire (#225); the indexer counts it into `square_hook_write_failures_total{kind="complianceCheck"}` and the `hookWriteFailures` alert fires on it |
 | `ReputationSkipped(uint256 indexed jobId, uint256 indexed agentId, bytes32 reason)` | positive feedback that was deliberately not written, with `reason` either `untrusted evaluator` or `budget below minimum`. No registry call was attempted, so this is neither `ReputationRecorded` nor `ReputationWriteFailed` |
 | `ComplianceModuleUpdated(address indexed module)` | |
+| `ScreeningUpdated(address indexed registry)` | the owner installed, replaced or removed the screening registry; zero removes it |
+| `ScreeningChecked(uint256 indexed jobId, address indexed payee, bool cleared)` | at complete, when a screening registry is installed: whether the payee was cleared. When it was not, the split already went to the client in `resolvePayout` |
 | `ReputationPolicyUpdated(address indexed trustedEvaluator, uint64 minReputationBudget)` | the constructor and every later policy change: whose jobs earn positive reputation, and the budget below which it is not written |
 
 ### PolicyRegistry
@@ -389,6 +415,18 @@ stand above the ceiling, which is the truthful reading because the money left.
 would have been swallowed and the counter's own advance lost with it. Compliance
 is a signal on the release, never a lock on the escrow
 ([hook-failure-modes.md](../decisions/hook-failure-modes.md)).
+
+### ScreeningRegistry
+
+Keyed by the subject, like `PolicyRegistry` is keyed by the poster. An indexer
+reconstructing who is cleared filters on the subject address.
+
+| Event | Carries |
+|---|---|
+| `Screened(address indexed subject, bool sanctioned, uint64 screenedAt, bytes32 indexed source, bytes32 evidence, address indexed screener)` | on every accepted screening; `evidence` is the hash of the source's raw response |
+| `ScreenerUpdated(address indexed screener, bool allowed)` | owner only; revoking a screener also stops its records from clearing anyone |
+| `MaxAgeUpdated(uint64 maxAge)` | the constructor and every later change |
+| `EIP712DomainChanged()` | declared by OpenZeppelin's `EIP712` for ERC-5267 and never emitted here: the domain (name, version, chain id, this address) is fixed at construction |
 
 ### ComplianceModule
 
@@ -417,9 +455,9 @@ refused release is also visible in `ComplianceChecked`'s `verified = false`.
 
 ### Ownership, on every owned contract
 
-`SquareJob`, `KeeperEvaluator`, `Arbitration`, `SquareHook`, `PolicyRegistry` and
-`ComplianceModule` inherit OpenZeppelin's `Ownable2Step`, so each of them
-declares the same pair.
+`SquareJob`, `KeeperEvaluator`, `Arbitration`, `SquareHook`, `PolicyRegistry`,
+`ScreeningRegistry` and `ComplianceModule` inherit OpenZeppelin's `Ownable2Step`,
+so each of them declares the same pair.
 `ClaimMarket` has no owner and declares neither.
 
 | Event | Carries |

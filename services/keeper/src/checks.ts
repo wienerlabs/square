@@ -1,6 +1,7 @@
 import type { Address, PublicClient } from "viem";
 import type { Database } from "@squaresdk/data";
-import type { CheckResult, HealthCheck } from "@squaresdk/observability";
+import { DEFAULT_CHECK_TIMEOUT_MS, type CheckResult, type HealthCheck } from "@squaresdk/observability";
+import { screenerFetch, type ScreenerEndpoint } from "./screening.js";
 
 export const DEFAULT_MIN_ACTIONS_FUNDED = 3;
 
@@ -12,10 +13,35 @@ export interface KeeperChecksOptions {
   finalizeGas: bigint;
   minActionsFunded?: number;
   ephemeralMirror: boolean;
+  /**
+   * square#35. Set when SCREENER_URL is, and then every release on a hook that
+   * screens waits on the screener. A screener that is down, or whose own
+   * `/health` fails because its registry does not recognise it or it cannot pay
+   * for a submission, holds every such release while the other checks stay
+   * green; so the check is critical.
+   */
+  screener?: ScreenerEndpoint;
 }
 
 export function keeperChecks(options: KeeperChecksOptions): Record<string, HealthCheck> {
   const minActions = BigInt(options.minActionsFunded ?? DEFAULT_MIN_ACTIONS_FUNDED);
+
+  const screenerHealth = async (endpoint: ScreenerEndpoint): Promise<CheckResult> => {
+    const response = await screenerFetch(endpoint, "/health", { method: "GET" }, DEFAULT_CHECK_TIMEOUT_MS);
+    const body = await response.text();
+    if (response.ok) return { ok: true, detail: `${endpoint.url} reports itself healthy` };
+    let failing: string[] = [];
+    try {
+      const { checks } = JSON.parse(body) as { checks?: Record<string, { ok?: boolean }> };
+      failing = Object.entries(checks ?? {})
+        .filter(([, report]) => report.ok !== true)
+        .map(([name]) => name);
+    } catch {
+      // Not a health report; the status is all there is to say.
+    }
+    return { ok: false, detail: `${endpoint.url}/health answered ${response.status}${failing.length > 0 ? `, failing: ${failing.join(", ")}` : ""}` };
+  };
+  const screener = options.screener;
 
   const balance = async (): Promise<CheckResult> => {
     const [balance, gasPriceWei] = await Promise.all([
@@ -45,5 +71,6 @@ export function keeperChecks(options: KeeperChecksOptions): Record<string, Healt
         ? "DATABASE_URL is not set, the mirror is private to this process and stays empty"
         : "reading the mirror an indexer writes",
     }),
+    ...(screener ? { screener: { check: () => screenerHealth(screener), critical: true } } : {}),
   };
 }

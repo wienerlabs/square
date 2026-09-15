@@ -6,8 +6,9 @@ name: circuits
 # proving key. Splitting them into two workflows would install and build twice.
 #
 # The building is the point, not setup. Every describe() in circuits/test is
-# guarded by skipIf(!isBuilt(...)), and three suites in services/prover skip
-# without a proving key. Those guards are right on a laptop and wrong in CI —
+# guarded by skipIf(!isBuilt(...)), and in services/prover four suites skip
+# without a proving key and a fifth without the compiled circuit. Those guards
+# are right on a laptop and wrong in CI —
 # a runner with no compiler reports green having executed almost nothing. Both
 # jobs therefore build first and then fail if the artifacts are not on disk,
 # and both name every test that was skipped anyway on the run summary.
@@ -39,6 +40,7 @@ on:
       - "contracts/script/refusal-scenarios.mjs"
       - ".github/actions/circom/**"
       - ".github/scripts/vitest-summary.mjs"
+      - ".github/scripts/vitest-unexpected-skips.mjs"
       - ".github/workflows/circuits.yml"
   # No path filter on pull_request, deliberately. A required status check that a
   # filter skips never reports, and GitHub blocks the merge waiting for a run
@@ -125,16 +127,54 @@ jobs:
       - name: Tests
         run: npm test -- --reporter=default --reporter=json --outputFile.json=/tmp/circuits.json
 
+      # square#260. The beacon rests on the quicknet chain hash and group key
+      # pinned in scripts/ceremony.mjs, and the only tests that hold that pin to
+      # what drand actually serves are the LIVE ones in drand-beacon.test.js. The
+      # offline tests compare it with a fixture kept in the same test file, so a
+      # pin copied wrong, or a chain drand rotated, passed them. Two free GETs to
+      # api.drand.sh, no key. This makes a required check depend on drand being
+      # reachable; like `verifies on Arc Testnet` (docs/ci.md), if it flakes it
+      # moves to a job that is not required rather than being deleted.
+      #
+      # vitest exits 0 when a suite skips, so the step then reads the report and
+      # fails unless both live tests ran and passed.
+      - name: The drand pin, against the live chain
+        env:
+          LIVE: "1"
+        run: |
+          npx vitest run test/drand-beacon.test.js --reporter=default --reporter=json --outputFile.json=/tmp/drand.json
+          node -e '
+            const report = JSON.parse(require("fs").readFileSync("/tmp/drand.json", "utf8"));
+            const live = report.testResults.flatMap((f) => f.assertionResults)
+              .filter((t) => t.ancestorTitles.includes("against the live chain (LIVE=1)") && !t.title.startsWith("skipped: "));
+            const passed = live.filter((t) => t.status === "passed");
+            for (const t of live) console.log(`  ${t.status.padEnd(7)} ${t.title}`);
+            if (live.length !== 2 || passed.length !== 2) {
+              console.error(`expected the two live drand tests to run and pass; ${passed.length} of ${live.length} did`);
+              process.exit(1);
+            }
+          '
+
       - name: How many tests ran
         if: always()
         run: node ../.github/scripts/vitest-summary.mjs /tmp/circuits.json circuits
 
   # packages.yml already runs this service hermetically, which is the right
   # check for a contributor who has not built the circuit. It is not the whole
-  # story: without a key, five real tests skip — the three that drive POST
-  # /prove through a genuine Groth16 prove, and the two that check the prover's
-  # Solidity calldata against `snarkjs zkey export soliditycalldata`. Those are
-  # the two claims this service exists to support. This job runs them.
+  # story: that run skips every test that needs a proving key or the compiled
+  # circuit. Measured on 2026-09-15, eleven tests in four suites need the key —
+  # prove-route.e2e.test.js (three: POST /prove through a genuine Groth16 prove),
+  # solidity-encoding.test.js (two: the calldata against `snarkjs zkey export
+  # soliditycalldata`), disclosure.test.js (two: the disclosure root against a
+  # real proof's policy_data_hash) and prove-backpressure.e2e.test.js (four: the
+  # ceiling and the deadline against real proofs) — and ten tests in
+  # circuit-agreement.test.js need the wasm. This job runs them.
+  #
+  # Those figures are an observation, not something to keep in step by hand:
+  # "five" stood here while there were seven, and then eleven (square#259). The
+  # step after the tests is what holds it. It fails when a test skipped that is
+  # not a `skipped: …` placeholder, so a guard that stops being satisfied turns
+  # this job red instead of leaving a smaller number green.
   proving:
     name: prover (real proving key)
     runs-on: ubuntu-latest
@@ -194,6 +234,12 @@ jobs:
         run: |
           npm install --install-links
           npm test -- --reporter=default --reporter=json --outputFile.json=/tmp/proving.json
+
+      # square#259: the check a hand count in this file used to stand in for. Not
+      # under `if: always()`: it runs once the tests have passed, and fails the job
+      # when any test skipped that is not a `skipped: …` placeholder.
+      - name: Every guarded test ran
+        run: node .github/scripts/vitest-unexpected-skips.mjs /tmp/proving.json "prover (real proving key)"
 
       - name: How many tests ran
         if: always()
