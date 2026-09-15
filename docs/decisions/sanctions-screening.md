@@ -6,6 +6,9 @@
 [i30]: https://github.com/wienerlabs/square/issues/30
 [i35]: https://github.com/wienerlabs/square/issues/35
 [i100]: https://github.com/wienerlabs/square/issues/100
+[i342]: https://github.com/wienerlabs/square/pull/342
+[i351]: https://github.com/wienerlabs/square/issues/351
+[r222]: https://github.com/wienerlabs/square/pull/222#issuecomment-5679957757
 
 **This document is not legal advice.** It decides how screening is wired into
 settlement. Whether the result satisfies an institution's sanctions
@@ -74,6 +77,49 @@ would have to be screened again at funding anyway.
 screened when it funded. Refusing a refund cannot redirect the money anywhere;
 it could only lock it. A client designated after funding is left to the layer
 described in §5.
+
+**Who asks for the funding screening: `SquareClient.fund`.** The hook refuses
+to fund parties without a fresh record, so something has to have them screened
+before `fund` is sent, and today nothing does. Every surface that funds a job
+sends `createJob`, `setBudget` and `fund` within seconds, and each funds through
+one call, `SquareClient.fund` in `packages/core`:
+
+- the app's funding step;
+- `square_hire` in `packages/mcp`;
+- the hosted agent's `delegate`, which uses the same hire;
+- the lifecycle runner.
+
+None of them calls the screener. On the day a registry is installed in the
+shared hook, every hire from those surfaces would revert at `fund` with
+`NotCleared`, and leave the job `Open` with its budget set: the half-funded path
+of [#351][i351].
+
+So the screening before funding belongs in `SquareClient.fund`, the one place
+all of them pass through:
+
+1. Before it sends, `fund` reads `hook.screening()`.
+2. On a hook that screens, it reads `isCleared` for the client and the provider.
+3. For a party that is not cleared, it asks a screener the caller configured to
+   screen it, and waits for the record to land.
+4. With no screener configured, it stops before sending, with an error that
+   names the party and says why, instead of a revert.
+
+The screener's address is the caller's to give, as the prover's already is
+(`NEXT_PUBLIC_PROVER_URL`, `LIFECYCLE_PROVER_URL`).
+
+Two alternatives were weighed in [the review of #222][r222]:
+
+- **Each surface calling the screener itself.** That repeats the same check four
+  times, and a new caller of the SDK can leave it out.
+- **The screener screening new jobs' parties from the indexer.** That changes no
+  surface, but it races them. It learns of a job only once the job is indexed,
+  and the source's answer plus the submission (Latency, below) take as long as
+  the gap between the three calls. So `fund` could still be sent before the
+  record lands, and revert, unless every caller waited: the first option again.
+
+This is decided here and is not built in this change. Until it is, installing
+screening stops funding from every surface that uses the SDK, not only on a
+chain with no screener (§6).
 
 ### 3. The answer reaches the chain as a signed record
 
@@ -157,10 +203,12 @@ point locks:
   screened when it funded.
 
 What fail-closed at release does cost is a provider whose payee screening is
-stale when someone finalizes. Honest keepers do not do that. Before it
-finalizes jobs on a hook that screens, `services/keeper` asks the screener to
-screen their payees, once a tick and each payee once, and then reads the
-registry for each job:
+stale when someone finalizes. An honest crank does not do that, and there are
+two of them: `services/keeper`, and `ComplianceDuty` in `packages/policy`, which
+since #342 finalizes the jobs it keeps proofs current for once their window has
+closed ([proof-freshness.md](proof-freshness.md)). Before it finalizes jobs on a
+hook that screens, `services/keeper` asks the screener to screen their payees,
+once a tick and each payee once, and then reads the registry for each job:
 
 - **Cleared:** it finalizes, and the payee is paid.
 - **A fresh record says the payee is designated:** it finalizes as well, and
@@ -178,6 +226,14 @@ It is a failed attempt at that job, backed off like a failed send.
 the screening is stale and trigger the refusal. That is the same exposure a
 missing compliance proof already has under [#27][i27]. It is written here, not
 hidden.
+
+`ComplianceDuty` does not hold yet. It cranks once the window has closed and its
+proof is current, whatever the payee's screening. On a hook that screens, it can
+therefore finalize into the refusal the keeper waits out: the institution's own
+tool returns to the client a release an honest keeper would have held. It has to
+read `hook.screening()` and hold the job as the keeper does. That is follow-up
+work on the duty of [#342][i342] ([the review of #222][r222]), not part of this
+change.
 
 The screener stamps each answer with the later of the chain's latest block
 time and its own clock less five seconds, because the registry judges
@@ -297,3 +353,6 @@ TRM's keyless tier allows one request a second; with a key it allows 1,000.
   screener and a ScreeningRegistry have run on Arc, in the latency
   measurement above. `DeployLocal` deploys a registry, and
   `INSTALL_SCREENING=true` installs it in the hook.
+- **It does not yet screen before funding from the SDK, or hold
+  `ComplianceDuty`'s crank on a stale screening.** §2 decides the first and §4
+  the second; neither is built in this change.
