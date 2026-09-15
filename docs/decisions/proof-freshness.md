@@ -13,6 +13,11 @@ on [#245][i245], which made the proof the client's to bind.
 [i16]: https://github.com/wienerlabs/square/issues/16
 [i329]: https://github.com/wienerlabs/square/issues/329
 [i337]: https://github.com/wienerlabs/square/issues/337
+[i345]: https://github.com/wienerlabs/square/issues/345
+[i348]: https://github.com/wienerlabs/square/issues/348
+[i349]: https://github.com/wienerlabs/square/issues/349
+[i350]: https://github.com/wienerlabs/square/issues/350
+[i351]: https://github.com/wienerlabs/square/issues/351
 
 ## The question
 
@@ -44,11 +49,34 @@ than the tolerance, which is every chain the module is deployed on.
 software carries for every job it has open.** `packages/policy` implements it
 as `ComplianceDuty`: track a job when it is funded, and on a cadence well
 inside the module's tolerance read what the release would bind to
-(`releaseFacts`), compare it with the proof the job carries (`proofState`),
-and rebuild and rebind when they differ or when the proof has aged past half
-the tolerance. Nothing is kept off chain but the policy itself; the proof
-lives on the job (`SquareJob.complianceProofOf`), and the duty reads it back
-rather than remembering it.
+(`releaseFacts`), and once a release is near, compare it with the proof the
+job carries (`proofState`) and build and bind when they differ or when the
+proof has aged past half the tolerance. The proof lives on the job
+(`SquareJob.complianceProofOf`), and the duty reads it back rather than
+remembering it.
+
+**The proof is bound to the release, not to the calendar** ([#349][i349]).
+A `Funded` job cannot be released, and a `Submitted` job's window is a day
+while the tolerance is an hour: a proof bound at funding and kept current
+was 48 `setComplianceProof` transactions a day per job, measured at 99 486
+gas each after the first, for nothing the release used. So nothing is bound
+to a `Funded` job, a window is waited out to within half the tolerance of
+its close, an open dispute is waited out to the decision, and the ordinary
+path is one bind and one finalize per job. The tolerance is read on every
+tick, so an owner's change is seen at the next.
+
+**The jobs outlive the process** ([#348][i348]). A window is a day and a
+server restarts more often than that, and a job the duty had forgotten was a
+job cranked with no current proof, which pays the client back. So the duty
+takes a state (`fileDutyState`, a JSON file beside the policy; the MCP
+server's `SQUARE_DUTY_STATE`, the hosted agent's `stateFile`) and writes the
+jobs it watches, with the capability and the budget each bought, on every
+change; and `run` starts with `recover`, which reads them back and then
+scans the chain for this wallet's `JobCreated` logs from the deployment's
+block, so a job the file never held is found too. The spec is hashed on
+chain, so a job only the chain knew has no category until its first proof,
+which tries the policy's categories in order until the prover stops naming
+`endpoint_category`.
 
 **Once the window has closed, the duty cranks the job itself.** `finalize`
 is permissionless and pays its caller, and a keeper that finds the job first
@@ -80,8 +108,8 @@ chain.
 | Surface | Commit the policy | Keep proofs current | Crank |
 |---|---|---|---|
 | `square policy` (CLI) | `commit` | `prove`, `watch` | `prove --release`, `watch` |
-| `square-mcp` | no (the CLI or the app) | every `square_hire` job, for the server's life (`SQUARE_POLICY_FILE`, `SQUARE_PROVER_URL`) | yes |
-| `square-hosted` | no | every delegated job, for the host's life (`compliance` block) | yes |
+| `square-mcp` | no (the CLI or the app) | every `square_hire` job, across restarts (`SQUARE_POLICY_FILE`, `SQUARE_PROVER_URL`, `SQUARE_DUTY_STATE`) | yes |
+| `square-hosted` | no | every delegated job, across restarts (`compliance` block, `stateFile`) | yes |
 | app | Policy page | job page, `Bind proof`, when `NEXT_PUBLIC_PROVER_URL` is set | the existing `Finalize` action |
 | lifecycle runner | on first run (`LIFECYCLE_POLICY_FILE`) | before each release it cranks | as before |
 
@@ -100,7 +128,16 @@ chain.
   whose windows close in the same tick are cranked in sequence, each rebound
   after the other moved the counter. A keeper that cranks the second between
   those two steps releases it without a current proof and pays the client
-  back. The window for that is one block; narrowing it further means either
-  a counter the module tolerates a lag on, or a keeper that reads
-  `complianceProofOf` before cranking, and both are the contracts' and the
-  keeper's to decide.
+  back; measured, the keeper's sequential crank refuses the second job of a
+  batch every time ([#345][i345]). Narrowing it means either a counter the
+  module tolerates a lag on, or a keeper that reads `complianceProofOf`
+  before cranking, and both are the contracts' and the keeper's to decide.
+- **A client with no policy, and an escrow nobody handed over.** With a
+  module in the hook, a release to a client with no commitment is refused
+  for certain, so `square_hire` refuses such a wallet before any money moves
+  and an agent's admission refuses such a job before any work is done
+  ([#350][i350]); and a hire whose task the agent never received keeps its
+  escrow on the job, with `square_dispatch` to hand the task over later and
+  `square_refund` to take the escrow back once the job expires
+  ([#351][i351]). What the kernel should do about a client who withholds a
+  proof after delivery is a contracts decision, not this one.
