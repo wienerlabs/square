@@ -72,6 +72,19 @@ duty cranks. A proof the circuit marks non-compliant is reported with the
 rules it broke and not bound. Everything is on the chain or in the policy;
 the duty remembers only which jobs it watches.
 
+On a hook that screens ([sanctions-screening.md](../../docs/decisions/sanctions-screening.md)),
+the payee's record decides the release as much as the proof does: the hook
+pays nothing to a payee without a fresh, clean one, and the net goes back to
+the client. So before it cranks the duty reads the record (`SquareClient.screeningOf`).
+Cleared, it cranks; a fresh record that says designated, it cranks too, since
+that refusal is the outcome screening exists for; missing or stale, it asks
+the `screener` it was given for a fresh one and reads again, and with none, or
+still no record, it **holds** the job: nothing is sent, the tick's `held` list
+and a `held` event say why, once per reason, and the next tick reads again.
+The `released` event carries `payeeCleared`, what the hook's `ScreeningChecked`
+said. Pass `screener: createScreenerClient({ url })` from `@squaresdk/core`, the
+same one the client funds through.
+
 One-shot use is the same call: `bindComplianceProof({ client, policy, prover, jobId, category })`.
 
 ## The stack the tests run against

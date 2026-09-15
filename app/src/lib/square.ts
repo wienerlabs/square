@@ -2,6 +2,7 @@
 
 import {
   arbitrationAbi,
+  createScreenerClient,
   createSquareClient,
   JobStatus,
   keeperEvaluatorAbi,
@@ -23,11 +24,20 @@ export const RECENT_JOB_WINDOW = 50;
 const chainId = activeChain.id;
 const readOnlyClient = createSquareClient({ publicClient, deployment });
 
+/**
+ * The screener the funding step asks for a party the hook would refuse
+ * (square#368), when this page names one. Without it, on a hook that
+ * screens, `fund` stops before sending and names the party instead of
+ * reverting on chain.
+ */
+export const SCREENER_URL: string | null = (process.env.NEXT_PUBLIC_SCREENER_URL ?? "").trim().replace(/\/+$/, "") || null;
+const screener = SCREENER_URL === null ? undefined : createScreenerClient({ url: SCREENER_URL });
+
 export function useSquare(): SquareClient {
   const { data: walletClient } = useWalletClient();
   return useMemo(() => {
     if (!walletClient) return readOnlyClient;
-    return createSquareClient({ publicClient, walletClient, deployment });
+    return createSquareClient({ publicClient, walletClient, deployment, ...(screener ? { screener } : {}) });
   }, [walletClient]);
 }
 

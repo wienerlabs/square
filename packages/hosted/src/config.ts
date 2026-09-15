@@ -28,6 +28,13 @@ export interface DelegationConfig {
   allow: string[];
   /** The most one delegated job may be funded with, decimal USDC. A slice of the policy's allowance, never a ceiling of its own. */
   maxPerJob?: string | undefined;
+  /**
+   * The screener service (services/screener) asked to screen a party of a
+   * delegated job that the hook would refuse, before funding and before
+   * release (square#368, #369). On a hook that screens, without it a
+   * delegation whose party has no fresh record stops before funding.
+   */
+  screenerUrl?: string | undefined;
 }
 
 /**
@@ -113,6 +120,7 @@ const schema = z.object({
     .object({
       allow: z.array(z.string().min(1)).min(1, "list the agents this one may hire"),
       maxPerJob: z.string().regex(USDC).optional(),
+      screenerUrl: z.string().url().optional(),
     })
     .optional(),
   compliance: z

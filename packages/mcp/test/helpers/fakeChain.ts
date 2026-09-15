@@ -1,6 +1,6 @@
 import { A2AServer, type CapabilityHandler, type TaskSettlement } from "@squaresdk/a2a";
 import type { JobStatus as A2AJobStatus } from "@squaresdk/a2a";
-import { hashDeliverable, JobStatus, specDescription, type SquareClient } from "@squaresdk/core";
+import { hashDeliverable, JobStatus, PartyNotClearedError, specDescription, type ScreeningState, type SquareClient } from "@squaresdk/core";
 import { Hono } from "hono";
 import { isAddressEqual, type Address, type Hex } from "viem";
 import { deployment, OWNER } from "./fakes.js";
@@ -38,6 +38,13 @@ export function fakeChain(
     /** A compliance module in the hook's slot, and whether this wallet has a policy on the registry (square#350). */
     module?: Address | undefined;
     policy?: boolean | undefined;
+    /**
+     * A screening registry in the hook's slot (square#35), with what it says
+     * of each address; an address it does not name is `unscreened`. The
+     * SDK's `fund` refuses a party that is not cleared before it sends
+     * (square#368), which the fake repeats.
+     */
+    screening?: Partial<Record<string, ScreeningState>> | undefined;
   } = {},
 ) {
   const account = options.account ?? OWNER;
@@ -78,6 +85,14 @@ export function fakeChain(
     },
     async complianceTolerance() {
       return options.module === undefined ? null : 3_600n;
+    },
+    async screening() {
+      return options.screening === undefined ? null : "0x00000000000000000000000000000000000005c4";
+    },
+    async screeningOf(subject: Address) {
+      if (options.screening === undefined) return { subject, state: "no-screening", registry: null };
+      const state = Object.entries(options.screening).find(([address]) => isAddressEqual(address as Address, subject))?.[1] ?? "unscreened";
+      return { subject, state, registry: "0x00000000000000000000000000000000000005c4" };
     },
     async policyOf() {
       return { commitment: options.policy ? `0x${"ab".repeat(32)}` : ZERO, dailyLimit: 0n, updatedAt: 0n, epoch: 0n };
@@ -132,6 +147,13 @@ export function fakeChain(
     },
     async fund(id: bigint, expected: bigint) {
       const job = record(id);
+      if (options.screening !== undefined) {
+        for (const [role, subject] of [["client", job.client], ["provider", job.provider]] as const) {
+          const { state } = await this.screeningOf(subject);
+          if (state === "cleared") continue;
+          throw new PartyNotClearedError(id, role, subject, state as "sanctioned" | "unscreened", state === "sanctioned" ? "a fresh screening record says it is designated" : "the registry holds no fresh, clean record for it and no screener is configured to ask");
+        }
+      }
       if (job.status !== JobStatus.Open) throw new Error("WrongStatus()");
       if (job.budget !== expected) throw new Error("BudgetMismatch()");
       if (state.balance < expected) throw new Error("ERC20InsufficientBalance");

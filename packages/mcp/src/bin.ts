@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   ARC_TESTNET_CHAIN_ID,
+  createScreenerClient,
   createSquareClient,
   deploymentFor,
   deploymentFromJson,
@@ -37,6 +38,9 @@ import { createSquareMcpServer, type ComplianceOptions } from "./server.js";
  *   SQUARE_COMPLIANCE_INTERVAL_MS  how often the bound proofs are checked; 15000 by default, well inside the module's tolerance
  *   SQUARE_DUTY_STATE        where the jobs the duty watches are kept across restarts; <SQUARE_POLICY_FILE>.duty.json by
  *                            default, "off" to keep none (the chain is still scanned for this wallet's open jobs at start)
+ *   SQUARE_SCREENER_URL      the screener service (services/screener) asked to screen a party the hook would refuse,
+ *                            before a hire is funded and before a release (square#368, #369). On a hook that screens,
+ *                            without it a hire whose party has no fresh record stops before funding, naming the party
  *
  * A key in an environment variable is a key in the process table, the same
  * trade the CLI's unattended mode makes; it is the one a desktop client
@@ -93,7 +97,13 @@ async function main(): Promise<void> {
   const account = key === undefined ? undefined : privateKeyToAccount(key as `0x${string}`);
   const walletClient: SquareWalletClient | undefined =
     account === undefined ? undefined : createWalletClient({ account, chain, transport: http(rpcUrl), pollingInterval });
-  const client = createSquareClient({ publicClient, deployment, ...(walletClient ? { walletClient } : {}) });
+  const screenerUrl = env("SQUARE_SCREENER_URL");
+  const client = createSquareClient({
+    publicClient,
+    deployment,
+    ...(walletClient ? { walletClient } : {}),
+    ...(screenerUrl !== undefined ? { screener: createScreenerClient({ url: screenerUrl }) } : {}),
+  });
   await client.assertChain();
 
   const resolver = new AipDidResolver({
@@ -120,7 +130,8 @@ async function main(): Promise<void> {
   console.error(
     `[square-mcp] serving Square on chain ${chainId} via ${rpcUrl}` +
       (account ? `, paying from ${account.address}` : ", read-only (no SQUARE_PRIVATE_KEY)") +
-      (compliance ? `, proving releases under policy ${compliance.policy.policy_id} at ${env("SQUARE_PROVER_URL")}` : ""),
+      (compliance ? `, proving releases under policy ${compliance.policy.policy_id} at ${env("SQUARE_PROVER_URL")}` : "") +
+      (screenerUrl !== undefined ? `, screening parties at ${screenerUrl}` : ""),
   );
 }
 

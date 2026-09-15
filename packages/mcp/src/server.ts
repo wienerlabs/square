@@ -137,6 +137,9 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
       client,
       policy: compliance.policy,
       prover: compliance.prover,
+      // The screener the client funds through is the one the duty asks
+      // before a release (square#369): one URL, both ends of the job.
+      screener: client.screener,
       onEvent: compliance.onEvent,
       serialize: serially,
       state: compliance.state,
@@ -533,22 +536,41 @@ async function complianceOf(client: SquareClient, jobId: bigint, status: number,
   if (tolerance === null) return null;
   const [bound, facts] = await Promise.all([client.complianceProofOf(jobId), releaseFacts(client, jobId)]);
   const state = proofState(bound, facts, tolerance / 2n);
-  const base = { payee: facts.payee, net: formatUnits(facts.amount, 6), spentToday: formatUnits(facts.dailySpentBefore, 6), toleranceSeconds: tolerance.toString(), tracked };
+  // square#369: on a hook that screens, the payee's record decides the
+  // release as much as the proof does; the duty holds the job while it is
+  // missing, and the report says so beside the proof.
+  const screening = await client.screeningOf(facts.payee, await client.screening(facts.hook));
+  const screened =
+    screening.state === "no-screening"
+      ? {}
+      : {
+          payeeScreening: screening.state,
+          screeningSummary:
+            screening.state === "cleared"
+              ? `the payee ${facts.payee} is cleared by the screening registry`
+              : screening.state === "sanctioned"
+                ? `a fresh screening record says the payee ${facts.payee} is designated; the release will go back to the client`
+                : `the payee ${facts.payee} has no fresh screening record; ${tracked ? "this server holds the release until one lands" : "a release now would pay the client back"}`,
+        };
+  const base = { payee: facts.payee, net: formatUnits(facts.amount, 6), spentToday: formatUnits(facts.dailySpentBefore, 6), toleranceSeconds: tolerance.toString(), tracked, ...screened };
+  const withScreening = (summary: string) => ("screeningSummary" in screened ? `${summary}; ${screened.screeningSummary}` : summary);
   switch (state.kind) {
     case "none":
       return {
         ...base,
         proof: "none",
-        summary: tracked
-          ? "the hook holds a module and no proof is bound yet; this server binds one when the window is within half the tolerance of closing, and releases the job itself"
-          : "the hook holds a module and no proof is bound; a release now would pay the client back",
+        summary: withScreening(
+          tracked
+            ? "the hook holds a module and no proof is bound yet; this server binds one when the window is within half the tolerance of closing, and releases the job itself"
+            : "the hook holds a module and no proof is bound; a release now would pay the client back",
+        ),
       };
     case "malformed":
-      return { ...base, proof: "malformed", summary: "the bound proof is malformed" };
+      return { ...base, proof: "malformed", summary: withScreening("the bound proof is malformed") };
     case "current":
-      return { ...base, proof: "current", proofAgeSeconds: state.age.toString(), summary: `a current proof is bound, ${state.age}s old, naming payee ${facts.payee} and net ${base.net} USDC` };
+      return { ...base, proof: "current", proofAgeSeconds: state.age.toString(), summary: withScreening(`a current proof is bound, ${state.age}s old, naming payee ${facts.payee} and net ${base.net} USDC`) };
     case "stale":
-      return { ...base, proof: "stale", proofAgeSeconds: state.age.toString(), stale: state.reasons, summary: `the bound proof is stale: ${state.reasons.join("; ")}` };
+      return { ...base, proof: "stale", proofAgeSeconds: state.age.toString(), stale: state.reasons, summary: withScreening(`the bound proof is stale: ${state.reasons.join("; ")}`) };
   }
 }
 

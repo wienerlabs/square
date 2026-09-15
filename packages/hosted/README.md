@@ -113,6 +113,17 @@ budgets read back are counted by the allowance again. Without the block, on such
 stack, every delegated release would pay this wallet back, so the block belongs with
 the delegation block; the config parser refuses one without the other.
 
+**On a hook that screens, the parties are screened too.** `delegation.screenerUrl`
+names the screener service ([`services/screener`](../../services/screener/README.md)).
+Before a delegated job is funded the client reads its own and the agent's screening
+records and asks the screener for whoever lacks a fresh one, and a party still not
+cleared stops the delegation before anything is sent, named in the refusal the model
+sees (square#368). Before it cranks, the duty reads the payee's record again, asks the
+same screener for a fresh one, and holds the job rather than finalize a release the
+hook would refuse over a stale record (square#369). Without the URL, on such a hook,
+an unscreened party stops the delegation and an unscreened payee holds the release;
+on a hook that screens nobody it is never read.
+
 ## In a host of your own
 
 ```ts

@@ -85,6 +85,13 @@ export function fakeSquare(options: { account?: Address; balance?: bigint; horiz
     async complianceTolerance() {
       return null;
     },
+    // No screening registry either (square#35): fund asks nobody, the duty holds nothing.
+    async screening() {
+      return null;
+    },
+    async screeningOf(subject: Address) {
+      return { subject, state: "no-screening", registry: null };
+    },
     async spentToday(poster: Address) {
       return spent.get(poster.toLowerCase()) ?? 0n;
     },

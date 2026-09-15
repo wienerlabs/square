@@ -18,6 +18,7 @@ import {
 import { generatePrivateKey, mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
 import {
   approveBuyers,
+  createScreenerClient,
   createSquareClient,
   deploymentFromJson,
   eventsNamed,
@@ -39,6 +40,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 // a package that depends on it.
 const policyFile = process.env["LIFECYCLE_POLICY_FILE"];
 const proverUrl = process.env["LIFECYCLE_PROVER_URL"];
+// square#368: on a hook that screens, the parties of every job are screened
+// before it is funded; this is the screener asked for whoever lacks a record.
+const screenerUrl = process.env["LIFECYCLE_SCREENER_URL"];
 const rpcUrl = process.env["RPC_URL"] ?? "http://127.0.0.1:8545";
 const chainId = Number(process.env["CHAIN_ID"] ?? 31337);
 const isAnvil = process.env["ANVIL"] === "1" || chainId === 31337;
@@ -127,6 +131,7 @@ function actor(deployment: SquareDeployment, key: Hex): SquareClient {
     publicClient,
     deployment,
     walletClient: createWalletClient({ chain, transport: http(rpcUrl), account: privateKeyToAccount(key) }),
+    ...(screenerUrl ? { screener: createScreenerClient({ url: screenerUrl }) } : {}),
   });
 }
 

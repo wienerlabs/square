@@ -1,5 +1,5 @@
-import { JobStatus, type SquareClient } from "@squaresdk/core";
-import type { Address, Hex } from "viem";
+import { JobStatus, squareHookAbi, type SquareClient } from "@squaresdk/core";
+import { encodeAbiParameters, encodeEventTopics, type Address, type Hex } from "viem";
 import { decodeComplianceProof, encodeComplianceProof, signalsOf } from "../../src/proof.js";
 import type { ProveRequest, ProveResponse, Prover } from "../../src/prover.js";
 
@@ -15,6 +15,8 @@ export const PROVIDER = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC" as const;
 export const BUYER = "0x90F79bf6EB2c4f870365E785982E1f101E93b906" as const;
 export const USDC = "0x5FbDB2315678afecb367f032d93F642f64180aa3" as const;
 export const MODULE = "0x000000000000000000000000000000000000c0de" as const;
+export const REGISTRY = "0x00000000000000000000000000000000000005c4" as const;
+export const HOOK = "0x3333333333333333333333333333333333333333" as const;
 export const ZERO32 = `0x${"0".repeat(64)}` as const;
 
 export interface FakeJob {
@@ -31,6 +33,12 @@ export interface FakeJob {
   proof: Hex;
 }
 
+/** A screening record as the registry judges it: fresh and clean clears; fresh and sanctioned is a standing "no"; older than maxAge is nothing. */
+export interface FakeScreening {
+  screenedAt: bigint;
+  sanctioned: boolean;
+}
+
 export interface FakeChain {
   client: SquareClient;
   prover: Prover;
@@ -40,6 +48,10 @@ export interface FakeChain {
   commitment: Hex;
   module: Address | null;
   tolerance: bigint;
+  /** The screening registry the hook holds (square#35); null, the default, screens nobody. */
+  screening: Address | null;
+  screenings: Map<string, FakeScreening>;
+  maxAge: bigint;
   writes: string[];
   proofs: ProveRequest[];
   /** The block spans the duty's recovery asked for. */
@@ -48,7 +60,7 @@ export interface FakeChain {
   judge: (jobId: bigint, proof: Hex) => boolean;
 }
 
-export function fakeChain(options: { commitment: Hex; module?: Address | null; tolerance?: bigint; now?: bigint }): FakeChain {
+export function fakeChain(options: { commitment: Hex; module?: Address | null; tolerance?: bigint; now?: bigint; screening?: Address | null }): FakeChain {
   const chain: FakeChain = {
     client: undefined as unknown as SquareClient,
     prover: undefined as unknown as Prover,
@@ -58,6 +70,9 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
     commitment: options.commitment,
     module: options.module === undefined ? MODULE : options.module,
     tolerance: options.tolerance ?? 3_600n,
+    screening: options.screening ?? null,
+    screenings: new Map(),
+    maxAge: 3_600n,
     writes: [],
     proofs: [],
     scans: [],
@@ -84,9 +99,29 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
     if (!found) throw new Error(`InvalidJob() for ${id}`);
     return found;
   };
+  // The hook's own reading of a payee at release: with a registry, a payee
+  // without a fresh, clean record gets nothing and the client the whole net.
+  const payeeCleared = (payee: Address): boolean | null => {
+    if (chain.screening === null) return null;
+    const record = chain.screenings.get(payee.toLowerCase());
+    return record !== undefined && !record.sanctioned && chain.now - record.screenedAt <= chain.maxAge;
+  };
+  // The `ScreeningChecked(jobId, payee, cleared)` log the real hook emits at
+  // release while it holds a registry, encoded so the duty decodes it.
+  const screeningLogs = (jobId: bigint, payee: Address) => {
+    const cleared = payeeCleared(payee);
+    if (cleared === null) return [];
+    return [
+      {
+        address: HOOK,
+        topics: encodeEventTopics({ abi: squareHookAbi, eventName: "ScreeningChecked", args: { jobId, payee } }),
+        data: encodeAbiParameters([{ type: "bool" }], [cleared]),
+      },
+    ];
+  };
   chain.client = {
     account: CLIENT,
-    deployment: { chainId: 31337, usdc: USDC, squareJob: "0x" + "11".repeat(20), claimMarket: "0x" + "22".repeat(20), squareHook: "0x" + "33".repeat(20) },
+    deployment: { chainId: 31337, usdc: USDC, squareJob: "0x" + "11".repeat(20), claimMarket: "0x" + "22".repeat(20), squareHook: HOOK },
     publicClient: {
       getBlock: async () => ({ timestamp: chain.now, number: 100n }),
       // This wallet's JobCreated logs, for the duty's recovery scan: every job
@@ -100,7 +135,17 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
     },
     async getJobRecord(id: bigint) {
       const j = job(id);
-      return { status: j.status, client: j.client, provider: j.provider };
+      return { status: j.status, client: j.client, provider: j.provider, hook: HOOK };
+    },
+    async screening() {
+      return chain.screening;
+    },
+    async screeningOf(subject: Address) {
+      if (chain.screening === null) return { subject, state: "no-screening", registry: null };
+      const record = chain.screenings.get(subject.toLowerCase());
+      const fresh = record !== undefined && chain.now - record.screenedAt <= chain.maxAge;
+      const state = fresh ? (record.sanctioned ? "sanctioned" : "cleared") : "unscreened";
+      return { subject, state, registry: chain.screening };
     },
     async payeeOf(id: bigint) {
       return job(id).payee;
@@ -130,10 +175,11 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
       chain.now += 1n;
       const share = (j.net * BigInt(j.providerBps ?? 0)) / 10_000n;
       const verified = chain.module === null ? true : chain.judge(id, j.proof);
+      const paid = verified && payeeCleared(j.payee) !== false;
       j.status = JobStatus.Completed;
-      if (verified && chain.module !== null) chain.spent += share;
-      chain.writes.push(`finalizeDecided(${id})${verified ? "" : " refused"}`);
-      return { hash: `0x${"ef".repeat(32)}`, receipt: { logs: [] }, events: [] };
+      if (paid && chain.module !== null) chain.spent += share;
+      chain.writes.push(`finalizeDecided(${id})${paid ? "" : " refused"}`);
+      return { hash: `0x${"ef".repeat(32)}`, receipt: { logs: screeningLogs(id, j.payee) }, events: [] };
     },
     async complianceModule() {
       return chain.module;
@@ -159,10 +205,11 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
       if (j.challengeEnd === null || j.challengeEnd > chain.now) throw new Error("WindowOpen()");
       chain.now += 1n;
       const verified = chain.module === null ? true : chain.judge(id, j.proof);
+      const paid = verified && payeeCleared(j.payee) !== false;
       j.status = JobStatus.Completed;
-      if (verified && chain.module !== null) chain.spent += j.net;
-      chain.writes.push(`finalize(${id})${verified ? "" : " refused"}`);
-      return { hash: `0x${"cd".repeat(32)}`, receipt: { logs: [] }, events: [] };
+      if (paid && chain.module !== null) chain.spent += j.net;
+      chain.writes.push(`finalize(${id})${paid ? "" : " refused"}`);
+      return { hash: `0x${"cd".repeat(32)}`, receipt: { logs: screeningLogs(id, j.payee) }, events: [] };
     },
   } as unknown as SquareClient;
   chain.prover = {

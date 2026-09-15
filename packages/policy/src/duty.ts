@@ -1,8 +1,8 @@
-import { JobStatus, squareJobAbi, type SquareClient } from "@squaresdk/core";
+import { JobStatus, squareJobAbi, type Screener, type ScreeningVerdict, type SquareClient } from "@squaresdk/core";
 import { formatUnits, getAbiItem, type Address, type Hex } from "viem";
 import type { Policy } from "./policy.js";
 import type { Prover, ViolatedRule } from "./prover.js";
-import { bindComplianceProof, moduleVerdict, proofState, releaseFacts, type BindOutcome, type ProofState, type ReleaseFacts } from "./release.js";
+import { bindComplianceProof, moduleVerdict, proofState, releaseFacts, screeningVerdict, type BindOutcome, type ProofState, type ReleaseFacts } from "./release.js";
 
 /**
  * The institution's release duty.
@@ -34,11 +34,21 @@ import { bindComplianceProof, moduleVerdict, proofState, releaseFacts, type Bind
  * first; and whatever the file does not hold, `recover` finds on the chain,
  * in this wallet's `JobCreated` logs, and tracks without a category until
  * the first proof tells which of the policy's categories the job bought.
+ *
+ * On a hook that screens (square#35), a release also needs the payee's
+ * screening record fresh, or the hook pays the client back. The duty reads
+ * it before it cranks (square#369): a cleared payee is released, a payee a
+ * fresh record says is designated is released too, since the refusal is the
+ * outcome screening exists to produce, and a payee with no fresh record is
+ * held, as the keeper holds it, until a screening lands; with a `screener`
+ * the duty asks for one itself and releases in the same tick.
  */
 export interface DutyOptions {
   client: SquareClient;
   policy: Policy;
   prover: Prover;
+  /** The screener asked for a payee whose record is missing or stale before a release; the client's own when unset. */
+  screener?: Screener | undefined;
   /**
    * How close to the release a proof is bound, and how old a bound proof may
    * grow before it is rebuilt, in seconds. The default is half the module's
@@ -77,7 +87,8 @@ export type DutyEvent =
   | { type: "recovered"; restored: bigint[]; discovered: bigint[] }
   | { type: "bound"; jobId: bigint; transaction: Hex; because: string[] }
   | { type: "refused"; jobId: bigint; reason: Exclude<BindOutcome, { bound: true }>["reason"]; detail: string; violated?: ViolatedRule[] | null }
-  | { type: "released"; jobId: bigint; transaction: Hex; verified: boolean | null; payee: Address; amount: bigint; refusedFor?: Hex | undefined }
+  | { type: "released"; jobId: bigint; transaction: Hex; verified: boolean | null; payee: Address; amount: bigint; refusedFor?: Hex | undefined; payeeCleared?: boolean | null | undefined }
+  | { type: "held"; jobId: bigint; payee: Address; reason: string }
   | { type: "settled"; jobId: bigint; status: number }
   | { type: "error"; jobId: bigint | null; error: Error };
 
@@ -89,6 +100,8 @@ export interface TrackedJob {
   budget?: bigint | undefined;
   /** The last refusal reported for it, so the same one is not reported every tick. */
   lastRefusal?: string | undefined;
+  /** The last hold reported for it, for the same reason. */
+  lastHold?: string | undefined;
 }
 
 export interface TickReport {
@@ -100,6 +113,8 @@ export interface TickReport {
   waiting: bigint[];
   /** Jobs the duty released this tick. */
   released: bigint[];
+  /** Jobs whose window has closed and proof is current, but whose payee has no fresh screening record: nothing is sent, the hook would refuse it. */
+  held: { jobId: bigint; payee: Address; reason: string }[];
   /** Jobs that left Funded/Submitted by another hand, and are no longer tracked. */
   settled: bigint[];
   /** Jobs the proof could not be bound for, with why. */
@@ -214,7 +229,7 @@ export class ComplianceDuty {
 
   /** One pass over every tracked job. Never throws for one job's sake; errors are in the report. */
   async tick(): Promise<TickReport> {
-    const report: TickReport = { bound: [], current: [], waiting: [], released: [], settled: [], refused: [], errors: [] };
+    const report: TickReport = { bound: [], current: [], waiting: [], released: [], held: [], settled: [], refused: [], errors: [] };
     if (this.tracked.size === 0) return report;
     const { client } = this.options;
     let module: Address | null;
@@ -302,9 +317,11 @@ export class ComplianceDuty {
     // to have decided, and `finalizeDecided` applies what they decided.
     if (facts.disputed ? facts.providerBps === null : facts.challengeEnd === null || facts.challengeEnd > facts.now) return;
     if (state.kind !== "current") return; // rebound and moved again; next tick
+    if (!(await this.payeeCleared(job, facts, report))) return;
     try {
       const result = facts.disputed ? await client.finalizeDecided(job.jobId) : await client.finalize(job.jobId);
       const verdict = moduleVerdict(result.receipt, module);
+      const screened = screeningVerdict(result.receipt, facts.hook);
       report.released.push(job.jobId);
       this.emit({
         type: "released",
@@ -314,6 +331,7 @@ export class ComplianceDuty {
         payee: facts.payee,
         amount: facts.amount,
         refusedFor: verdict?.reason,
+        payeeCleared: screened === null ? null : screened.cleared,
       });
       this.untrack(job.jobId);
     } catch (error) {
@@ -325,6 +343,40 @@ export class ComplianceDuty {
       }
       throw error;
     }
+  }
+
+  /**
+   * square#369. Whether the payee may be paid as the hook will read it at
+   * this release. A hook that screens refuses a payee without a fresh, clean
+   * record and returns the net to this wallet; an honest crank does not do
+   * that to a payee whose only fault is a stale record. So: cleared, crank;
+   * a fresh record that says designated, crank, the refusal is the point;
+   * otherwise ask the screener when there is one and read again, and hold
+   * the job while the record is still missing. The hold is reported once
+   * per reason, as a refusal is.
+   */
+  private async payeeCleared(job: TrackedJob, facts: ReleaseFacts, report: TickReport): Promise<boolean> {
+    const { client } = this.options;
+    const registry = await client.screening(facts.hook);
+    if (registry === null) return true;
+    let verdict: ScreeningVerdict = await client.screeningOf(facts.payee, registry);
+    if (verdict.state === "unscreened" && this.options.screener) {
+      await this.options.screener.screen([facts.payee]);
+      verdict = await client.screeningOf(facts.payee, registry);
+    }
+    if (verdict.state !== "unscreened") {
+      job.lastHold = undefined;
+      return true;
+    }
+    const reason = this.options.screener
+      ? `the screener was asked and the registry still holds no fresh, clean record for the payee ${facts.payee}; the hook would refuse the release`
+      : `the registry holds no fresh, clean record for the payee ${facts.payee} and no screener is configured to ask; the hook would refuse the release`;
+    report.held.push({ jobId: job.jobId, payee: facts.payee, reason });
+    if (job.lastHold !== reason) {
+      job.lastHold = reason;
+      this.emit({ type: "held", jobId: job.jobId, payee: facts.payee, reason });
+    }
+    return false;
   }
 
   private settled(job: TrackedJob, status: number, report: TickReport): void {
@@ -370,7 +422,15 @@ export function describeDutyEvent(event: DutyEvent): string {
     case "refused":
       return `job ${event.jobId}: no proof bound, ${event.reason}: ${event.detail}`;
     case "released":
-      return `job ${event.jobId}: released in ${event.transaction}, ${event.verified === false ? `refused by the module (${event.refusedFor ?? "reason unknown"})` : `${formatUnits(event.amount, 6)} USDC to ${event.payee}`}`;
+      return `job ${event.jobId}: released in ${event.transaction}, ${
+        event.verified === false
+          ? `refused by the module (${event.refusedFor ?? "reason unknown"})`
+          : event.payeeCleared === false
+            ? `refused by the screening: the payee ${event.payee} is not cleared, the net went back to the client`
+            : `${formatUnits(event.amount, 6)} USDC to ${event.payee}`
+      }`;
+    case "held":
+      return `job ${event.jobId}: held, ${event.reason}`;
     case "settled":
       return `job ${event.jobId}: settled by another hand (status ${event.status})`;
     case "error":

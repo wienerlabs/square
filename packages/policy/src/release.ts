@@ -1,4 +1,4 @@
-import { complianceModuleAbi, JobStatus, type SquareClient } from "@squaresdk/core";
+import { complianceModuleAbi, JobStatus, squareHookAbi, type SquareClient } from "@squaresdk/core";
 import { isAddressEqual, parseEventLogs, type Address, type Hex, type TransactionReceipt } from "viem";
 import { policyCommitment } from "./commitment.js";
 import type { Policy } from "./policy.js";
@@ -18,6 +18,8 @@ export interface ReleaseFacts {
   jobId: bigint;
   status: number;
   client: Address;
+  /** The hook the job was created with: where its screening, if any, is read from. */
+  hook: Address;
   payee: Address;
   /** What the payee receives: the net, times the split a decided dispute set. */
   amount: bigint;
@@ -58,6 +60,7 @@ export async function releaseFacts(client: SquareClient, jobId: bigint): Promise
     jobId,
     status: record.status,
     client: record.client,
+    hook: record.hook,
     payee,
     amount: payout,
     net: amount,
@@ -180,6 +183,21 @@ function onlyTheCategoryFailed(response: { is_compliant: boolean; violated_rules
 }
 
 /** What the module said when a job was released, read from the receipt. */
+/**
+ * What the hook's screening said to the release the receipt carries
+ * (square#35): the payee it checked and whether it was cleared, or null when
+ * the hook screened nobody. Read from `ScreeningChecked`, which the hook
+ * emits at release only while it holds a registry.
+ */
+export function screeningVerdict(receipt: TransactionReceipt, hook: Address): { payee: Address; cleared: boolean } | null {
+  const logs = parseEventLogs({ abi: squareHookAbi, logs: receipt.logs, eventName: "ScreeningChecked" });
+  for (const log of logs) {
+    if (!isAddressEqual(log.address, hook)) continue;
+    return { payee: log.args.payee, cleared: log.args.cleared };
+  }
+  return null;
+}
+
 export function moduleVerdict(receipt: TransactionReceipt, module: Address): { verified: boolean; reason?: Hex } | null {
   const logs = parseEventLogs({ abi: complianceModuleAbi, logs: receipt.logs });
   for (const log of logs) {

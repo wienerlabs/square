@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { A2AClient, WellKnownCache } from "@squaresdk/a2a";
-import { hashDeliverable, JobStatus } from "@squaresdk/core";
+import { hashDeliverable, JobStatus, type ScreeningState } from "@squaresdk/core";
 import { parseUnits } from "viem";
 import { lookupAgent } from "../src/agents.js";
 import { hire, HireRefusedError } from "../src/hire.js";
 import { fakeAgent, fakeChain, fetchRouting } from "./helpers/fakeChain.js";
-import { CHAIN_ID, WALLET, card, deployment, didOf, resolution, resolverOf } from "./helpers/fakes.js";
+import { CHAIN_ID, OWNER, WALLET, card, deployment, didOf, resolution, resolverOf } from "./helpers/fakes.js";
 
 /**
  * `hire` on its own: the seam a host with an allowance composes on. The
@@ -14,8 +14,8 @@ import { CHAIN_ID, WALLET, card, deployment, didOf, resolution, resolverOf } fro
 const ATLAS = didOf(7);
 const ORIGIN = "https://atlas.example";
 
-function stage(options: { module?: `0x${string}`; policy?: boolean; a2aFailures?: number } = {}) {
-  const chain = fakeChain({ module: options.module, policy: options.policy });
+function stage(options: { module?: `0x${string}`; policy?: boolean; a2aFailures?: number; screening?: Partial<Record<string, ScreeningState>> } = {}) {
+  const chain = fakeChain({ module: options.module, policy: options.policy, screening: options.screening });
   const agent = fakeAgent({
     card: card({ agentId: 7n }),
     provider: WALLET,
@@ -101,6 +101,29 @@ describe("hire", () => {
     const open = stage();
     const plain = await hire({ client: open.chain.client, a2a: open.a2a, profile: await open.profile(), capability: "text.summarize", input: "a b c", callerDid: "did:x", pollIntervalMs: 5 });
     expect(plain.dispatch).toBe("delivered");
+  });
+
+  it("names the party the screening refused, and leaves the job Open with its budget for a later hire (square#368)", async () => {
+    const unscreened = stage({ screening: { [OWNER]: "cleared" } });
+    const attempt = hire({ client: unscreened.chain.client, a2a: unscreened.a2a, profile: await unscreened.profile(), capability: "text.summarize", input: "a b c", callerDid: "did:x" });
+    await expect(attempt).rejects.toMatchObject({
+      stage: "funding",
+      message: `job 1 was not funded: the provider ${WALLET} is unscreened, the registry holds no fresh, clean record for it and no screener is configured to ask; the job stays Open with its budget set and this wallet keeps its USDC. Once the provider is screened, hire again with jobId 1 to fund it.`,
+      transactions: { createJob: expect.any(String), setBudget: expect.any(String) },
+    });
+    expect(unscreened.chain.writes.map((w) => w.split("(")[0])).toEqual(["createJob", "setBudget"]);
+    expect(unscreened.chain.records.get(1n)?.status).toBe(JobStatus.Open);
+
+    const designated = stage({ screening: { [OWNER]: "cleared", [WALLET]: "sanctioned" } });
+    await expect(hire({ client: designated.chain.client, a2a: designated.a2a, profile: await designated.profile(), capability: "text.summarize", input: "a b c", callerDid: "did:x" })).rejects.toMatchObject({
+      stage: "funding",
+      message: expect.stringContaining(`the provider ${WALLET} is sanctioned, a fresh screening record says it is designated; the job stays Open with its budget set and this wallet keeps its USDC. Hire another agent.`),
+    });
+
+    // Both cleared: the same stack hires.
+    const cleared = stage({ screening: { [OWNER]: "cleared", [WALLET]: "cleared" } });
+    const result = await hire({ client: cleared.chain.client, a2a: cleared.a2a, profile: await cleared.profile(), capability: "text.summarize", input: "a b c", callerDid: "did:x", pollIntervalMs: 5 });
+    expect(result.dispatch).toBe("delivered");
   });
 
   it("asks an endpoint that was down once more before coming back undispatched, and not an agent that refused (square#351)", async () => {

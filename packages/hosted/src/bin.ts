@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
   ARC_TESTNET_CHAIN_ID,
+  createScreenerClient,
   deploymentFor,
   deploymentFromJson,
   networkFor,
@@ -104,12 +105,14 @@ async function runCommand(path: string | undefined): Promise<void> {
   const walletClient = createWalletClient({ account, chain, transport: http(rpcUrl), pollingInterval });
 
   const compliance = complianceOf(config, path);
+  const screenerUrl = config.delegation?.screenerUrl;
   const hosted = await hostAgent(config, {
     walletClient,
     publicClient,
     deployment,
     rpcUrl,
     sealSecret: env("SQUARE_SEAL_SECRET"),
+    ...(screenerUrl !== undefined ? { screener: createScreenerClient({ url: screenerUrl }) } : {}),
     onRun: ({ taskId, capability, outcome }) =>
       console.error(`[square-hosted] ${capability} task ${taskId}: ${outcome.turns} turn(s), ${outcome.toolCalls.length} tool call(s), ${outcome.usage.inputTokens}/${outcome.usage.outputTokens} tokens`),
     ...(compliance ? { compliance } : {}),
@@ -122,7 +125,8 @@ async function runCommand(path: string | undefined): Promise<void> {
       `${config.capabilities.map((c) => c.id).join(", ")}; ${config.provider.tier} key; ` +
       `${hosted.tools ? `${(await hosted.tools.tools()).length} MCP tool(s)` : "no MCP tools"}; ` +
       `${config.delegation ? `may hire ${config.delegation.allow.join(", ")}` : "no delegation"}` +
-      `${compliance ? `; proving delegated releases under policy ${compliance.policy.policy_id} at ${config.compliance!.proverUrl}` : ""}`,
+      `${compliance ? `; proving delegated releases under policy ${compliance.policy.policy_id} at ${config.compliance!.proverUrl}` : ""}` +
+      `${screenerUrl !== undefined ? `; screening delegated parties at ${screenerUrl}` : ""}`,
   );
   const stop = async () => {
     await listening.close();

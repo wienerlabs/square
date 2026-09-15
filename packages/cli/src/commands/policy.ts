@@ -492,7 +492,12 @@ function describeEvent(event: DutyEvent, network: Network): string {
     case "released":
       return event.verified === false
         ? `${c.red("✗")} job ${event.jobId}: released in ${txLine(network, event.transaction)}, refused by the module (${event.refusedFor ?? "reason unknown"})`
-        : `${c.green("✓")} job ${event.jobId}: released in ${txLine(network, event.transaction)}, ${formatUnits(event.amount, 6)} USDC to ${event.payee}`;
+        : event.payeeCleared === false
+          ? `${c.red("✗")} job ${event.jobId}: released in ${txLine(network, event.transaction)}, refused by the screening: the payee ${event.payee} is not cleared, the net went back to the client`
+          : `${c.green("✓")} job ${event.jobId}: released in ${txLine(network, event.transaction)}, ${formatUnits(event.amount, 6)} USDC to ${event.payee}`;
+    case "held":
+      // square#369: the window closed and the proof is current, but the hook would refuse the payee; nothing is sent until a screening lands.
+      return `${c.yellow("…")} job ${event.jobId}: held, ${event.reason}`;
     case "settled":
       return `${c.dim("·")} job ${event.jobId}: settled by another hand (status ${event.status})`;
     case "error":
