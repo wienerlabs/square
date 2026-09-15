@@ -154,6 +154,12 @@ site/        The website at https://square-protocol.vercel.app: what Square is, 
 docs/        Specifications, design notes, measurements, disclosure
 ```
 
+The packages publish to npm under `@squaresdk`, all thirteen at one version from
+a `v<version>` tag ([docs/decisions/distribution-channel.md](docs/decisions/distribution-channel.md));
+the first tag has not been cut, so today each is built from this clone, and every
+pull request packs the thirteen and installs the tarballs into an empty project so
+that the day it is cut nothing is missing from them.
+
 Every pull request runs the contract, circuit, prover, package and application
 suites. The circuit and prover jobs build the artifacts their tests refuse to
 run without, because a suite that quietly skips itself is the failure this is

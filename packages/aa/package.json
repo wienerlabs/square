@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "ERC-4337 account abstraction for Square agents on Arc: SimpleAccount v0.7 smart accounts and a self-bundler that submits UserOperations through EntryPoint.handleOps from a keeper EOA.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wienerlabs/square.git",
+    "directory": "packages/aa"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

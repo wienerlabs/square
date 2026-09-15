@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "x402 v2 payment gateway for agent API access on Arc: in-process facilitator with a durable replay guard, paid Hono routes, and a paying fetch.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wienerlabs/square.git",
+    "directory": "packages/x402"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

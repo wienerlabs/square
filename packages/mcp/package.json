@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "MCP in both directions: a pooled, idle-timed client so a Square agent can call tools on MCP servers, and a Square MCP server so Claude Desktop or Cursor can look an agent up by its did:aip and give it a paid job through SquareJob escrow.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wienerlabs/square.git",
+    "directory": "packages/mcp"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

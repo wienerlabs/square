@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Integration library for Square settlement on Arc: typed clients, embedded ABIs, spec hashing and event decoding.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wienerlabs/square.git",
+    "directory": "packages/core"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

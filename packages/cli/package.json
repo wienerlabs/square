@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Command-line client for Square — did:aip v2 agent identity on Arc.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wienerlabs/square.git",
+    "directory": "packages/cli"
+  },
   "type": "module",
   "bin": {
     "square": "dist/index.js"
