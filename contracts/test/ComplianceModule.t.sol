@@ -328,29 +328,143 @@ contract ComplianceModuleTest is Test, BuyerLists {
 
     /// Every one of the eight public signals is bound to the job's own storage.
     ///
-    /// Each case takes the real proof and moves the chain out from under one
-    /// signal, which is the only way to test a binding without forging a proof:
-    /// the pairing still passes, and the release still has to be refused.
+    /// square#237. This test used to check one signal, and then compare
+    /// `boundSignalCount()` with 8, which is `SIGNAL_COUNT` compared with itself:
+    /// the token and stripe_receipt_hash bindings could each be deleted with the
+    /// suite still green. Each signal now has its own case below. Each moves the
+    /// chain, or the proof, out from under that one signal, and asserts the
+    /// release is refused for that signal's own reason, which is the only way to
+    /// test a binding without forging a proof: the pairing still passes.
+    ///
+    /// Here every signal the module says it binds is walked in a fresh state, so
+    /// a count raised without a case fails, and the count is held to the two
+    /// things outside the module that fix it: the width of the verifier's input,
+    /// which is in its selector, and what the prover publishes.
     function test_everyPublicSignalIsBound() public {
-        assertEq(module.boundSignalCount(), 8, "a signal was added without a binding");
+        uint256 signals = module.boundSignalCount();
+        assertEq(
+            verifier.verifyProof.selector,
+            bytes4(
+                keccak256(
+                    bytes(
+                        string.concat(
+                            "verifyProof(uint256[2],uint256[2][2],uint256[2],uint256[", vm.toString(signals), "])"
+                        )
+                    )
+                )
+            ),
+            "the module binds a different number of signals than the verifier takes"
+        );
+        assertEq(
+            fixtures.readUintArray(".compliant.input").length,
+            signals,
+            "the module binds a different number of signals than the prover publishes"
+        );
 
-        // 1. policy_data_hash — the client commits to a different policy
-        //
-        // Reduced into the scalar field, because that is where a commitment
-        // lives: this line used to pass the raw keccak digest, which is above
-        // the field and so is a commitment no proof can carry at all (#231).
-        // The refusal looked the same, so the binding read as tested when what
-        // was being tested was a value the registry now refuses outright.
-        uint256 jobId = submittedJob();
-        vm.prank(client);
-        registry.setPolicy(bytes32(uint256(keccak256("some other policy")) % SCALAR_FIELD), DAILY_LIMIT);
-        completeWith(jobId, compliantProof());
-        assertEq(kernel.withdrawable(provider), 0, "policy_data_hash is not bound");
+        for (uint256 signal = 0; signal < signals; signal++) {
+            uint256 snapshot = vm.snapshotState();
+            _refusedOn(signal);
+            vm.revertToState(snapshot);
+        }
+    }
+
+    function test_binding_isCompliant() public {
+        _refusedOn(0);
+    }
+
+    function test_binding_policyDataHash() public {
+        _refusedOn(1);
     }
 
     function test_binding_recipient() public {
-        // The payee is resolved from the job, so a job whose provider is not the
-        // fixture's recipient must be refused.
+        _refusedOn(2);
+    }
+
+    function test_binding_amount() public {
+        _refusedOn(3);
+    }
+
+    function test_binding_token() public {
+        _refusedOn(4);
+    }
+
+    function test_binding_dailySpentBefore() public {
+        _refusedOn(5);
+    }
+
+    function test_binding_timestamp() public {
+        _refusedOn(6);
+    }
+
+    function test_binding_stripeReceiptHash() public {
+        _refusedOn(7);
+    }
+
+    /// One signal moved, and the release refused for that signal's reason.
+    function _refusedOn(uint256 signal) internal {
+        if (signal == 0) _refusedOnIsCompliant();
+        else if (signal == 1) _refusedOnPolicyDataHash();
+        else if (signal == 2) _refusedOnRecipient();
+        else if (signal == 3) _refusedOnAmount();
+        else if (signal == 4) _refusedOnToken();
+        else if (signal == 5) _refusedOnDailySpentBefore();
+        else if (signal == 6) _refusedOnTimestamp();
+        else if (signal == 7) _refusedOnStripeReceiptHash();
+        else revert(string.concat("no binding case for public signal ", vm.toString(signal)));
+    }
+
+    /// Bind `proof`, complete at `stamp` with `bps` to the provider, and expect
+    /// the module to refuse it for `reason`.
+    function _completeRefused(
+        SquareJob onKernel,
+        ComplianceModule byModule,
+        address evaluator,
+        uint256 jobId,
+        bytes memory proof,
+        uint16 bps,
+        uint256 stamp,
+        bytes32 reason
+    ) internal {
+        vm.prank(onKernel.getJobRecord(jobId).client);
+        onKernel.setComplianceProof(jobId, proof);
+        vm.warp(stamp);
+        vm.expectEmit(true, true, false, true, address(byModule));
+        emit ComplianceModule.ReleaseRefused(jobId, statementOf(proof), reason);
+        vm.prank(evaluator);
+        onKernel.complete(jobId, bytes32(0), abi.encode(bps, proof));
+    }
+
+    function _refusedHere(uint256 jobId, bytes memory proof, uint16 bps, uint256 stamp, bytes32 reason) internal {
+        _completeRefused(kernel, module, address(keeper), jobId, proof, bps, stamp, reason);
+    }
+
+    /// 0. is_compliant: a valid proof of a payment the policy refuses.
+    function _refusedOnIsCompliant() internal {
+        Proof memory blocked = _load(".blocked");
+        assertEq(blocked.input[0], 0, "the blocked fixture is the non-compliant one");
+        uint256 jobId = submittedJob();
+        _refusedHere(jobId, encoded(blocked), FULL_BPS, FIXTURE_TIMESTAMP, "is_compliant is 0");
+        assertEq(kernel.withdrawable(provider), 0, "is_compliant is not bound");
+        assertEq(kernel.withdrawable(client), FIXTURE_AMOUNT);
+    }
+
+    /// 1. policy_data_hash: the client commits to a different policy.
+    ///
+    /// Reduced into the scalar field, because that is where a commitment lives:
+    /// this used to pass the raw keccak digest, which is above the field and so
+    /// is a commitment no proof can carry at all (#231).
+    function _refusedOnPolicyDataHash() internal {
+        uint256 jobId = submittedJob();
+        vm.prank(client);
+        registry.setPolicy(bytes32(uint256(keccak256("some other policy")) % SCALAR_FIELD), DAILY_LIMIT);
+        _refusedHere(jobId, compliantProof(), FULL_BPS, FIXTURE_TIMESTAMP, "policy commitment");
+        assertEq(kernel.withdrawable(provider), 0, "policy_data_hash is not bound");
+        assertEq(kernel.withdrawable(client), FIXTURE_AMOUNT);
+    }
+
+    /// 2. recipient: the payee is resolved from the job, so a job whose provider
+    /// is not the fixture's recipient is refused.
+    function _refusedOnRecipient() internal {
         address other = makeAddr("other provider");
         identity.setAgent(2, other, other);
         vm.prank(client);
@@ -362,37 +476,107 @@ contract ComplianceModuleTest is Test, BuyerLists {
         vm.prank(other);
         kernel.submit(jobId, DELIVERABLE, abi.encode(uint256(2), bytes32(0)));
 
-        completeWith(jobId, compliantProof());
+        _refusedHere(jobId, compliantProof(), FULL_BPS, FIXTURE_TIMESTAMP, "recipient");
         assertEq(kernel.withdrawable(other), 0, "recipient is not bound");
         assertEq(kernel.withdrawable(client), FIXTURE_AMOUNT);
     }
 
-    function test_binding_amount() public {
-        // A split moves the amount the kernel will pay; the proof's signal 3
-        // still claims the whole net.
+    /// 3. amount: a split moves what the kernel will pay; the proof still claims
+    /// the whole net.
+    function _refusedOnAmount() internal {
         uint256 jobId = submittedJob();
-        bindProof(jobId, compliantProof());
-        vm.warp(FIXTURE_TIMESTAMP);
-        vm.prank(address(keeper));
-        kernel.complete(jobId, bytes32(0), abi.encode(uint16(5_000), compliantProof()));
+        _refusedHere(jobId, compliantProof(), uint16(5_000), FIXTURE_TIMESTAMP, "amount");
         assertEq(kernel.withdrawable(provider), 0, "amount is not bound");
     }
 
-    function test_binding_dailySpentBefore() public {
+    /// 4. token: a kernel that pays in another token than the one the proof names.
+    function _refusedOnToken() internal {
+        (SquareJob otherKernel, KeeperEvaluator otherKeeper, SquareHook otherHook, ComplianceModule otherModule) =
+            _stackPayingIn(address(new MockUSDC()));
+        assertTrue(otherKernel.paymentToken() != FIXTURE_TOKEN, "the kernel pays in the fixture's token");
+
+        bytes32 request = keccak256("request on a kernel paying in another token");
+        vm.prank(provider);
+        validation.validationRequest(address(otherHook), AGENT_ID, "", request);
+        vm.prank(client);
+        uint256 jobId =
+            otherKernel.createJob(provider, address(otherKeeper), block.timestamp + 30 days, "spec", address(otherHook));
+        vm.prank(provider);
+        otherKernel.setBudget(jobId, BUDGET, "");
+        vm.prank(client);
+        otherKernel.fund(jobId, BUDGET, "");
+        vm.prank(provider);
+        otherKernel.submit(jobId, DELIVERABLE, abi.encode(AGENT_ID, request));
+
+        _completeRefused(
+            otherKernel, otherModule, address(otherKeeper), jobId, compliantProof(), FULL_BPS, FIXTURE_TIMESTAMP, "token"
+        );
+        assertEq(otherKernel.withdrawable(provider), 0, "token is not bound");
+        assertEq(otherKernel.withdrawable(client), FIXTURE_AMOUNT);
+    }
+
+    /// A second settlement stack on the same registry, verifier and registries,
+    /// whose kernel pays in `token`, with its own module installed.
+    function _stackPayingIn(address token)
+        internal
+        returns (SquareJob otherKernel, KeeperEvaluator otherKeeper, SquareHook otherHook, ComplianceModule otherModule)
+    {
+        otherKernel = new SquareJob(token, treasury, PLATFORM_FEE_BP, EVALUATOR_FEE_BP, HOOK_GAS_LIMIT, owner);
+        otherKeeper = new KeeperEvaluator(address(otherKernel), owner, CHALLENGE_WINDOW, DISPUTE_WINDOW, FINALIZE_GRACE);
+        ClaimMarket otherMarket = new ClaimMarket(address(otherKernel), address(otherKeeper), address(registry));
+        otherHook = new SquareHook(
+            address(otherKernel),
+            address(otherMarket),
+            address(identity),
+            address(reputation),
+            address(validation),
+            owner,
+            address(otherKeeper),
+            MIN_REPUTATION_BUDGET
+        );
+        otherModule = new ComplianceModule(address(verifier), address(registry), address(otherKernel), owner, TOLERANCE);
+        vm.startPrank(owner);
+        otherKernel.setHookWhitelist(address(otherHook), true);
+        otherHook.setComplianceModule(address(otherModule));
+        otherModule.setHook(address(otherHook));
+        registry.setSpender(address(otherModule), true);
+        vm.stopPrank();
+
+        MockUSDC(token).mint(client, 1_000_000_000);
+        vm.prank(client);
+        MockUSDC(token).approve(address(otherKernel), type(uint256).max);
+    }
+
+    /// 5. daily_spent_before: somebody else's payment lands first and moves the day.
+    function _refusedOnDailySpentBefore() internal {
         uint256 jobId = submittedJob();
-        // Somebody else's payment lands first and moves the day.
         registry.recordSpend(client, 1);
-        completeWith(jobId, compliantProof());
+        _refusedHere(jobId, compliantProof(), FULL_BPS, FIXTURE_TIMESTAMP, "daily_spent_before");
         assertEq(kernel.withdrawable(provider), 0, "daily_spent_before is not bound");
     }
 
-    function test_binding_timestamp() public {
+    /// 6. current_unix_timestamp: presented a second after the tolerance ran out.
+    function _refusedOnTimestamp() internal {
         uint256 jobId = submittedJob();
-        bindProof(jobId, compliantProof());
-        vm.warp(FIXTURE_TIMESTAMP + TOLERANCE + 1);
-        vm.prank(address(keeper));
-        kernel.complete(jobId, bytes32(0), abi.encode(FULL_BPS, compliantProof()));
+        _refusedHere(jobId, compliantProof(), FULL_BPS, FIXTURE_TIMESTAMP + TOLERANCE + 1, "timestamp outside window");
         assertEq(kernel.withdrawable(provider), 0, "the timestamp window is not enforced");
+    }
+
+    /// 7. stripe_receipt_hash: a valid proof, compliant in every other signal,
+    /// carrying a receipt this chain has no trust root for.
+    function _refusedOnStripeReceiptHash() internal {
+        Proof memory receipt = _load(".compliant_with_receipt");
+        Proof memory plain = _load(".compliant");
+        assertTrue(receipt.input[7] != 0, "the fixture carries a receipt");
+        for (uint256 i = 0; i < 7; i++) {
+            assertEq(receipt.input[i], plain.input[i], "the receipt fixture differs from compliant in another signal");
+        }
+        assertTrue(verifier.verifyProof(receipt.a, receipt.b, receipt.c, receipt.input), "the receipt fixture verifies");
+
+        uint256 jobId = submittedJob();
+        _refusedHere(jobId, encoded(receipt), FULL_BPS, FIXTURE_TIMESTAMP, "stripe_receipt_hash");
+        assertEq(kernel.withdrawable(provider), 0, "stripe_receipt_hash is not bound");
+        assertEq(kernel.withdrawable(client), FIXTURE_AMOUNT);
     }
 
     function test_binding_timestampAcceptsTheEdgeOfTheWindow() public {

@@ -402,9 +402,10 @@ PROVER_ARTIFACTS_DIR=/path/to/artifacts node script/regenerate-fixtures.mjs
 script/verifier-constants.mjs   verifying-key constants from verification_key.json (for #16)
 ```
 
-That one command writes every proof the tests read: `compliant`, `blocked`, and
-`compliant_rerandomised`, the copy `test/Malleability.t.sol` and
-`test/ComplianceModule.t.sol` use. The copy is `compliant` re-randomised by
+That one command writes every proof the tests read: `compliant`, `blocked`,
+`compliant_with_receipt` (compliant, with a non-zero `stripe_receipt_hash`, the
+one fixture the module's signal-7 binding refuses), and `compliant_rerandomised`,
+the copy `test/Malleability.t.sol` and `test/ComplianceModule.t.sol` use. The copy is `compliant` re-randomised by
 `circuits/scripts/rerandomise.mjs` against the delta of the same key. The script
 checks it against that key and refuses to write the file if it does not verify.
 The copy cannot be carried over from git: one from the old key fails the pairing.
