@@ -77,6 +77,19 @@ trusted setup[^.]{0,40}(is|was)[^.]{0,20}(complete|completed|done|final|finalise
 (hermez|powersOfTau28_hez)[^.]{0,60}(54|fifty.four|contributors|beacon|sound|reused)
 (phase.?1|powers of tau|ptau)[^.]{0,40}(is|are|uses|reuses|based on)[^.]{0,30}(hermez|powersOfTau28_hez)
 
+# Calling the deployed verifier live.
+#
+# square#262. This repository's own app said "the circuit, the prover and the
+# on-chain verifier are live", and README.md said it too. The verifier on Arc
+# Testnet is superseded: keyed to the circuit before #119, it returns false for
+# the repository's own valid proof. "Live" there is the same kind of claim as
+# "production": a statement about assurance that nothing on chain supports.
+# Narrow on purpose. It needs the verifier named as deployed, on-chain or
+# Groth16, followed directly by is/are live, so "the verifier is not live",
+# "the on-chain verifier" and "verified on-chain through the precompiles" all
+# stay writable.
+(on.?chain|deployed|groth16)[ -]verifiers? (is|are)( (already|now|fully))? live
+
 # --- Turkish -----------------------------------------------------------------
 #
 # Every letter outside ASCII is spelled as a class, [iİ] and [ıI] included,

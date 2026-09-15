@@ -30,10 +30,14 @@ itself has run on Arc Testnet, on a stack deployed with the module installed
 for 815,728 gas (0.017946 USDC), and a payment over its daily cap, to a blocked
 recipient, against a replaced policy, outside its time window or carrying another
 job's proof refused by name
-([refusal-scenarios.md](docs/deploy/refusal-scenarios.md)). The circuit, the prover
-and the on-chain verifier are live (#14, #18, #17), and the check is wired into
-settlement by [#27](https://github.com/wienerlabs/square/issues/27)'s
-`ComplianceModule`.
+([refusal-scenarios.md](docs/deploy/refusal-scenarios.md)). The circuit and the
+prover are live (#14, #18), and the check is wired into settlement by
+[#27](https://github.com/wienerlabs/square/issues/27)'s `ComplianceModule`. A proof
+built here verifies against Arc's own pairing precompiles, which the
+`verifies on Arc Testnet` check shows on every pull request. The Groth16 verifier
+deployed for #17 is superseded and rejects every proof this repository now
+produces (Status, below); the ceremony in #16 fixes the key that gets a permanent
+address.
 
 ---
 
