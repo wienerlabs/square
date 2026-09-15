@@ -135,7 +135,9 @@ describe('the artifact directory has one derivation', () => {
     const cwd = decoyWorkingDirectory();
     try {
       const { health, prove } = await withService({ cwd });
-      const missing = prove.status === 500 && /ENOENT/.test(JSON.stringify(prove.body));
+      // square#254: a missing key is answered by name now, without the
+      // filesystem's ENOENT and the path it quoted, so that name is what is read.
+      const missing = prove.status === 500 && prove.body.error === 'circuit artifacts are not available';
       // The claim is the agreement, not a particular outcome: a runner with the
       // artifacts in place is healthy and proves, one without them is unhealthy
       // and cannot. Before the fix this pair was 200 and 500.

@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import request from 'supertest';
 import { fileURLToPath } from 'node:url';
+import { expectDeclared } from './openapi-declared.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ARTIFACTS = process.env.PROVER_ARTIFACTS_DIR
@@ -57,6 +58,8 @@ describe.skipIf(!hasArtifacts)('a real service that is already full', () => {
   it('sheds with 503 and Retry-After rather than queueing without bound', async () => {
     const responses = await Promise.all([post(), post(), post(), post(), post()]);
     const shed = responses.filter((r) => r.status === 503);
+    // square#254: a 200 and a 503 only a real proof in flight produces.
+    for (const response of responses) expectDeclared('POST', '/prove', response);
 
     expect(responses.filter((r) => r.status === 200)).toHaveLength(2);
     expect(shed).toHaveLength(3);
@@ -84,6 +87,8 @@ describe.skipIf(!hasArtifacts)('a real service that is already full', () => {
     expect([200, 503]).toContain(health.status);
     expect(health.body.service).toBe('square-prover');
     expect(metrics.status).toBe(200);
+    expectDeclared('GET', '/health', health);
+    expectDeclared('GET', '/metrics', metrics);
     expect(metrics.text).toContain('square_proof_duration_seconds');
 
     expect(await Promise.all(inFlight)).toEqual([200, 200]);
@@ -105,6 +110,7 @@ describe.skipIf(!hasArtifacts)('a real proof that outruns its bound', () => {
   it('is answered 504, and the slot is not handed on until the proof stops', async () => {
     const timedOut = await request(app).post('/prove').send(REQUEST);
     expect(timedOut.status).toBe(504);
+    expectDeclared('POST', '/prove', timedOut);
     expect(String(timedOut.body.error)).toContain('timed out');
 
     // The next request is admitted once the abandoned proof finishes, and is

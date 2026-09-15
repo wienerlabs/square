@@ -42,6 +42,7 @@ function run(args, options = {}) {
       stdio: ['pipe', 'pipe', 'pipe'],
       input: options.input ?? '',
       timeout: options.timeout ?? 120_000,
+      env: options.env ?? process.env,
     });
     return { code: 0, stdout, stderr: '' };
   } catch (error) {
@@ -325,6 +326,74 @@ describe('verify-chain, mid-ceremony', () => {
       'contribution 2 (contributor 2) has no recorded_name and no transcript_hash, so it cannot be checked against the key',
     );
     expect(result.stdout).not.toContain('contribution 1 (contributor 1) has no');
+    expect(result.code).toBe(1);
+  }, 600_000);
+});
+
+// square#255. circom is a dependency of the machine doing the checking, not of
+// the ceremony. With none on PATH, verify-chain printed phase 1 and circuit, then
+// `error: spawnSync circom ENOENT` on stderr, and the chain, beacon and keys
+// sections and the count never ran. A final key the inspector cannot read stopped
+// it the same way. Neither needs the circuit, so these run on every runner.
+describe('verify-chain, on a machine without circom', () => {
+  // PATH with every directory that holds a circom taken out, and nothing else:
+  // node and snarkjs are still found.
+  const withoutCircom = () => ({
+    ...process.env,
+    PATH: String(process.env.PATH)
+      .split(path.delimiter)
+      .filter((dir) => !fs.existsSync(path.join(dir, 'circom')))
+      .join(path.delimiter),
+  });
+
+  // A transcript of the shape `init` has written since square#121, so the circuit
+  // section asks circom, beside a chain whose final key the inspector cannot read.
+  const prepare = () => {
+    writeTranscript(2);
+    const transcript = readTranscript();
+    transcript.circuit.compiler = 'circom compiler 2.1.9';
+    transcript.circuit.circomlib = '2.0.5';
+    transcript.circuit.sources = { 'payment.circom': 'b'.repeat(64) };
+    fs.writeFileSync(transcriptPath(), `${JSON.stringify(transcript, null, 2)}\n`);
+    writeKeys(0, 1, 2);
+    fs.writeFileSync(path.join(ceremony, 'payment_final.zkey'), 'not a real key');
+  };
+
+  const failLines = (stdout) => stdout.split('\n').filter((line) => line.startsWith('  FAIL  '));
+
+  it('runs every section and prints the count', () => {
+    prepare();
+    const result = run(['verify-chain'], { env: withoutCircom(), timeout: 300_000 });
+    for (const heading of ['phase 1\n', '\ncircuit\n', '\nchain\n', '\nbeacon\n', '\nkeys\n']) {
+      expect(result.stdout, `no ${heading.trim()} section`).toContain(heading);
+    }
+    expect(result.stdout).toMatch(/\n\d+ check\(s\) failed\.\n$/);
+    // The crash this is about, as main printed it. stderr is not otherwise empty:
+    // the inspector runs as a child with stderr inherited, and says there why it
+    // could not read the key.
+    expect(result.stderr).not.toContain('spawnSync circom ENOENT');
+    expect(result.code).toBe(1);
+  }, 600_000);
+
+  it('marks what it could not run as failed, and counts it with the rest', () => {
+    prepare();
+    const result = run(['verify-chain'], { env: withoutCircom(), timeout: 300_000 });
+    expect(result.stdout).toContain('  FAIL  could not read the local circuit provenance: spawnSync circom ENOENT\n');
+    expect(result.stdout).toContain('  FAIL  could not read the contributions out of the final key: ');
+    expect(result.stdout).toContain(
+      '  FAIL  the beacon cannot be checked: the contributions could not be read out of the final key\n',
+    );
+    // And the checks that did not need circom or the inspector still ran.
+    expect(result.stdout).toContain('the keys on disk end at payment_0002.zkey, where the transcript ends');
+    expect(result.stdout).toContain('the verifying key is not the one the final key exports');
+    expect(result.stdout).toContain(`\n${failLines(result.stdout).length} check(s) failed.\n`);
+  }, 600_000);
+
+  it('prints the count when there is no transcript at all, and still fails', () => {
+    const result = run(['verify-chain'], { env: withoutCircom(), timeout: 300_000 });
+    expect(result.stdout).toContain('no ceremony in progress');
+    expect(result.stdout).toContain(`\n${failLines(result.stdout).length} check(s) failed.\n`);
+    expect(result.stderr).not.toContain('error:');
     expect(result.code).toBe(1);
   }, 600_000);
 });
