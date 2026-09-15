@@ -233,6 +233,27 @@ describe.skipIf(!HAVE_WASM)('payment.circom', () => {
       expect(signals.is_compliant).toBe('1');
     });
 
+    // square#256. The comment on the inputs called the three other time fields
+    // "free witnesses" when time_active is 0. The commitment and rule 6 do ignore
+    // them then, but both hours' Num2Bits(5) and the day mask's seven-bit
+    // decomposition are outside any time_active gate. An out-of-range leftover is
+    // not an answer about compliance; it is a witness nothing satisfies.
+    it.each([
+      ['a day mask of 128', { timeDaysBitmask: '128' }],
+      ['a day mask of 255', { timeDaysBitmask: '255' }],
+      ['a start hour of 32', { timeStartHourUtc: '32' }],
+      ['an end hour of 32', { timeEndHourUtc: '32' }],
+    ])('with no window, still cannot be proved with %s', async (_, fields) => {
+      await expect(run({ timeActive: '0', ...fields })).rejects.toThrow();
+    });
+
+    it('with no window, takes leftovers that are in range and ignores them', async () => {
+      const { signals } = await run({
+        timeActive: '0', timeDaysBitmask: '127', timeStartHourUtc: '23', timeEndHourUtc: '23',
+      });
+      expect(signals.is_compliant).toBe('1');
+    });
+
     it('passes inside the window', async () => {
       const { signals } = await run({
         timeActive: '1', timeDaysBitmask: String(WEDNESDAY),
