@@ -102,8 +102,8 @@ depends on). The server defaults to Arc Testnet; the whole environment:
 | `SQUARE_CALLER_DID` | The DID tasks are created under. Default the wallet's `did:pkh`. |
 | `SQUARE_X402_MAX_PAYMENT` | Cap per x402 call, decimal USDC. `1.00` by default; `off` to not offer `square_call`. |
 | `SQUARE_JOB_DAYS` | How long a hired job stays open. `7` by default. |
-| `SQUARE_POLICY_FILE` | The institution's policy ([`@squaresdk/policy`](../policy/README.md)); with `SQUARE_PROVER_URL`, the server proves every hire's release and keeps the proof bound to the job until it is released (square#335). One without the other is refused. |
-| `SQUARE_PROVER_URL` | The prover service the policy's secret may be sent to, `http://127.0.0.1:3003` for a local one. |
+| `SQUARE_POLICY_FILE` | The institution's policy ([`@squaresdk/policy`](../policy/README.md)); with `SQUARE_PROVER_ARTIFACTS`, the server proves every hire's release and keeps the proof bound to the job until it is released (square#335). One without the other is refused. |
+| `SQUARE_PROVER_ARTIFACTS` | The directory holding the circuit's `payment.wasm`, `payment.zkey` and `payment_vk.json`, the key the hook's module is keyed to. The server proves in its own process, so the policy never leaves it (square#347, [prover-trust-boundary.md](../../docs/decisions/prover-trust-boundary.md)). |
 | `SQUARE_COMPLIANCE_INTERVAL_MS` | How often the bound proofs are checked. `15000` by default; well inside the module's tolerance. |
 | `SQUARE_DUTY_STATE` | Where the jobs the duty watches are kept across restarts (square#348). `<SQUARE_POLICY_FILE>.duty.json` by default; `off` keeps none. Either way the chain is scanned for this wallet's open jobs at start. |
 | `SQUARE_SCREENER_URL` | The screener service ([`services/screener`](../../services/screener/README.md)) asked to screen a party the hook would refuse, before a hire is funded and before a release (square#368, #369). Only read on a hook that screens; without it such a hire stops before funding and names the party, and a release whose payee has no fresh record is held. |
@@ -136,10 +136,10 @@ needs a proof, bound to the job by its client, that the payment fits the
 client's policy; a release without a current one pays the client back. The
 proof binds to the payee, the net, today's counter and the clock as they
 stand at release, so it cannot be bound at funding and left. With
-`SQUARE_POLICY_FILE` and `SQUARE_PROVER_URL` the server carries that duty
+`SQUARE_POLICY_FILE` and `SQUARE_PROVER_ARTIFACTS` the server carries that duty
 for every job `square_hire` funds, for as long as it runs: once the job's
-window is within half the module's tolerance of closing it asks the prover
-for a proof and binds it, rebinds if the release moves in between, and
+window is within half the module's tolerance of closing it makes a proof in
+its own process and binds it, rebinds if the release moves in between, and
 cranks the job when the window closes, one bind and one finalize on the
 ordinary path (square#349); `square_hire`'s answer says so, `square_job`
 shows the proof's state and that the server watches the job, and the log on
@@ -148,7 +148,7 @@ stderr records every binding and release
 The jobs survive the server: they are written to `SQUARE_DUTY_STATE` on every
 change and read back at start, and the chain is scanned for this wallet's
 open jobs as well, so a server restarted inside a window picks the job up
-where it was (square#348). Without a policy and a prover, on such a stack,
+where it was (square#348). Without a policy and the circuit's files, on such a stack,
 hire from a wallet whose proofs another tool keeps (`square policy watch`,
 the hosted agent), or not at all; and with a module in the hook, a wallet
 that has committed no policy is refused before any money moves, because the

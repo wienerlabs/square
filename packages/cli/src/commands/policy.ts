@@ -5,7 +5,6 @@ import { approveBuyers, buyerListFrom, deploymentFromJson, type BuyerEntry } fro
 import {
   ComplianceDuty,
   bindComplianceProof,
-  createProverClient,
   decodeComplianceProof,
   newPolicy,
   parsePolicy,
@@ -18,6 +17,7 @@ import {
   type Policy,
   type Weekday,
 } from "@squaresdk/policy";
+import { createLocalProver, type LocalProver } from "@squaresdk/policy/node";
 import { formatUnits, getAddress, isAddress, parseUnits, type Address, type Hex } from "viem";
 import { explorerTxUrl, type Network } from "../core/chains.js";
 import { loadConfig, resolveNetwork } from "../core/config.js";
@@ -33,7 +33,8 @@ import { keystoreAddress } from "../core/unlock.js";
  * commitment goes on chain with `commit`, its buyer list with `buyers`, and
  * the proof that a release fits it is bound to a job with `prove` or kept
  * current by `watch`. The file holds the policy's secret and never leaves
- * the machine except in a request to the prover it names.
+ * this process: the proof is made here, from the circuit's files on this
+ * machine (square#347, docs/decisions/prover-trust-boundary.md).
  */
 interface NetworkOpts {
   chainId?: number;
@@ -386,9 +387,19 @@ function buyersCommand(): Command {
 
 // --------------------------------------------------------- policy prove/watch
 
+const ARTIFACTS_OPTION = "--artifacts <dir>";
+const ARTIFACTS_HELP = "The circuit's payment.wasm, payment.zkey and payment_vk.json; the proof is made on this machine (or set SQUARE_PROVER_ARTIFACTS)";
+
+/** The proving directory: the flag, else SQUARE_PROVER_ARTIFACTS. The proof is made in this process, so the policy never leaves it (square#347). */
+function localProver(artifacts: string | undefined): LocalProver {
+  const dir = artifacts ?? process.env["SQUARE_PROVER_ARTIFACTS"]?.trim();
+  if (!dir) throw new ValidationError("name the circuit's files with --artifacts <dir> or SQUARE_PROVER_ARTIFACTS: the proof is made on this machine, from payment.wasm, payment.zkey and payment_vk.json");
+  return createLocalProver({ artifacts: dir });
+}
+
 interface ProveOpts extends NetworkOpts {
   file: string;
-  prover: string;
+  artifacts?: string;
   category: string;
   release?: boolean;
   json?: boolean;
@@ -400,54 +411,62 @@ function proveCommand(): Command {
       .description("Prove that a job's release fits the policy and bind the proof to the job; with --release, crank it too once its window has closed")
       .argument("<jobId>", "A job this wallet is the client of")
       .requiredOption("--file <policy.json>", "The policy file")
-      .requiredOption("--prover <url>", "The prover service (the policy's secret is sent to it)")
+      .option(ARTIFACTS_OPTION, ARTIFACTS_HELP)
       .requiredOption("--category <id>", "The capability the job bought; one of the policy's categories")
       .option("--release", "Finalize the job after binding, if its challenge window has closed")
       .option("--json", "Machine-readable result"),
   ).action(async (jobId: string, opts: ProveOpts) => {
     if (!/^\d+$/.test(jobId)) throw new ValidationError(`${jobId} is not a job id`);
     const policy = readPolicy(opts.file);
-    const { network, deployment } = await target(opts);
-    const { client } = await signingSquare(network, deployment, `Bind a proof to job ${jobId}`);
-    const prover = createProverClient({ url: opts.prover });
-    const id = BigInt(jobId);
-    if (!opts.release) {
-      const outcome = await bindComplianceProof({ client, policy, prover, jobId: id, category: opts.category });
-      // With --json the outcome is on stdout either way; a refusal still exits non-zero.
-      if (opts.json) log.out(JSON.stringify(outcome, (_, v) => (typeof v === "bigint" ? v.toString() : v), 2));
-      if (outcome.bound) {
-        if (!opts.json) {
-          log.blank();
-          log.success(`Proof bound to job ${jobId} in ${txLine(network, outcome.transaction)}: payee ${outcome.facts.payee}, net ${formatUnits(outcome.facts.amount, 6)} USDC, counter ${formatUnits(outcome.facts.dailySpentBefore, 6)} USDC.`);
-          log.blank();
-        }
-      } else if (outcome.reason === "not-compliant") {
-        throw new SquareError(`The policy does not allow this release: ${(outcome.violated ?? ["rules unknown"]).join(", ")}`, undefined, "Nothing was bound. A release the policy refuses pays the client back, whatever proof is bound.");
-      } else {
-        throw new SquareError(`No proof bound to job ${jobId}: ${outcome.detail}`);
-      }
-      return;
+    const prover = localProver(opts.artifacts);
+    try {
+      await prove(jobId, policy, prover, opts);
+    } finally {
+      await prover.close();
     }
-    const events: DutyEvent[] = [];
-    const duty = new ComplianceDuty({ client, policy, prover, onEvent: (e) => events.push(e), discover: false });
-    duty.track(id, opts.category);
-    const report = await duty.tick();
-    if (opts.json) log.out(JSON.stringify({ report, events }, (_, v) => (typeof v === "bigint" ? v.toString() : v instanceof Error ? v.message : v), 2));
-    else {
-      log.blank();
-      for (const event of events) log.raw(`  ${describeEvent(event, network)}`);
-      if (report.waiting.length > 0) log.step(`Job ${jobId}: no release is possible yet, so nothing was bound; run this again as the window closes, or watch it.`);
-      if (report.current.length > 0 && report.released.length === 0) log.success(`Job ${jobId}: the bound proof is current; the window has not closed.`);
-      log.blank();
-    }
-    if (report.errors.length > 0) throw new SquareError(report.errors.map((e) => e.error.message).join("; "));
-    if (report.refused.length > 0) throw new SquareError(report.refused.map((r) => r.reason).join("; "));
   });
+}
+
+async function prove(jobId: string, policy: Policy, prover: LocalProver, opts: ProveOpts): Promise<void> {
+  const { network, deployment } = await target(opts);
+  const { client } = await signingSquare(network, deployment, `Bind a proof to job ${jobId}`);
+  const id = BigInt(jobId);
+  if (!opts.release) {
+    const outcome = await bindComplianceProof({ client, policy, prover, jobId: id, category: opts.category });
+    // With --json the outcome is on stdout either way; a refusal still exits non-zero.
+    if (opts.json) log.out(JSON.stringify(outcome, (_, v) => (typeof v === "bigint" ? v.toString() : v), 2));
+    if (outcome.bound) {
+      if (!opts.json) {
+        log.blank();
+        log.success(`Proof bound to job ${jobId} in ${txLine(network, outcome.transaction)}: payee ${outcome.facts.payee}, net ${formatUnits(outcome.facts.amount, 6)} USDC, counter ${formatUnits(outcome.facts.dailySpentBefore, 6)} USDC.`);
+        log.blank();
+      }
+    } else if (outcome.reason === "not-compliant") {
+      throw new SquareError(`The policy does not allow this release: ${(outcome.violated ?? ["rules unknown"]).join(", ")}`, undefined, "Nothing was bound. A release the policy refuses pays the client back, whatever proof is bound.");
+    } else {
+      throw new SquareError(`No proof bound to job ${jobId}: ${outcome.detail}`);
+    }
+    return;
+  }
+  const events: DutyEvent[] = [];
+  const duty = new ComplianceDuty({ client, policy, prover, onEvent: (e) => events.push(e), discover: false });
+  duty.track(id, opts.category);
+  const report = await duty.tick();
+  if (opts.json) log.out(JSON.stringify({ report, events }, (_, v) => (typeof v === "bigint" ? v.toString() : v instanceof Error ? v.message : v), 2));
+  else {
+    log.blank();
+    for (const event of events) log.raw(`  ${describeEvent(event, network)}`);
+    if (report.waiting.length > 0) log.step(`Job ${jobId}: no release is possible yet, so nothing was bound; run this again as the window closes, or watch it.`);
+    if (report.current.length > 0 && report.released.length === 0) log.success(`Job ${jobId}: the bound proof is current; the window has not closed.`);
+    log.blank();
+  }
+  if (report.errors.length > 0) throw new SquareError(report.errors.map((e) => e.error.message).join("; "));
+  if (report.refused.length > 0) throw new SquareError(report.refused.map((r) => r.reason).join("; "));
 }
 
 interface WatchOpts extends NetworkOpts {
   file: string;
-  prover: string;
+  artifacts?: string;
   category: string;
   interval: number;
 }
@@ -458,24 +477,29 @@ function watchCommand(): Command {
       .description("Keep these jobs' proofs current and release each when its window closes, until interrupted")
       .argument("<jobId...>", "Jobs this wallet is the client of")
       .requiredOption("--file <policy.json>", "The policy file")
-      .requiredOption("--prover <url>", "The prover service")
+      .option(ARTIFACTS_OPTION, ARTIFACTS_HELP)
       .requiredOption("--category <id>", "The capability the jobs bought")
       .option("--interval <seconds>", "How often to look; well inside the module's tolerance", (v) => Number(v), 15),
   ).action(async (jobIds: string[], opts: WatchOpts) => {
     for (const jobId of jobIds) if (!/^\d+$/.test(jobId)) throw new ValidationError(`${jobId} is not a job id`);
     const policy = readPolicy(opts.file);
-    const { network, deployment } = await target(opts);
-    const { client } = await signingSquare(network, deployment, `Watch ${jobIds.length} job(s)`);
-    // The jobs named, and only those: the chain is not scanned for others (square#348 is the servers' recovery).
-    const duty = new ComplianceDuty({ client, policy, prover: createProverClient({ url: opts.prover }), onEvent: (event) => log.raw(`  ${describeEvent(event, network)}`), discover: false });
-    for (const jobId of jobIds) duty.track(BigInt(jobId), opts.category);
-    const controller = new AbortController();
-    process.once("SIGINT", () => controller.abort());
-    process.once("SIGTERM", () => controller.abort());
-    log.blank();
-    log.step(`Watching ${jobIds.join(", ")} every ${opts.interval} s; Ctrl-C stops.`);
-    await duty.run(controller.signal, { intervalMs: opts.interval * 1000 });
-    log.blank();
+    const prover = localProver(opts.artifacts);
+    try {
+      const { network, deployment } = await target(opts);
+      const { client } = await signingSquare(network, deployment, `Watch ${jobIds.length} job(s)`);
+      // The jobs named, and only those: the chain is not scanned for others (square#348 is the servers' recovery).
+      const duty = new ComplianceDuty({ client, policy, prover, onEvent: (event) => log.raw(`  ${describeEvent(event, network)}`), discover: false });
+      for (const jobId of jobIds) duty.track(BigInt(jobId), opts.category);
+      const controller = new AbortController();
+      process.once("SIGINT", () => controller.abort());
+      process.once("SIGTERM", () => controller.abort());
+      log.blank();
+      log.step(`Watching ${jobIds.join(", ")} every ${opts.interval} s; Ctrl-C stops.`);
+      await duty.run(controller.signal, { intervalMs: opts.interval * 1000 });
+      log.blank();
+    } finally {
+      await prover.close();
+    }
   });
 }
 

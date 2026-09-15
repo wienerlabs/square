@@ -9,7 +9,7 @@ this repository, and nothing in any of them is specific to a hosting provider:
 
 | Service | Image | Listens | Needs |
 |---|---|---|---|
-| prover | `services/prover/Dockerfile` | 3003 | `payment.wasm` and `payment.zkey` on a mounted path |
+| prover | `services/prover/Dockerfile` | 3003 | `payment.wasm` and `payment.zkey` on a mounted path; serves the app's job page and development, not the institutions' own tools |
 | indexer | `services/indexer/Dockerfile` | 3010 | Postgres, an RPC endpoint, a deployment file |
 | keeper | `services/keeper/Dockerfile` | 3011 | Postgres, an RPC endpoint, a deployment file, a funded key |
 | app | `app/Dockerfile` | 80 | Nothing at run time; it is static files |
@@ -23,6 +23,14 @@ interface and on nothing else.
 `compose.yaml` is the reference deployment. It is what runs locally, and a
 provider that reads a compose file can run it directly; one that does not can
 be handed the same four images and the same environment.
+
+**The prover is not where an institution proves** ([#347](https://github.com/wienerlabs/square/issues/347),
+[prover-trust-boundary.md](prover-trust-boundary.md)). A proof takes the whole
+policy as input, `policy_salt` included, and whoever runs the prover can open
+every value the commitment hides. So the CLI, the MCP server and the hosted
+agent prove in their own process from the circuit's files. A prover this
+project hosts serves the app's job page, and its operator sees the mandate of
+every policy sent to it from that page.
 
 ## What that rules out
 

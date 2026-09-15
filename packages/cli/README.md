@@ -74,12 +74,15 @@ knows needs neither.
 | `policy show [poster]` | The commitment, limit, today's counter, buyer root and whether the hook holds a module; `--file` says whether a file is the policy on chain. |
 | `policy buyers set <address>… --out buyers.json` | Approve buyers: publish the list's root, keep every buyer's salt in the file. |
 | `policy buyers entry buyers.json <address>` | A buyer's `{salt, proof, buyer}`, what the app's purchase form takes. |
-| `policy prove <jobId> --file --prover --category` | Prove that the job's release fits the policy and bind the proof; `--release` cranks the job once its window has closed. |
-| `policy watch <jobId>… --file --prover --category` | Keep the proofs current and release each job when its window closes, until Ctrl-C. |
+| `policy prove <jobId> --file --artifacts --category` | Prove that the job's release fits the policy, on this machine, and bind the proof; `--release` cranks the job once its window has closed. |
+| `policy watch <jobId>… --file --artifacts --category` | Keep the proofs current and release each job when its window closes, until Ctrl-C. |
 | `policy status <jobId>` | Whether the bound proof still describes the release the chain would make now. |
 
-The policy file holds the policy's secret; it never leaves the machine except
-in the request to the prover named with `--prover`. A proof binds to the payee,
+The policy file holds the policy's secret, and it never leaves the machine:
+`prove` and `watch` make the proof in the CLI's own process from the circuit's
+`payment.wasm`, `payment.zkey` and `payment_vk.json` in `--artifacts` (or
+`SQUARE_PROVER_ARTIFACTS`), the key the hook's module is keyed to (square#347,
+[prover-trust-boundary.md](../../docs/decisions/prover-trust-boundary.md)). A proof binds to the payee,
 the net, today's counter and the clock as they stand, which is why `prove`
 is something to run near the release and `watch` exists
 ([docs/decisions/proof-freshness.md](../../docs/decisions/proof-freshness.md)).
@@ -199,7 +202,7 @@ $ LIVE=1 SQUARE_PRIVATE_KEY=0x… npm test     # + a real registration (spends g
 ```
 
 `test/policy.anvil.test.ts` drives every `square policy` command against a
-local stack whose hook holds a compliance module and a prover beside it
+local stack whose hook holds a compliance module and that module's key's files
 ([`@squaresdk/policy` README](../policy/README.md), "the stack the tests run
 against"); without them it skips, with the reason.
 

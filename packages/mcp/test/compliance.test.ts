@@ -17,14 +17,15 @@ import { foundry } from "viem/chains";
 /**
  * square#335 through the MCP bridge: on a stack whose hook holds a compliance
  * module, a hire through `square-mcp` configured with the institution's
- * policy and a prover ends with the provider paid the whole net, because the
- * server bound a proof to the job and released it when the window closed.
- * Needs the compliance stack (packages/policy/test/helpers/stack.ts: anvil,
- * a module keyed to the prover's key, the prover); skipped without it.
+ * policy and the circuit's files ends with the provider paid the whole net,
+ * because the server proved in its own process, bound the proof to the job and
+ * released it when the window closed. Needs the compliance stack
+ * (packages/policy/test/helpers/stack.ts: anvil, a module keyed to the proving
+ * key, that key's files); skipped without it.
  */
 const HERE = dirname(fileURLToPath(import.meta.url));
 const rpcUrl = process.env["ANVIL_RPC_URL"] ?? "http://127.0.0.1:8545";
-const proverUrl = process.env["PROVER_URL"] ?? "http://127.0.0.1:3003";
+const artifacts = process.env["SQUARE_PROVER_ARTIFACTS"] ?? process.env["PROVER_ARTIFACTS_DIR"] ?? join(HERE, "..", "..", "..", "services", "prover", "artifacts");
 const DEPLOYMENT_FILE = process.env["SQUARE_DEPLOYMENT_FILE"] ?? join(HERE, "..", "..", "..", "contracts", "deployments", "31337.json");
 const BIN = join(HERE, "..", "dist", "bin.js");
 const MNEMONIC = "test test test test test test test test test test test junk";
@@ -56,7 +57,7 @@ async function freePort(): Promise<number> {
 
 async function complianceStackReady(): Promise<string | null> {
   if ((await json(rpcUrl, JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] })) as { result?: string } | null)?.result !== "0x7a69") return `no anvil at ${rpcUrl}`;
-  if ((await json(`${proverUrl}/health`) as { status?: string } | null)?.status !== "healthy") return `no healthy prover at ${proverUrl}`;
+  if (!["payment.wasm", "payment.zkey", "payment_vk.json"].every((file) => existsSync(join(artifacts, file)))) return `no proving artifacts at ${artifacts}`;
   const publicClient = createPublicClient({ chain: foundry, transport: http(rpcUrl) }) as PublicClient;
   const reader = createSquareClient({ publicClient, deployment: localDeployment() });
   if ((await reader.complianceModule()) === null) return `no compliance module on the stack at ${rpcUrl}`;
@@ -127,7 +128,7 @@ describe.skipIf(notReady !== null)("a hire through square-mcp is proved and rele
         SQUARE_PRIVATE_KEY: `0x${Buffer.from(account(1).getHdKey().privateKey!).toString("hex")}`,
         SQUARE_X402_MAX_PAYMENT: "off",
         SQUARE_POLICY_FILE: policyFile,
-        SQUARE_PROVER_URL: proverUrl,
+        SQUARE_PROVER_ARTIFACTS: artifacts,
         SQUARE_COMPLIANCE_INTERVAL_MS: "2000",
       },
       stderr: "pipe",

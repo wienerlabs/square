@@ -16,7 +16,7 @@ import { buildProgram } from "../src/cli.js";
  */
 const HERE = dirname(fileURLToPath(import.meta.url));
 const rpcUrl = process.env["ANVIL_RPC_URL"] ?? "http://127.0.0.1:8545";
-const proverUrl = process.env["PROVER_URL"] ?? "http://127.0.0.1:3003";
+const artifacts = process.env["SQUARE_PROVER_ARTIFACTS"] ?? process.env["PROVER_ARTIFACTS_DIR"] ?? join(HERE, "..", "..", "..", "services", "prover", "artifacts");
 const DEPLOYMENT_FILE = process.env["SQUARE_DEPLOYMENT_FILE"] ?? join(HERE, "..", "..", "..", "contracts", "deployments", "31337.json");
 const MNEMONIC = "test test test test test test test test test test test junk";
 const account = (index: number) => mnemonicToAccount(MNEMONIC, { addressIndex: index });
@@ -35,7 +35,7 @@ function localDeployment(): SquareDeployment {
 }
 async function complianceStackReady(): Promise<string | null> {
   if ((await json(rpcUrl, JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] })) as { result?: string } | null)?.result !== "0x7a69") return `no anvil at ${rpcUrl}`;
-  if ((await json(`${proverUrl}/health`) as { status?: string } | null)?.status !== "healthy") return `no healthy prover at ${proverUrl}`;
+  if (!["payment.wasm", "payment.zkey", "payment_vk.json"].every((file) => existsSync(join(artifacts, file)))) return `no proving artifacts at ${artifacts}`;
   const publicClient = createPublicClient({ chain: foundry, transport: http(rpcUrl) }) as PublicClient;
   if ((await createSquareClient({ publicClient, deployment: localDeployment() }).complianceModule()) === null) return `no compliance module on the stack at ${rpcUrl}`;
   return null;
@@ -114,21 +114,21 @@ describe.skipIf(notReady !== null)("square policy, on the compliance stack", () 
   }, 60_000);
 
   it("prove binds a proof for the job's release, status reads it back, and release cranks once the window closes", async () => {
-    const bound = parse<{ bound: boolean; transaction: string; facts: { payee: string } }>(await run("policy", "prove", jobId.toString(), "--file", policyFile, "--prover", proverUrl, "--category", "text.summarize", ...network, "--json"));
+    const bound = parse<{ bound: boolean; transaction: string; facts: { payee: string } }>(await run("policy", "prove", jobId.toString(), "--file", policyFile, "--artifacts", artifacts, "--category", "text.summarize", ...network, "--json"));
     expect(bound).toMatchObject({ bound: true, facts: { payee: account(2).address } });
     expect(await institution.complianceProofOf(jobId)).not.toBe("0x");
     const status = parse<{ module: boolean; state: { kind: string }; signals: { recipient: string } }>(await run("policy", "status", jobId.toString(), ...network, "--json"));
     expect(status).toMatchObject({ module: true, state: { kind: "current" } });
     expect(status.signals.recipient.toLowerCase()).toBe(account(2).address.toLowerCase());
 
-    await expect(run("policy", "prove", jobId.toString(), "--file", policyFile, "--prover", proverUrl, "--category", "not.allowed", ...network, "--json")).rejects.toThrow(/does not allow this release: endpoint_category/);
+    await expect(run("policy", "prove", jobId.toString(), "--file", policyFile, "--artifacts", artifacts, "--category", "not.allowed", ...network, "--json")).rejects.toThrow(/does not allow this release: endpoint_category/);
 
     await testClient.increaseTime({ seconds: 86_400 + 1 });
     await testClient.mine({ blocks: 1 });
     const owed = await provider.withdrawable(account(2).address);
     const net = await institution.netPayout(jobId);
     const released = parse<{ report: { bound: string[]; released: string[] }; events: { type: string; verified?: boolean }[] }>(
-      await run("policy", "prove", jobId.toString(), "--release", "--file", policyFile, "--prover", proverUrl, "--category", "text.summarize", ...network, "--json"),
+      await run("policy", "prove", jobId.toString(), "--release", "--file", policyFile, "--artifacts", artifacts, "--category", "text.summarize", ...network, "--json"),
     );
     expect(released.report.released).toEqual([jobId.toString()]);
     expect(released.events.find((e) => e.type === "released")).toMatchObject({ verified: true });

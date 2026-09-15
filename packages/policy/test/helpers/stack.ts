@@ -5,20 +5,22 @@ import { createPublicClient, createTestClient, createWalletClient, http, type Pu
 import { mnemonicToAccount } from "viem/accounts";
 import { foundry } from "viem/chains";
 import { createSquareClient, deploymentFor, deploymentFromJson, type SquareClient, type SquareDeployment } from "@squaresdk/core";
+import { ARTIFACT_FILES } from "../../src/local-prover.js";
 
 /**
  * The compliance stack the anvil suites of this package, the CLI, the MCP
  * bridge and the hosted agent run against: DeployLocal plus a module keyed
- * to the prover's key (scripts/install-module-for-this-build.mjs), and the
- * prover beside it. Any of the three missing and the suite is skipped the
- * way packages/core's anvil suite skips without anvil.
+ * to the proving key (scripts/install-module-for-this-build.mjs), and that
+ * key's files, which the suites prove with in their own process (square#347).
+ * Any of the three missing and the suite is skipped the way packages/core's
+ * anvil suite skips without anvil.
  *
- *   ANVIL_RPC_URL           http://127.0.0.1:8545
- *   SQUARE_DEPLOYMENT_FILE  contracts/deployments/31337.json
- *   PROVER_URL              http://127.0.0.1:3003
+ *   ANVIL_RPC_URL            http://127.0.0.1:8545
+ *   SQUARE_DEPLOYMENT_FILE   contracts/deployments/31337.json
+ *   SQUARE_PROVER_ARTIFACTS  PROVER_ARTIFACTS_DIR, else services/prover/artifacts: the directory the module was keyed from
  */
 export const rpcUrl = process.env["ANVIL_RPC_URL"] ?? "http://127.0.0.1:8545";
-export const proverUrl = process.env["PROVER_URL"] ?? "http://127.0.0.1:3003";
+export const artifacts = process.env["SQUARE_PROVER_ARTIFACTS"] ?? process.env["PROVER_ARTIFACTS_DIR"] ?? join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "services", "prover", "artifacts");
 const MNEMONIC = "test test test test test test test test test test test junk";
 export const account = (index: number) => mnemonicToAccount(MNEMONIC, { addressIndex: index });
 
@@ -49,9 +51,8 @@ export async function complianceStack(): Promise<{ stack: Stack } | { skipped: s
   if (!(await reachable(rpcUrl, JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }), (j) => (j as { result?: string }).result === "0x7a69"))) {
     return { skipped: `no anvil at ${rpcUrl}` };
   }
-  if (!(await reachable(`${proverUrl.replace(/\/+$/, "")}/health`, "", (j) => (j as { status?: string }).status === "healthy"))) {
-    return { skipped: `no healthy prover at ${proverUrl}` };
-  }
+  const missing = Object.values(ARTIFACT_FILES).filter((file) => !existsSync(join(artifacts, file)));
+  if (missing.length > 0) return { skipped: `no proving artifacts at ${artifacts}: ${missing.join(", ")} missing` };
   const deployment = localDeployment();
   const publicClient = createPublicClient({ chain: foundry, transport: http(rpcUrl) }) as PublicClient;
   const testClient = createTestClient({ chain: foundry, mode: "anvil", transport: http(rpcUrl) });

@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAgent, type Agent, type Listening } from "@squaresdk/agent";
 import { createSquareClient, deploymentFor, deploymentFromJson, JobStatus, type SquareDeployment } from "@squaresdk/core";
-import { createProverClient, newPolicy, policyCommitment, type DutyEvent } from "@squaresdk/policy";
+import { newPolicy, policyCommitment, type DutyEvent } from "@squaresdk/policy";
+import { createLocalProver, type LocalProver } from "@squaresdk/policy/node";
 import { createPublicClient, createTestClient, createWalletClient, http, parseUnits, type PublicClient } from "viem";
 import { mnemonicToAccount } from "viem/accounts";
 import { foundry } from "viem/chains";
@@ -17,12 +18,13 @@ import { scriptedModel, type Step } from "./helpers/scriptedModel.js";
  * square#335 through the hosted agent: on a stack whose hook holds a module,
  * a job the host delegates is proved under the host wallet's policy and
  * released by the host when its window closes, and the sub-agent holds the
- * whole net. Needs the compliance stack (packages/policy/test/helpers/stack.ts);
- * skipped without it.
+ * whole net. The proof is made in this process, from the key the module was
+ * keyed to (square#347). Needs the compliance stack
+ * (packages/policy/test/helpers/stack.ts); skipped without it.
  */
 const HERE = dirname(fileURLToPath(import.meta.url));
 const rpcUrl = process.env["ANVIL_RPC_URL"] ?? "http://127.0.0.1:8545";
-const proverUrl = process.env["PROVER_URL"] ?? "http://127.0.0.1:3003";
+const artifacts = process.env["SQUARE_PROVER_ARTIFACTS"] ?? process.env["PROVER_ARTIFACTS_DIR"] ?? join(HERE, "..", "..", "..", "services", "prover", "artifacts");
 const DEPLOYMENT_FILE = process.env["SQUARE_DEPLOYMENT_FILE"] ?? join(HERE, "..", "..", "..", "contracts", "deployments", "31337.json");
 const MNEMONIC = "test test test test test test test test test test test junk";
 const account = (index: number) => mnemonicToAccount(MNEMONIC, { addressIndex: index });
@@ -53,7 +55,7 @@ async function freePort(): Promise<number> {
 
 async function complianceStackReady(): Promise<string | null> {
   if ((await json(rpcUrl, JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] })) as { result?: string } | null)?.result !== "0x7a69") return `no anvil at ${rpcUrl}`;
-  if ((await json(`${proverUrl}/health`) as { status?: string } | null)?.status !== "healthy") return `no healthy prover at ${proverUrl}`;
+  if (!["payment.wasm", "payment.zkey", "payment_vk.json"].every((file) => existsSync(join(artifacts, file)))) return `no proving artifacts at ${artifacts}`;
   const publicClient = createPublicClient({ chain: foundry, transport: http(rpcUrl) }) as PublicClient;
   if ((await createSquareClient({ publicClient, deployment: localDeployment() }).complianceModule()) === null) return `no compliance module on the stack at ${rpcUrl}`;
   return null;
@@ -78,6 +80,7 @@ describe.skipIf(notReady !== null)("a hosted agent's delegated job is proved and
   let hostedListening: Listening;
   let hostedUrl: string;
   const events: DutyEvent[] = [];
+  let prover: LocalProver | undefined;
 
   beforeAll(async () => {
     // Agent 2 for anvil account 3; the mock registry lets anyone set it.
@@ -106,7 +109,7 @@ describe.skipIf(notReady !== null)("a hosted agent's delegated job is proved and
       provider: { tier: "platform" },
       capabilities: [{ id: "research.brief", description: "A brief.", price: "0.50", instructions: "Write a brief; delegate the summary.", delegate: true }],
       delegation: { allow: [scribeUrl], maxPerJob: "0.45" },
-      compliance: { policyFile: "policy.json", proverUrl, intervalMs: 2000 },
+      compliance: { policyFile: "policy.json", intervalMs: 2000 },
     };
     // The host wallet's policy: what it delegates, in the stack's USDC, under a daily ceiling.
     const policy = newPolicy({
@@ -131,7 +134,7 @@ describe.skipIf(notReady !== null)("a hosted agent's delegated job is proved and
       rpcUrl,
       anthropic: () => scriptedModel(steps),
       pollIntervalMs: 200,
-      compliance: { policy, prover: createProverClient({ url: proverUrl }), intervalMs: 2000, onEvent: (e) => events.push(e) },
+      compliance: { policy, prover: (prover = createLocalProver({ artifacts })), intervalMs: 2000, onEvent: (e) => events.push(e) },
     });
     await hosted.agent.client.setPolicy((await policyCommitment(policy)).hex, BigInt(policy.max_daily_spend));
     hostedListening = await hosted.agent.listen(hostedPort, "127.0.0.1");
@@ -141,6 +144,7 @@ describe.skipIf(notReady !== null)("a hosted agent's delegated job is proved and
     await hostedListening?.close();
     await scribeListening?.close();
     await hosted?.close();
+    await prover?.close();
   });
 
   const rpc = async (url: string, method: string, params: unknown) => {

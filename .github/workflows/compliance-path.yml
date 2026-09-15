@@ -12,7 +12,9 @@ name: compliance path
 # packages/policy/scripts/install-module-for-this-build.mjs, which compiles
 # the repository's verifier with the constants of the key the circuit job just
 # built (DeployLocal's own verifier comes from another key), deploys a module
-# and installs it on the hook; and the prover beside it. The other packages'
+# and installs it on the hook. Every surface proves in its own process from
+# that key's files in services/prover/artifacts (square#347); the prover
+# service runs beside the stack for the lifecycle runner. The other packages'
 # anvil suites stay on a stack without a module, where nothing is gated.
 
 on:
@@ -121,6 +123,11 @@ jobs:
           if [ "$module" != "0x0000000000000000000000000000000000000000" ]
           then echo "  ok      the hook holds module $module"
           else echo "  MISSING the hook's compliance slot is empty"; fail=1; fi
+          for f in payment.wasm payment.zkey payment_vk.json; do
+            if [ -f "services/prover/artifacts/$f" ]
+            then echo "  ok      services/prover/artifacts/$f, which the suites prove with"
+            else echo "  MISSING services/prover/artifacts/$f"; fail=1; fi
+          done
           if curl -sf http://127.0.0.1:3003/health | grep -q '"status":"healthy"'
           then echo "  ok      the prover is healthy on 127.0.0.1:3003"
           else echo "  MISSING the prover is not healthy"; cat prover.log 2>/dev/null; fail=1; fi

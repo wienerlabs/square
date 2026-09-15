@@ -79,9 +79,11 @@ export interface ProverClientOptions {
 
 /**
  * `POST /prove` at the prover service (services/prover). The request carries
- * the policy's secret, so the prover is the institution's own and the URL is
- * one it trusts with that secret: the same trust the policy file already
- * places in the disk it sits on.
+ * the whole policy, its secret included, so whoever runs that service can open
+ * every committed value. The institution's own tools prove in their own
+ * process instead, with `createLocalProver` from `@squaresdk/policy/node`
+ * (square#347, docs/decisions/prover-trust-boundary.md); this client is for a
+ * page that cannot, the app's job page, and for development.
  */
 export function createProverClient(options: ProverClientOptions): Prover {
   const fetchImpl = options.fetch ?? globalThis.fetch;
