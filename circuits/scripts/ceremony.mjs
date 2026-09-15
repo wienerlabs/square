@@ -751,108 +751,171 @@ export function contributionMismatches(held, claimed) {
 // Everything a third party runs. Takes nothing on trust from this repository
 // except the circuit source, which they can compile themselves.
 async function verifyChain() {
-  const transcript = readTranscript();
   const problems = [];
   const ok = (line) => process.stdout.write(`  ok    ${line}\n`);
   const bad = (line) => { problems.push(line); process.stdout.write(`  FAIL  ${line}\n`); };
+  // A child process's error message carries the command and then its stderr;
+  // the first line is the part that fits on a FAIL line.
+  const reason = (error) => String(error?.message ?? error).split('\n')[0];
 
-  process.stdout.write('phase 1\n');
-  const ptau = path.join(BUILD, ADOPTED.file);
+  // A check that cannot run is a failed check, not a crashed run.
+  //
+  // square#255. The beacon fetch below already worked that way, and
+  // docs/ceremony/running.md promised it: "it reports every failure rather than
+  // stopping at the first". Two calls did not keep the promise.
+  // circuitProvenance() runs `circom --version`, and on a machine without circom
+  // that threw out of this function: phase 1 and circuit printed, then
+  // `error: spawnSync circom ENOENT`, exit 1, and no chain, beacon or keys
+  // section and no count. inspect() on a final key it could not read stopped the
+  // run the same way. circom is a dependency of the machine doing the checking,
+  // not of the ceremony, so its absence is no evidence about the ceremony, and
+  // it must not silence the checks that are.
+  //
+  // So every section runs inside this. Those two calls are guarded where they
+  // are made, with messages that say what could not be read; anything else a
+  // section throws is reported here under the section's name, and the sections
+  // after it still run. The exit code is unchanged: any failure, one of these
+  // included, is non-zero.
+  const section = async (title, run) => {
+    process.stdout.write(title);
+    try {
+      await run();
+    } catch (error) {
+      bad(`the ${title.trim()} section could not be checked: ${reason(error)}`);
+    }
+  };
+
+  // Phase 1 needs no transcript; everything after it does. A missing or
+  // unreadable one is reported by each section that needed it, and the count is
+  // still printed.
+  let loaded = null;
+  let unreadable = null;
   try {
-    verifyPtau(ptau);
-    ok(`${ADOPTED.file} matches the adopted ${ADOPTED.ceremony} contribution ${ADOPTED.contribution}`);
+    loaded = readTranscript();
   } catch (error) {
-    bad(error.message);
+    unreadable = error;
   }
+  const recorded = () => {
+    if (unreadable) throw unreadable;
+    return loaded;
+  };
 
-  process.stdout.write('\ncircuit\n');
-  if (fs.existsSync(R1CS) && sha256(R1CS) === transcript.circuit.r1cs_sha256) {
-    ok('the compiled circuit matches the one the ceremony started from');
-  } else {
-    bad(
-      'the compiled circuit does NOT match the one the ceremony started from '
-      + '(a different source, or a different compiler — see below)',
-    );
-  }
+  const ptau = path.join(BUILD, ADOPTED.file);
+  await section('phase 1\n', () => {
+    try {
+      verifyPtau(ptau);
+      ok(`${ADOPTED.file} matches the adopted ${ADOPTED.ceremony} contribution ${ADOPTED.contribution}`);
+    } catch (error) {
+      bad(error.message);
+    }
+  });
 
-  // Why the r1cs might differ, when it does. A digest of the compiler's output
-  // says two files differ; it does not say which input moved. An auditor who
-  // installed a different circom sees a red line about the circuit and has no
-  // way to tell that from a substituted source.
-  if (transcript.circuit.compiler) {
-    const here = circuitProvenance();
-    if (here.compiler === transcript.circuit.compiler) {
-      ok(`compiled with ${here.compiler}, as the ceremony was`);
+  await section('\ncircuit\n', () => {
+    const transcript = recorded();
+    if (fs.existsSync(R1CS) && sha256(R1CS) === transcript.circuit.r1cs_sha256) {
+      ok('the compiled circuit matches the one the ceremony started from');
     } else {
       bad(
-        `this machine has ${here.compiler}, the ceremony used `
-        + `${transcript.circuit.compiler}; compile with that one before reading `
-        + 'anything above as a mismatch in the source',
+        'the compiled circuit does NOT match the one the ceremony started from '
+        + '(a different source, or a different compiler — see below)',
       );
     }
-    if (here.circomlib === transcript.circuit.circomlib) {
-      ok(`circomlib ${here.circomlib}, as the ceremony had`);
+
+    // Why the r1cs might differ, when it does. A digest of the compiler's output
+    // says two files differ; it does not say which input moved. An auditor who
+    // installed a different circom sees a red line about the circuit and has no
+    // way to tell that from a substituted source.
+    if (transcript.circuit.compiler) {
+      // circom is the auditor's dependency, not the ceremony's (square#255): no
+      // circom here is a check that could not run, and the rest still runs.
+      let here = null;
+      try {
+        here = circuitProvenance();
+      } catch (error) {
+        bad(`could not read the local circuit provenance: ${reason(error)}`);
+      }
+      if (here) {
+        if (here.compiler === transcript.circuit.compiler) {
+          ok(`compiled with ${here.compiler}, as the ceremony was`);
+        } else {
+          bad(
+            `this machine has ${here.compiler}, the ceremony used `
+            + `${transcript.circuit.compiler}; compile with that one before reading `
+            + 'anything above as a mismatch in the source',
+          );
+        }
+        if (here.circomlib === transcript.circuit.circomlib) {
+          ok(`circomlib ${here.circomlib}, as the ceremony had`);
+        } else {
+          bad(`circomlib is ${here.circomlib}, the ceremony had ${transcript.circuit.circomlib}`);
+        }
+        for (const [file, digest] of Object.entries(transcript.circuit.sources ?? {})) {
+          if (here.sources[file] === digest) {
+            ok(`${file} is byte-identical to the ceremony's`);
+          } else {
+            bad(`${file} differs from the ceremony's (${here.sources[file] ?? 'missing'})`);
+          }
+        }
+      }
     } else {
-      bad(`circomlib is ${here.circomlib}, the ceremony had ${transcript.circuit.circomlib}`);
+      bad(
+        'the transcript records no compiler or source hashes, so the circuit can '
+        + 'only be compared, not reproduced — it predates square#121',
+      );
     }
-    for (const [file, digest] of Object.entries(transcript.circuit.sources ?? {})) {
-      if (here.sources[file] === digest) {
-        ok(`${file} is byte-identical to the ceremony's`);
-      } else {
-        bad(`${file} differs from the ceremony's (${here.sources[file] ?? 'missing'})`);
+  });
+
+  // What the chain section read out of the final key, for the beacon section.
+  // Null when there is no final key or the inspector could not read it.
+  let report = null;
+
+  await section('\nchain\n', async () => {
+    const transcript = recorded();
+
+    // The keys on disk against the transcript, first, and whether or not there is
+    // a final key yet (square#234). Mid-ceremony is when the two diverge, and there
+    // is no final key then; and the final key cannot speak for the intermediate
+    // ones anyway. A contribution that finished without being recorded leaves a
+    // payment_NNNN.zkey the transcript does not mention; if the chain was then
+    // sealed one link short, the final key and the transcript agree with each
+    // other and both leave that contributor out.
+    const onDisk = chainState(transcript);
+    if (onDisk.tip < 0 && fs.existsSync(finalPath())) {
+      ok('no intermediate keys kept beside the final one');
+    } else if (onDisk.tip < 0) {
+      bad(`no payment_NNNN.zkey on disk and no final key, while the transcript records ${onDisk.recorded} contribution(s)`);
+    } else if (onDisk.missing.length > 0) {
+      bad(
+        `the keys on disk skip ${onDisk.missing.map((i) => path.basename(keyPath(i))).join(', ')} `
+        + `below ${path.basename(keyPath(onDisk.tip))}`,
+      );
+    } else if (onDisk.tip === onDisk.recorded) {
+      ok(`the keys on disk end at ${path.basename(keyPath(onDisk.tip))}, where the transcript ends`);
+    } else {
+      bad(
+        `the keys on disk end at ${path.basename(keyPath(onDisk.tip))} but the transcript records `
+        + `${onDisk.recorded} contribution(s)`,
+      );
+    }
+
+    // A contribution recorded before its read-back finished has no recorded name
+    // and no transcript hash (square#234). Nothing can compare such an entry with
+    // the key, so it is reported rather than passed over as agreement.
+    for (const entry of transcript.contributions) {
+      const unread = ['recorded_name', 'transcript_hash'].filter((field) => entry[field] == null);
+      if (unread.length > 0) {
+        bad(
+          `contribution ${entry.index} (${entry.name}) has no ${unread.join(' and no ')}, so it cannot `
+          + 'be checked against the key; fill it in from scripts/inspect-zkey-setup.mjs',
+        );
       }
     }
-  } else {
-    bad(
-      'the transcript records no compiler or source hashes, so the circuit can '
-      + 'only be compared, not reproduced — it predates square#121',
-    );
-  }
 
-  process.stdout.write('\nchain\n');
-
-  // The keys on disk against the transcript, first, and whether or not there is
-  // a final key yet (square#234). Mid-ceremony is when the two diverge, and there
-  // is no final key then; and the final key cannot speak for the intermediate
-  // ones anyway. A contribution that finished without being recorded leaves a
-  // payment_NNNN.zkey the transcript does not mention; if the chain was then
-  // sealed one link short, the final key and the transcript agree with each
-  // other and both leave that contributor out.
-  const onDisk = chainState(transcript);
-  if (onDisk.tip < 0 && fs.existsSync(finalPath())) {
-    ok('no intermediate keys kept beside the final one');
-  } else if (onDisk.tip < 0) {
-    bad(`no payment_NNNN.zkey on disk and no final key, while the transcript records ${onDisk.recorded} contribution(s)`);
-  } else if (onDisk.missing.length > 0) {
-    bad(
-      `the keys on disk skip ${onDisk.missing.map((i) => path.basename(keyPath(i))).join(', ')} `
-      + `below ${path.basename(keyPath(onDisk.tip))}`,
-    );
-  } else if (onDisk.tip === onDisk.recorded) {
-    ok(`the keys on disk end at ${path.basename(keyPath(onDisk.tip))}, where the transcript ends`);
-  } else {
-    bad(
-      `the keys on disk end at ${path.basename(keyPath(onDisk.tip))} but the transcript records `
-      + `${onDisk.recorded} contribution(s)`,
-    );
-  }
-
-  // A contribution recorded before its read-back finished has no recorded name
-  // and no transcript hash (square#234). Nothing can compare such an entry with
-  // the key, so it is reported rather than passed over as agreement.
-  for (const entry of transcript.contributions) {
-    const unread = ['recorded_name', 'transcript_hash'].filter((field) => entry[field] == null);
-    if (unread.length > 0) {
-      bad(
-        `contribution ${entry.index} (${entry.name}) has no ${unread.join(' and no ')}, so it cannot `
-        + 'be checked against the key; fill it in from scripts/inspect-zkey-setup.mjs',
-      );
+    if (!fs.existsSync(finalPath())) {
+      bad('no final key');
+      return;
     }
-  }
 
-  if (!fs.existsSync(finalPath())) {
-    bad('no final key');
-  } else {
     try {
       execFileSync('snarkjs', ['zkey', 'verify', R1CS, ptau, finalPath()], { cwd: ROOT, stdio: 'pipe' });
       ok('the final key verifies against the circuit and the adopted ptau');
@@ -860,9 +923,16 @@ async function verifyChain() {
       bad('the final key does NOT verify against the circuit and the adopted ptau');
     }
 
-    const report = await inspect(finalPath());
+    // The inspector reads the final key in a second process. A key it cannot
+    // read is a finding about the key, and it must not take the beacon and key
+    // checks down with it (square#255).
+    try {
+      report = await inspect(finalPath());
+    } catch (error) {
+      bad(`could not read the contributions out of the final key: ${reason(error)}`);
+      return;
+    }
     const contributions = report.contributions.filter((c) => c.kind === 'contribute');
-    const beacons = report.contributions.filter((c) => c.kind === 'beacon');
 
     if (contributions.length === transcript.contributions.length) {
       ok(`${contributions.length} contribution(s), as many as the transcript records`);
@@ -880,87 +950,100 @@ async function verifyChain() {
     if (contributions.length < 2) {
       bad('fewer than two independent contributions — this is not a multi-party ceremony');
     }
+  });
 
-    process.stdout.write('\nbeacon\n');
-    if (beacons.length !== 1) {
-      bad(`expected exactly one beacon, found ${beacons.length}`);
-    } else if (!transcript.beacon) {
-      bad('the key carries a beacon the transcript does not record');
-    } else {
-      const announced = transcript.beacon;
-      // The beacon hash in the key must be the signature the public chain
-      // publishes for that round. This is the check that makes "announced in
-      // advance" mean something: anybody can fetch the round and compare.
-      //
-      // A round the chain cannot produce is a failed check, not a crashed run —
-      // a verifier that stops on the first surprise tells you less than one
-      // that finishes and hands you the whole picture.
-      let live = null;
-      try {
-        live = await fetchRound(announced.round);
-      } catch (error) {
-        bad(`could not fetch drand round ${announced.round}: ${error.message}`);
+  // The beacon and the verifying key are properties of a final key, so these
+  // two sections run when there is one, as they always did.
+  if (!unreadable && fs.existsSync(finalPath())) {
+    await section('\nbeacon\n', async () => {
+      const transcript = recorded();
+      if (!report) {
+        bad('the beacon cannot be checked: the contributions could not be read out of the final key');
+        return;
       }
-      if (live && beaconMatchesRound(beacons[0].beaconHash, live.signature)) {
-        ok(`beacon is drand quicknet round ${announced.round}, matching the public chain`);
-      } else if (live) {
-        bad(`beacon in the key does not match drand round ${announced.round}`);
-      }
-
-      // And that the value is one drand actually produced, rather than one the
-      // API we asked happened to return.
-      if (live) {
+      const beacons = report.contributions.filter((c) => c.kind === 'beacon');
+      if (beacons.length !== 1) {
+        bad(`expected exactly one beacon, found ${beacons.length}`);
+      } else if (!transcript.beacon) {
+        bad('the key carries a beacon the transcript does not record');
+      } else {
+        const announced = transcript.beacon;
+        // The beacon hash in the key must be the signature the public chain
+        // publishes for that round. This is the check that makes "announced in
+        // advance" mean something: anybody can fetch the round and compare.
+        //
+        // A round the chain cannot produce is a failed check, not a crashed run —
+        // a verifier that stops on the first surprise tells you less than one
+        // that finishes and hands you the whole picture.
+        let live = null;
         try {
-          const info = await fetchChainInfo();
-          await assertQuicknet(info);
-          if (await verifyDrandSignature(announced.round, live.signature)) {
-            ok("the round's BLS signature verifies against quicknet's pinned group key");
-          } else {
-            bad("the round's BLS signature does not verify against quicknet's pinned group key");
-          }
+          live = await fetchRound(announced.round);
         } catch (error) {
-          bad(`could not check the round's signature: ${error.message}`);
+          bad(`could not fetch drand round ${announced.round}: ${error.message}`);
+        }
+        if (live && beaconMatchesRound(beacons[0].beaconHash, live.signature)) {
+          ok(`beacon is drand quicknet round ${announced.round}, matching the public chain`);
+        } else if (live) {
+          bad(`beacon in the key does not match drand round ${announced.round}`);
+        }
+
+        // And that the value is one drand actually produced, rather than one the
+        // API we asked happened to return.
+        if (live) {
+          try {
+            const info = await fetchChainInfo();
+            await assertQuicknet(info);
+            if (await verifyDrandSignature(announced.round, live.signature)) {
+              ok("the round's BLS signature verifies against quicknet's pinned group key");
+            } else {
+              bad("the round's BLS signature does not verify against quicknet's pinned group key");
+            }
+          } catch (error) {
+            bad(`could not check the round's signature: ${error.message}`);
+          }
+        }
+
+        // Arithmetic, not evidence: lands_at is derived from the round by
+        // beacon(), and roundAt is timeOfRound's inverse, so this holds for every
+        // transcript this script writes. It catches a hand-edited file and
+        // nothing else. The old wording, "round N corresponds to <time>", read
+        // like a timing check that had passed.
+        if (roundAt(Date.parse(announced.lands_at) / 1000) === announced.round) {
+          ok('the recorded round and time are consistent (arithmetic, not a timing check)');
+        } else {
+          bad('the recorded round and time disagree, so the transcript was edited by hand');
+        }
+
+        // The timing check that does mean something.
+        const lastOf = transcript.contributions[transcript.contributions.length - 1];
+        if (lastOf && Date.parse(announced.lands_at) > Date.parse(lastOf.at)) {
+          ok(`the beacon round lands after the last contribution (${lastOf.at})`);
+        } else if (lastOf) {
+          bad(
+            `the beacon round lands at ${announced.lands_at}, not after the last `
+            + `contribution at ${lastOf.at}; it constrains nobody`,
+          );
         }
       }
-
-      // Arithmetic, not evidence: lands_at is derived from the round by
-      // beacon(), and roundAt is timeOfRound's inverse, so this holds for every
-      // transcript this script writes. It catches a hand-edited file and
-      // nothing else. The old wording, "round N corresponds to <time>", read
-      // like a timing check that had passed.
-      if (roundAt(Date.parse(announced.lands_at) / 1000) === announced.round) {
-        ok('the recorded round and time are consistent (arithmetic, not a timing check)');
-      } else {
-        bad('the recorded round and time disagree, so the transcript was edited by hand');
-      }
-
-      // The timing check that does mean something.
-      const lastOf = transcript.contributions[transcript.contributions.length - 1];
-      if (lastOf && Date.parse(announced.lands_at) > Date.parse(lastOf.at)) {
-        ok(`the beacon round lands after the last contribution (${lastOf.at})`);
-      } else if (lastOf) {
-        bad(
-          `the beacon round lands at ${announced.lands_at}, not after the last `
-          + `contribution at ${lastOf.at}; it constrains nobody`,
-        );
-      }
-    }
-
-    process.stdout.write('\nkeys\n');
-
-    // Step 4 of docs/ceremony/verifying.md: derived from the final key rather
-    // than read out of the transcript (#228), and against both files step 4 is
-    // about, the one `finalize` wrote and the repository's.
-    const checks = await verifyingKeyChecks({
-      finalZkey: finalPath(),
-      ceremonyVk: vkPath(),
-      repositoryVk: REPOSITORY_VK,
-      transcript,
     });
-    for (const check of checks) {
-      if (check.ok) ok(check.message);
-      else bad(check.message);
-    }
+
+    await section('\nkeys\n', async () => {
+      const transcript = recorded();
+
+      // Step 4 of docs/ceremony/verifying.md: derived from the final key rather
+      // than read out of the transcript (#228), and against both files step 4 is
+      // about, the one `finalize` wrote and the repository's.
+      const checks = await verifyingKeyChecks({
+        finalZkey: finalPath(),
+        ceremonyVk: vkPath(),
+        repositoryVk: REPOSITORY_VK,
+        transcript,
+      });
+      for (const check of checks) {
+        if (check.ok) ok(check.message);
+        else bad(check.message);
+      }
+    });
   }
 
   process.stdout.write(
