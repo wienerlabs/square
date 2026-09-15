@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Run an institution's agent on the platform from a configuration: each capability is a Claude run with instructions and MCP tools, served as a Square agent whose tasks are paid through escrow, and able to hire other agents for subtasks within the institution's on-chain policy allowance.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wienerlabs/square.git",
+    "directory": "packages/hosted"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

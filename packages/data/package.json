@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Single Postgres access layer for Square: pg for services, PGlite for tests, plain SQL migrations.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wienerlabs/square.git",
+    "directory": "packages/data"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

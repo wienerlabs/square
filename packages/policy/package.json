@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "The institution's side of the compliance gate: commit a spending policy to PolicyRegistry, ask the prover for a proof that a release fits it, keep the proof bound to each job current as the payee, the net and the day's counter move, and release.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wienerlabs/square.git",
+    "directory": "packages/policy"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

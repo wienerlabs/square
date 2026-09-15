@@ -10,7 +10,16 @@ therefore a correctness requirement for Square, not a convenience, and every sig
 package exists to make one specific silent failure loud.
 
 ```bash
-npm install @squaresdk/observability prom-client
+npm install @squaresdk/observability prom-client   # once the v0.1.0 tag is on npm (square#356)
+```
+
+Not on npm yet: the packages publish under `@squaresdk` from a `v<version>` tag
+([docs/decisions/distribution-channel.md](../../docs/decisions/distribution-channel.md)),
+and the first has not been cut. Until then, from this repository:
+
+```bash
+(cd packages/observability && npm install && npm run build)
+npm install ../path/to/square/packages/observability prom-client
 ```
 
 `express` (^4) and `hono` (^4) are optional peer dependencies. Install whichever framework

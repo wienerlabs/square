@@ -35,16 +35,17 @@ pull request.
 | `did-aip-driver image` | The container answers, and a malformed DID is still a 400 rather than a 500. On `main` it then publishes `:<version>` and `:sha-<commit>` to GHCR; the version tag is written once and never overwritten, so a version that already exists is left as it is and only the sha tag is pushed. |
 | `did-aip-driver version` | Pull requests only. If anything the Dockerfile copies into the image changed (the driver's and the resolver's sources, manifests and tsconfigs), `packages/did-aip-driver/package.json` must carry a new version, because the version tag is written once and a change without a bump would never be published under a version. **Not required**, see below. |
 | `local stack (make up)` | The four Dockerfiles build, the whole stack comes up on a runner, and every service answers `/health` with a passing status. Also asserts the contracts have bytecode on the chain and that the prover returns a real proof. Required since 2026-09-14, when the payload was applied with the review gate of [docs/decisions/review-gate.md](decisions/review-gate.md); its last five runs on `main` were green. |
+| `pack and install (dry run)` | The thirteen `@squaresdk` packages build in dependency order and pack, each tarball carries its `dist/`, its bins, its README and the license and nothing outside `files`, none says `file:` for a sibling, and all thirteen install together into an empty project where every library imports and the four binaries answer ([docs/decisions/distribution-channel.md](decisions/distribution-channel.md)). On a `v<version>` tag the same workflow goes on to publish. **Not required**, see below. |
 | `secret scan`, `forbidden strings` | No secrets, and no disclosure wording has gone missing. A red `secret scan` names the rule, the file and the line in the job log: gitleaks runs with `--verbose`, and with `--redact` beside it the value itself is never printed. It walks the git history, so the finding can sit in a commit the diff no longer shows. |
 
-Eleven are **not** required to merge. Six of them are not required because their
+Twelve are **not** required to merge. Six of them are not required because their
 red is a statement about Arc Testnet being reachable, TRM's sanctions API
 answering, or a funded account, rather than about the change, and an outside
-service having a bad afternoon should not block unrelated work. The other five,
+service having a bad afternoon should not block unrelated work. The other six,
 `refuse and replay`, `six refusal scenarios (policy → proof → anvil)`,
-`did-aip-driver version`, `policy → proof → release (anvil, every surface)` and
-`services/screener (anvil)`, reach no network and are not required only because
-they are new.
+`did-aip-driver version`, `policy → proof → release (anvil, every surface)`,
+`services/screener (anvil)` and `pack and install (dry run)`, reach no network
+and are not required only because they are new.
 
 | Check | Why it is not required |
 |---|---|
@@ -58,6 +59,7 @@ they are new.
 | `acceptance (Arc Testnet, funded key)` | Spends real testnet gas, needs a secret, does not run on fork pull requests, and lives in its own path-filtered workflow. |
 | `six refusal scenarios (Arc Testnet, funded key)` | #28's six scenarios on Arc itself. Spends real testnet USDC: the first run on Arc was 26.2M gas and cost its funder 0.588 USDC. Needs `SCENARIO_FUNDER_PRIVATE_KEY` and refuses to start without it or on a short balance. Lives in its own workflow (`arc-refusal-scenarios.yml`) and runs on pushes to `main`, by hand, and on same-repository pull requests that change the script or the workflow, one run at a time. |
 | `services/screener (anvil)` | New. Like the rest of its matrix it reaches nothing but the anvil the job starts; the live tests against TRM are skipped here by design and run in the row below. Promote it the same way. |
+| `pack and install (dry run)` | New, and hermetic apart from the registry fetch of the packages' own dependencies: thirteen builds, thirteen packs, one install of the tarballs. Its red means a package would ship broken. Promote it the same way once it has run a while. |
 | `sanctions screening (TRM → anvil)` | #35's screener against TRM's real sanctions API, and the end-to-end run with OFAC-listed addresses against the real hook. TRM's keyless tier allows 100 requests a day and a run makes about ten, so a red can mean TRM did not answer. Lives in its own path-filtered workflow (`sanctions-screening.yml`). |
 
 `verifies on Arc Testnet` also depends on Arc's RPC, but it is cheap, read-only
@@ -98,6 +100,7 @@ next instance of this hides:
 | `!reachable` | `services/screener/test/anvil.test.ts` | `services/screener (anvil)` | satisfied — same |
 | `!reachable` | `packages/core/test/anvil.test.ts` | `@squaresdk/core against anvil` | satisfied — that job already started one |
 | `!forkUrl` | `packages/core/test/fork.test.ts` | `@squaresdk/core against anvil` | **not satisfied.** `ARC_FORK_RPC_URL` is set by no workflow, so the lifecycle has never been exercised against the real ERC-8004 registries in CI. Named on the run summary so the gap is visible. |
+| `!forkUrl` | `packages/core/test/cctp.fork.test.ts` | `@squaresdk/core against anvil` | **not satisfied**, the same way: `CCTP_SEPOLIA_FORK_RPC_URL` is set by no workflow, so the burn against Circle's real `TokenMessengerV2` (square#32) runs only where someone starts a Sepolia fork. The hermetic half, `test/cctp.test.ts`, runs everywhere. |
 | `!configured` | `packages/x402/test/live.test.ts` | `packages/x402 (anvil)` | **not satisfied.** Needs `ARC_TESTNET_RPC_URL` and two funded keys. |
 | `!process.env.LIVE` | `packages/did-resolver/test/integration.test.ts` | `cli` | **not satisfied, by design.** `cli` is hermetic; the live reads run in `end-to-end (Arc Testnet)`. |
 | `!process.env.LIVE` | `services/screener/test/live.test.ts` | `sanctions screening (TRM → anvil)` | satisfied there, which runs `test:live`. Skipped in `services/screener (anvil)` by design, which is hermetic. |
@@ -254,6 +257,7 @@ read only by jobs already restricted to this repository.
 | `SQUARE_PRIVATE_KEY` | secret | `acceptance (Arc Testnet, funded key)` | The reads and the `eth_call` dry run still execute; the registration suite skips itself and the run summary names it. |
 | `SCENARIO_FUNDER_PRIVATE_KEY` | secret | `six refusal scenarios (Arc Testnet, funded key)` | The script refuses to start and says why, so the run is red rather than green over nothing. It is the account that deploys, owns, funds and cranks the run; it needs roughly the gas of one run plus the jobs' budgets, and the script checks that before it spends anything. |
 | `ARC_VERIFIER_ADDRESS` | variable | `verifies on Arc Testnet` | The deployed verifier is not checked. The state-override check, which needs no deployment, still runs. |
+| `NPM_TOKEN` | secret | `publish to npm` (a `v<version>` tag) | The job says the token is not set and publishes nothing; the dry run before it still runs. It is the token of the account that owns the `@squaresdk` scope, which [docs/decisions/distribution-channel.md](decisions/distribution-channel.md) leaves to the project to name. |
 
 `ARC_VERIFIER_ADDRESS` is a variable rather than a line in the workflow because
 the address is temporary: [#16](https://github.com/wienerlabs/square/issues/16)
