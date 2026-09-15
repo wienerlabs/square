@@ -36,6 +36,7 @@ import {
   useSquare,
   type JobDetail,
 } from "@/lib/square";
+import { usePolicyOnChain } from "@/lib/policy";
 import { checkSpec } from "@/lib/spec";
 import { describeError, useTx } from "@/lib/tx";
 import { activeChain, deployment } from "@/lib/wagmi";
@@ -514,6 +515,10 @@ export function JobView() {
   const now = useNow();
   const square = useSquare();
   const { run, busy } = useTx();
+  // The connected wallet's policy, read for the Fund action: on a hook with
+  // a compliance module a client with no commitment cannot be released to,
+  // so funding would pay for work and refund it (square#350).
+  const policy = usePolicyOnChain(address);
 
   if (id === null) {
     return (
@@ -823,7 +828,20 @@ export function JobView() {
                 title="Fund"
                 label="Fund"
                 buttonLabel={`Fund ${formatUsdc(record.budget)} USDC`}
-                description="Moves the budget into escrow and snapshots the fee basis points. If the USDC allowance is short, an approval is sent first."
+                description={
+                  <>
+                    Moves the budget into escrow and snapshots the fee basis points. If the USDC allowance is short, an approval is sent first.
+                    {hookIsSquare && policy.data?.module !== null && policy.data?.module !== undefined && !policy.data.committed ? (
+                      <span className="mt-2 block text-magenta">
+                        The hook holds a compliance module and this wallet has no policy on the registry: the release would be refused and pay you back, and the provider nothing. Commit a policy on the{" "}
+                        <a className="underline" href="/policy">
+                          Policy page
+                        </a>{" "}
+                        before funding.
+                      </span>
+                    ) : null}
+                  </>
+                }
                 send={(client) => client.fund(id, record.budget)}
               />
             ) : null}

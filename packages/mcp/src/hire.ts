@@ -1,7 +1,9 @@
-import { A2AClient, A2AError, TaskState, type TaskStatusResult } from "@squaresdk/a2a";
-import type { SquareClient } from "@squaresdk/core";
-import { formatUnits, parseUnits, type Address, type Hex } from "viem";
+import { A2AClient, A2AError, JOB_STATUS_NAMES, TaskState, type TaskStatusResult } from "@squaresdk/a2a";
+import { JobStatus, type JobStatusValue, type SquareClient } from "@squaresdk/core";
+import { formatUnits, isAddressEqual, parseUnits, type Address, type Hex } from "viem";
 import type { AgentProfile } from "./agents.js";
+
+const ZERO32 = `0x${"0".repeat(64)}`;
 
 export interface HireOptions {
   /** The wallet that pays: it becomes the job's client. */
@@ -29,6 +31,16 @@ export interface HireOptions {
   admit?: ((amount: bigint) => Promise<string | undefined>) | undefined;
   /** Told once the job is funded, before the task is dispatched, so a host's ledger sees every job this wallet holds escrow on. */
   onFunded?: ((job: { jobId: bigint; budget: bigint; provider: Address }) => void | Promise<void>) | undefined;
+  /**
+   * A job this wallet already opened, to carry on with instead of creating
+   * another (square#351): a hire whose `fund` failed leaves an Open job with
+   * its budget set, and a second `hire` would open a second one. The job
+   * has to be this wallet's and still Open; its budget is used when it has
+   * one and `budget` does not say otherwise.
+   */
+  jobId?: bigint | undefined;
+  /** How long to wait before the one automatic second attempt at dispatching. Default 1 s; 0 sends it at once. */
+  redispatchDelayMs?: number | undefined;
 }
 
 export interface HireTransactions {
@@ -107,7 +119,21 @@ export async function hire(options: HireOptions): Promise<HireResult> {
     const ids = profile.capabilities.map((c) => c.id);
     return refuse(`${profile.name || profile.did} does not offer ${capability}; it offers ${ids.length ? ids.join(", ") : "nothing"}`);
   }
-  const price = options.budget ?? offered.price;
+  // A job to carry on with: this wallet's, still Open, for this agent.
+  let resumed: { jobId: bigint; budget: bigint } | undefined;
+  if (options.jobId !== undefined) {
+    let record;
+    try {
+      record = await client.getJobRecord(options.jobId);
+    } catch (error) {
+      return refuse(`job ${options.jobId} could not be read: ${messageOf(error)}`);
+    }
+    if (record.status !== JobStatus.Open) return refuse(`job ${options.jobId} is ${JOB_STATUS_NAMES[record.status as JobStatusValue] ?? record.status}, not Open; only an Open job can be carried on with`);
+    if (!isAddressEqual(record.client, client.account)) return refuse(`job ${options.jobId} belongs to ${record.client}, not this wallet`);
+    if (!isAddressEqual(record.provider, profile.provider)) return refuse(`job ${options.jobId} is for provider ${record.provider}, not ${profile.name || profile.did}'s ${profile.provider}`);
+    resumed = { jobId: options.jobId, budget: record.budget };
+  }
+  const price = options.budget ?? (resumed !== undefined && resumed.budget > 0n ? formatUnits(resumed.budget, 6) : offered.price);
   if (price === undefined) return refuse(`${capability} has no price on the card; pass budget`);
   const amount = parseUnits(price, 6);
   if (amount <= 0n) return refuse("budget must be above zero");
@@ -125,24 +151,39 @@ export async function hire(options: HireOptions): Promise<HireResult> {
         `(${Math.round(horizon / HOUR)} h) ahead of the job's expiry`,
     );
   }
+  // On a stack whose hook holds a module, a release to a client with no
+  // policy on the registry is refused for certain (`policy commitment`),
+  // and the provider is paid nothing for work it did (square#350). The
+  // module and the commitment are read before any money moves.
+  if ((await client.complianceModule()) !== null && (await client.policyOf(client.account)).commitment === ZERO32) {
+    return refuse(
+      `this wallet has no policy on the registry and the stack gates releases: the agent would work and the release would be refused. ` +
+        "Commit a policy first (square policy commit)",
+    );
+  }
   const denied = await options.admit?.(amount);
   if (denied !== undefined) return refuse(denied);
 
   const transactions: Partial<HireTransactions> = {};
   let jobId: bigint;
   try {
-    // From the chain's clock, not this machine's: `createJob` holds
-    // `expiredAt` against `block.timestamp`, and on a local chain whose
-    // time has been advanced the two are days apart.
-    const { timestamp } = await client.publicClient.getBlock();
-    const created = await client.createJob({
-      provider: profile.provider,
-      expiredAt: timestamp + BigInt(seconds),
-      spec: { agent: profile.did, capability, input },
-    });
-    jobId = created.jobId;
-    transactions.createJob = created.hash;
-    transactions.setBudget = (await client.setBudget(jobId, amount)).hash;
+    if (resumed !== undefined) {
+      jobId = resumed.jobId;
+      if (resumed.budget !== amount) transactions.setBudget = (await client.setBudget(jobId, amount)).hash;
+    } else {
+      // From the chain's clock, not this machine's: `createJob` holds
+      // `expiredAt` against `block.timestamp`, and on a local chain whose
+      // time has been advanced the two are days apart.
+      const { timestamp } = await client.publicClient.getBlock();
+      const created = await client.createJob({
+        provider: profile.provider,
+        expiredAt: timestamp + BigInt(seconds),
+        spec: { agent: profile.did, capability, input },
+      });
+      jobId = created.jobId;
+      transactions.createJob = created.hash;
+      transactions.setBudget = (await client.setBudget(jobId, amount)).hash;
+    }
     transactions.fund = (await client.fund(jobId, amount)).hash;
   } catch (error) {
     throw new HireRefusedError(`the job could not be funded: ${messageOf(error)}`, "funding", transactions);
@@ -158,28 +199,72 @@ export async function hire(options: HireOptions): Promise<HireResult> {
     transactions: transactions as HireTransactions,
     dispatch: "undispatched",
   };
-  try {
-    const task = await a2a.runTask(
-      endpoint,
-      { taskId, capability, input, callerDid: options.callerDid, jobId: jobId.toString() },
-      { pollIntervalMs, maxPolls: Math.max(1, Math.floor(taskTimeoutMs / pollIntervalMs)) },
-    );
-    result.task = task;
-    if (task.state === TaskState.Failed) {
-      result.dispatch = "failed";
-      if (task.reason !== undefined) result.reason = task.reason;
-    } else {
-      result.dispatch = task.state === TaskState.Delivered ? "delivered" : "working";
-    }
-  } catch (error) {
-    if (error instanceof A2AError && error.kind === "timeout") {
-      result.dispatch = "working";
-    } else {
-      result.dispatch = "undispatched";
-      result.reason = messageOf(error);
-    }
-  }
+  // The escrow is on the job whatever A2A answers, so an endpoint that does
+  // not answer the first time is asked once more before the hire comes back
+  // undispatched (square#351); after that, `dispatch` is the way to try
+  // again without opening another job.
+  const outcome = await dispatch({ a2a, endpoint, taskId, capability, input, callerDid: options.callerDid, jobId, taskTimeoutMs, pollIntervalMs, redispatchDelayMs: options.redispatchDelayMs });
+  result.dispatch = outcome.dispatch;
+  if (outcome.task !== undefined) result.task = outcome.task;
+  if (outcome.reason !== undefined) result.reason = outcome.reason;
   return result;
+}
+
+export interface DispatchOptions {
+  a2a: A2AClient;
+  endpoint: string;
+  taskId: string;
+  capability: string;
+  input: string;
+  callerDid: string;
+  jobId: bigint;
+  taskTimeoutMs?: number | undefined;
+  pollIntervalMs?: number | undefined;
+  /** How long to wait before the one automatic second attempt. Default 1 s. */
+  redispatchDelayMs?: number | undefined;
+  /** Whether to make that second attempt at all. Default true. */
+  retry?: boolean | undefined;
+}
+
+export type DispatchOutcome = Pick<HireResult, "dispatch" | "task" | "reason">;
+
+/**
+ * `task/create` at the agent for a job that is already funded, then polling
+ * until the task ends or the wait runs out: the second half of `hire`, on
+ * its own so a task the first attempt could not hand over can be handed
+ * over later (square#351). The task id is the job's, `square-job-<id>`, so
+ * an agent that already holds the task answers with where it stands rather
+ * than starting it twice.
+ */
+export async function dispatch(options: DispatchOptions): Promise<DispatchOutcome> {
+  const taskTimeoutMs = options.taskTimeoutMs ?? 50_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 1_000;
+  const attempt = async (): Promise<{ outcome: DispatchOutcome; transient: boolean }> => {
+    try {
+      const task = await options.a2a.runTask(
+        options.endpoint,
+        { taskId: options.taskId, capability: options.capability, input: options.input, callerDid: options.callerDid, jobId: options.jobId.toString() },
+        { pollIntervalMs, maxPolls: Math.max(1, Math.floor(taskTimeoutMs / pollIntervalMs)) },
+      );
+      if (task.state === TaskState.Failed) return { outcome: { dispatch: "failed", task, ...(task.reason !== undefined ? { reason: task.reason } : {}) }, transient: false };
+      return { outcome: { dispatch: task.state === TaskState.Delivered ? "delivered" : "working", task }, transient: false };
+    } catch (error) {
+      if (error instanceof A2AError && error.kind === "timeout") return { outcome: { dispatch: "working" }, transient: false };
+      // An endpoint that could not be reached, was busy or answered 5xx may
+      // answer in a moment; an agent that refused the task (a JSON-RPC error)
+      // will refuse it again, and is not asked twice.
+      const transient =
+        error instanceof A2AError &&
+        (error.kind === "unreachable" || error.kind === "busy" || error.kind === "at-capacity" || (error.kind === "provider-error" && error.status !== undefined && error.status >= 500));
+      return { outcome: { dispatch: "undispatched", reason: messageOf(error) }, transient };
+    }
+  };
+  const first = await attempt();
+  if (first.outcome.dispatch !== "undispatched" || !first.transient || options.retry === false) return first.outcome;
+  await new Promise((resolve) => setTimeout(resolve, options.redispatchDelayMs ?? 1_000));
+  const second = await attempt();
+  if (second.outcome.dispatch === "undispatched") return { dispatch: "undispatched", reason: `${second.outcome.reason ?? "no answer"} (asked twice)` };
+  return second.outcome;
 }
 
 function messageOf(error: unknown): string {

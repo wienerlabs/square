@@ -133,7 +133,7 @@ describe.skipIf(!reachable)("an agent calls an MCP tool, and Claude hires the ag
   const textOf = (result: CallToolResult) => result.content.map((c) => (c.type === "text" ? c.text : "")).join("");
 
   it("serves the hiring tools, and finds the agent by its URL with the chain's owner and the bridged capability", async () => {
-    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual(["square_agent", "square_hire", "square_job", "square_task"]);
+    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual(["square_agent", "square_dispatch", "square_hire", "square_job", "square_refund", "square_task"]);
     const result = await call("square_agent", { agent: agentUrl });
     expect(result.isError, textOf(result)).toBeFalsy();
     expect(result.structuredContent).toMatchObject({

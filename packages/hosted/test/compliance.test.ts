@@ -157,7 +157,7 @@ describe.skipIf(notReady !== null)("a hosted agent's delegated job is proved and
     }
   };
 
-  it("delegates under escrow, keeps the subtask's proof current, and releases the whole net to Scribe when the window closes", async () => {
+  it("delegates under escrow, binds the subtask's proof when the window is about to close, and releases the whole net to Scribe", async () => {
     const block = await publicClient.getBlock({ blockTag: "pending" });
     const { jobId } = await hirer.createJob({ provider: hosted.agent.address, expiredAt: block.timestamp + 10n * 86_400n, spec: { task: "brief" } });
     await hirer.setBudget(jobId, parseUnits("0.50", 6));
@@ -167,19 +167,20 @@ describe.skipIf(notReady !== null)("a hosted agent's delegated job is proved and
     const done = await until(() => rpc(hostedUrl, "task/status", { taskId: `brief-${jobId}` }), (res) => res.result?.["state"] !== "WORKING", "the brief");
     expect(done.result).toMatchObject({ state: "DELIVERED" });
 
-    // The delegated job: tracked from its funding, proved for Scribe's net.
+    // The delegated job: tracked from its funding with what it bought and what it holds, and nothing bound while the window has a day to run (square#349).
     const tracked = hosted.duty!.jobs();
     expect(tracked).toHaveLength(1);
     const subJob = tracked[0]!.jobId;
-    expect(tracked[0]!.category).toBe("text.summarize");
-    await until(() => Promise.resolve(events), (list) => list.some((e) => e.type === "bound" && e.jobId === subJob), "the proof binding");
-    expect(await hosted.agent.client.complianceProofOf(subJob)).not.toBe("0x");
+    expect(tracked[0]).toMatchObject({ category: "text.summarize", budget: parseUnits("0.10", 6) });
+    expect(await hosted.duty!.tick()).toMatchObject({ waiting: [subJob], bound: [] });
+    expect(await hosted.agent.client.complianceProofOf(subJob)).toBe("0x");
     const net = await hosted.agent.client.netPayout(subJob);
     const owedBefore = await scribeClient.withdrawable(account(3).address);
 
     await testClient.increaseTime({ seconds: 86_400 + 1 });
     await testClient.mine({ blocks: 1 });
     await until(() => Promise.resolve(events), (list) => list.some((e) => e.type === "released" && e.jobId === subJob), "the release", 120_000);
+    expect(events.filter((e) => e.type === "bound" && e.jobId === subJob)).toHaveLength(1);
     const released = events.find((e) => e.type === "released" && e.jobId === subJob);
     expect(released).toMatchObject({ verified: true, payee: account(3).address, amount: net });
     expect((await hosted.agent.client.getJobRecord(subJob)).status).toBe(JobStatus.Completed);
