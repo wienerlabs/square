@@ -98,7 +98,7 @@ describe("square policy buyers entry", () => {
 
 describe("square policy commit and prove", () => {
   it("refuse a job id that is not one, and a policy file that is not there, before touching the chain", async () => {
-    await expect(run("policy", "prove", "abc", "--file", join(dir, "none.json"), "--prover", "http://127.0.0.1:1", "--category", "c")).rejects.toThrow(/abc is not a job id/);
+    await expect(run("policy", "prove", "abc", "--file", join(dir, "none.json"), "--artifacts", join(dir, "no-artifacts"), "--category", "c")).rejects.toThrow(/abc is not a job id/);
     await expect(run("policy", "commit", join(dir, "none.json"), "--dry-run")).rejects.toThrow(/No policy file at/);
   });
 });

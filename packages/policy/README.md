@@ -3,8 +3,9 @@
 The institution's side of the compliance gate ([#335][i335], [#338][i338]):
 the spending policy it commits to `PolicyRegistry`, the proof that a release
 fits that policy, and the duty of keeping that proof bound to each job until
-the job is released. Built on `@squaresdk/core`; the prover it talks to is
-`services/prover`.
+the job is released. Built on `@squaresdk/core`; the proof is made in the
+institution's own process, from the circuit's files
+([docs/decisions/prover-trust-boundary.md](../../docs/decisions/prover-trust-boundary.md)).
 
 [i335]: https://github.com/wienerlabs/square/issues/335
 [i338]: https://github.com/wienerlabs/square/issues/338
@@ -31,8 +32,9 @@ A policy is a JSON file in the prover's own vocabulary (`POST /prove`,
 `policy_salt` is the secret: every leaf salt derives from it and whoever
 holds it can open the committed values. `newPolicy` draws it, `parsePolicy`
 refuses what the prover would refuse, `redactPolicy` blanks it for a log.
-The file stays with the institution and goes to one place, the prover it
-names.
+The file stays with the institution and is proved where it is read
+([#347](https://github.com/wienerlabs/square/issues/347)): `createLocalProver`
+never sends it anywhere.
 
 `policyCommitment(policy)` is the commitment `PolicyRegistry.commitmentOf`
 holds and public signal 1 of every proof: eight values behind salts derived
@@ -52,17 +54,36 @@ current on every open job and the job is cranked once its window closes
 ([docs/decisions/proof-freshness.md](../../docs/decisions/proof-freshness.md)).
 
 ```ts
-import { ComplianceDuty, createProverClient, parsePolicy } from "@squaresdk/policy";
+import { ComplianceDuty, parsePolicy } from "@squaresdk/policy";
+import { createLocalProver } from "@squaresdk/policy/node";
 
+const prover = createLocalProver({ artifacts: "/path/to/artifacts" }); // payment.wasm, payment.zkey, payment_vk.json
 const duty = new ComplianceDuty({
   client,                                              // a SquareClient whose wallet is the jobs' client
   policy: parsePolicy(JSON.parse(readFileSync("policy.json", "utf8"))),
-  prover: createProverClient({ url: "http://127.0.0.1:3003" }),
+  prover,
   onEvent: (event) => console.error(event),
 });
 duty.track(jobId, "text.summarize");                   // when the job is funded, with the capability it bought
 await duty.run(signal, { intervalMs: 15_000 });        // for as long as the process lives
+await prover.close();                                  // snarkjs keeps worker threads until then
 ```
+
+## The proof, made here
+
+`createLocalProver` builds the circuit input and names the rules a refused
+release broke the way `services/prover` does, proves with snarkjs, and checks
+every proof against `payment_vk.json` before returning it, so files from two
+different keys are named here instead of refused at release.
+`test/local-prover.test.ts` holds the input and the rule names to the prover's
+own functions whenever the prover is installed beside this package, and makes a
+real proof when the files are there. One proof took 755 to 893 ms and at most
+678 MB on an arm64 Mac; the files are about 10 MB. The directory must hold the
+key the module on the chain is keyed to.
+
+`createProverClient({ url })` is still here, for a page that cannot prove
+itself: the app's job page sends the policy to the prover at
+`NEXT_PUBLIC_PROVER_URL`, whose operator sees it.
 
 Each tick, per tracked job: `releaseFacts` reads what the release binds to,
 `proofState` compares it with the proof on the job, `bindComplianceProof`
@@ -102,13 +123,14 @@ installs it on the hook.
 anvil --port 8545 --chain-id 31337 &
 (cd contracts && forge script script/DeployLocal.s.sol --rpc-url http://127.0.0.1:8545 --broadcast)
 (cd circuits && npm run build && cp build/payment.zkey build/payment_vk.json ../services/prover/artifacts/ && cp build/payment_js/payment.wasm ../services/prover/artifacts/)
-(cd services/prover && node src/index.js &)
 (cd packages/policy && npm run install-module)
 npm run test:anvil                                      # here, and in packages/cli, packages/mcp, packages/hosted
 ```
 
 Every suite that needs the stack skips itself, with the reason, when anvil,
-the prover or the module is missing (`test/helpers/stack.ts`). `ANVIL_RPC_URL`,
-`PROVER_URL` and `SQUARE_DEPLOYMENT_FILE` point them elsewhere. The other
+the key's files or the module is missing (`test/helpers/stack.ts`). The suites
+prove in their own process from `services/prover/artifacts`, the directory the
+module was keyed from. `ANVIL_RPC_URL`, `SQUARE_PROVER_ARTIFACTS` and
+`SQUARE_DEPLOYMENT_FILE` point them elsewhere. The other
 packages' anvil suites keep running against a stack without a module, where
 nothing is proof gated.

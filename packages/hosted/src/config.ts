@@ -40,16 +40,16 @@ export interface DelegationConfig {
 /**
  * The institution's side of the compliance gate for the jobs this agent
  * delegates (square#335): the policy the wallet committed on chain, as a
- * file beside the config, and the prover that policy's secret may be sent
- * to. With it the host keeps a proof bound to every delegated job and
- * releases each when its window closes; on a stack whose hook holds a
- * module, without it every delegated release would pay this wallet back.
+ * file beside the config. The proof is made in the host's own process from
+ * the circuit's files (`SQUARE_PROVER_ARTIFACTS`), so the policy's secret
+ * never leaves it (square#347). With it the host keeps a proof bound to every
+ * delegated job and releases each when its window closes; on a stack whose
+ * hook holds a module, without it every delegated release would pay this
+ * wallet back.
  */
 export interface ComplianceConfig {
   /** The policy file (`square policy init` writes one), relative to the config file. Holds the policy's secret. */
   policyFile: string;
-  /** The prover service the policy's secret may be sent to. */
-  proverUrl: string;
   /** How often the bound proofs are checked, ms; well inside the module's tolerance. Default 15000. */
   intervalMs?: number | undefined;
   /**
@@ -126,7 +126,6 @@ const schema = z.object({
   compliance: z
     .object({
       policyFile: z.string().min(1),
-      proverUrl: z.string().url(),
       intervalMs: z.number().int().min(1000).optional(),
       stateFile: z.union([z.string().min(1), z.literal(false)]).optional(),
     })
@@ -162,7 +161,7 @@ export function parseHostedConfig(json: unknown): HostedAgentConfig {
     }
   }
   if (config.compliance && config.delegation === undefined) {
-    throw new HostedConfigError("compliance: names a policy and a prover, but the config delegates nothing; only delegated jobs are this wallet's to prove");
+    throw new HostedConfigError("compliance: names a policy, but the config delegates nothing; only delegated jobs are this wallet's to prove");
   }
   return config as HostedAgentConfig;
 }

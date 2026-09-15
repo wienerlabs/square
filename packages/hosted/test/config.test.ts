@@ -27,10 +27,9 @@ describe("parseHostedConfig", () => {
 
   it("takes a compliance block beside a delegation block, and refuses one without", () => {
     const delegation = { allow: ["https://scribe.example"] };
-    const compliance = { policyFile: "policy.json", proverUrl: "http://127.0.0.1:3003", intervalMs: 5000 };
+    const compliance = { policyFile: "policy.json", intervalMs: 5000 };
     expect(parseHostedConfig({ ...base, delegation, compliance }).compliance).toEqual(compliance);
-    expect(() => parseHostedConfig({ ...base, compliance })).toThrow(/compliance: names a policy and a prover, but the config delegates nothing/);
-    expect(() => parseHostedConfig({ ...base, delegation, compliance: { ...compliance, proverUrl: "nowhere" } })).toThrow(/compliance.proverUrl/);
+    expect(() => parseHostedConfig({ ...base, compliance })).toThrow(/compliance: names a policy, but the config delegates nothing/);
     expect(() => parseHostedConfig({ ...base, delegation, compliance: { ...compliance, intervalMs: 10 } })).toThrow(/compliance.intervalMs/);
     // Where the duty keeps its jobs across restarts: a path beside the config, or none at all (square#348).
     expect(parseHostedConfig({ ...base, delegation, compliance: { ...compliance, stateFile: "jobs.json" } }).compliance?.stateFile).toBe("jobs.json");

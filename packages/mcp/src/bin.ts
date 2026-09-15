@@ -12,8 +12,8 @@ import {
   type SquareWalletClient,
 } from "@squaresdk/core";
 import { AipDidResolver } from "@squaresdk/did-resolver";
-import { createProverClient, describeDutyEvent, parsePolicy } from "@squaresdk/policy";
-import { fileDutyState } from "@squaresdk/policy/node";
+import { describeDutyEvent, parsePolicy } from "@squaresdk/policy";
+import { createLocalProver, fileDutyState, type LocalProver } from "@squaresdk/policy/node";
 import { createPublicClient, createWalletClient, defineChain, http, type Chain, type PublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { createSquareMcpServer, type ComplianceOptions } from "./server.js";
@@ -32,9 +32,10 @@ import { createSquareMcpServer, type ComplianceOptions } from "./server.js";
  *   SQUARE_CALLER_DID        the DID tasks are created under; default the wallet's did:pkh
  *   SQUARE_X402_MAX_PAYMENT  cap per x402 call, decimal USDC; "1.00" by default, "off" to not offer square_call
  *   SQUARE_JOB_DAYS          how long a hired job stays open; 7 by default
- *   SQUARE_POLICY_FILE       the institution's policy (packages/policy README); with SQUARE_PROVER_URL, every hire's
+ *   SQUARE_POLICY_FILE       the institution's policy (packages/policy README); with SQUARE_PROVER_ARTIFACTS, every hire's
  *                            release is proved and the proof kept bound to the job until it is released (square#335)
- *   SQUARE_PROVER_URL        the prover service the policy's secret may be sent to, e.g. http://127.0.0.1:3003
+ *   SQUARE_PROVER_ARTIFACTS  the directory holding payment.wasm, payment.zkey and payment_vk.json; proofs are made in
+ *                            this process, so the policy never leaves it (square#347)
  *   SQUARE_COMPLIANCE_INTERVAL_MS  how often the bound proofs are checked; 15000 by default, well inside the module's tolerance
  *   SQUARE_DUTY_STATE        where the jobs the duty watches are kept across restarts; <SQUARE_POLICY_FILE>.duty.json by
  *                            default, "off" to keep none (the chain is still scanned for this wallet's open jobs at start)
@@ -125,30 +126,40 @@ async function main(): Promise<void> {
     ...(jobDays !== undefined ? { jobDays: Number(jobDays) } : {}),
     ...(compliance ? { compliance } : {}),
   });
+  if (compliance) {
+    // snarkjs keeps its worker threads between proofs, and they would keep the
+    // process alive after the client has gone.
+    const previousClose = server.server.onclose;
+    server.server.onclose = () => {
+      previousClose?.();
+      void compliance.prover.close();
+    };
+  }
 
   await server.connect(new StdioServerTransport());
   console.error(
     `[square-mcp] serving Square on chain ${chainId} via ${rpcUrl}` +
       (account ? `, paying from ${account.address}` : ", read-only (no SQUARE_PRIVATE_KEY)") +
-      (compliance ? `, proving releases under policy ${compliance.policy.policy_id} at ${env("SQUARE_PROVER_URL")}` : "") +
+      (compliance ? `, proving releases under policy ${compliance.policy.policy_id} in this process, from ${compliance.prover.artifacts}` : "") +
       (screenerUrl !== undefined ? `, screening parties at ${screenerUrl}` : ""),
   );
 }
 
-/** Both of SQUARE_POLICY_FILE and SQUARE_PROVER_URL, or neither: one without the other is a misconfiguration, not a default. */
-function complianceOf(): ComplianceOptions | undefined {
+/** Both of SQUARE_POLICY_FILE and SQUARE_PROVER_ARTIFACTS, or neither: one without the other is a misconfiguration, not a default. */
+function complianceOf(): (ComplianceOptions & { prover: LocalProver }) | undefined {
   const file = env("SQUARE_POLICY_FILE");
-  const proverUrl = env("SQUARE_PROVER_URL");
-  if (file === undefined && proverUrl === undefined) return undefined;
-  if (file === undefined || proverUrl === undefined) {
-    throw new Error("SQUARE_POLICY_FILE and SQUARE_PROVER_URL go together: the policy is what is proved, the prover is where");
+  const artifacts = env("SQUARE_PROVER_ARTIFACTS");
+  if (file === undefined && artifacts === undefined) return undefined;
+  if (file === undefined || artifacts === undefined) {
+    throw new Error("SQUARE_POLICY_FILE and SQUARE_PROVER_ARTIFACTS go together: the policy is what is proved, the circuit's files are what it is proved with");
   }
   const policy = parsePolicy(JSON.parse(readFileSync(file, "utf8")));
   const interval = env("SQUARE_COMPLIANCE_INTERVAL_MS");
   const stateFile = env("SQUARE_DUTY_STATE") ?? `${file}.duty.json`;
   return {
     policy,
-    prover: createProverClient({ url: proverUrl }),
+    // square#347: made here, so the policy's secret never crosses a process boundary.
+    prover: createLocalProver({ artifacts }),
     ...(interval !== undefined ? { intervalMs: Number(interval) } : {}),
     ...(stateFile.toLowerCase() === "off" ? {} : { state: fileDutyState(stateFile) }),
     onEvent: (event) => console.error(`[square-mcp] compliance: ${describeDutyEvent(event)}`),

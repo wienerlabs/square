@@ -6,22 +6,26 @@ import { ComplianceDuty, type DutyEvent } from "../src/duty.js";
 import { policyCommitment } from "../src/commitment.js";
 import { newPolicy, type Policy } from "../src/policy.js";
 import { decodeComplianceProof, signalsOf } from "../src/proof.js";
-import { createProverClient } from "../src/prover.js";
+import { createLocalProver, type LocalProver } from "../src/local-prover.js";
 import { bindComplianceProof, proofState, releaseFacts } from "../src/release.js";
-import { account, complianceStack, proverUrl, rpcUrl, type Stack } from "./helpers/stack.js";
+import { account, artifacts, complianceStack, rpcUrl, type Stack } from "./helpers/stack.js";
 
 /**
  * The institution's side of the gate, end to end on a stack with the module
- * installed and a real prover beside it: a policy committed from here is the
- * one the prover proves against, a proof bound from here is the one the
- * module verifies, and the escrow goes to whoever the proof names. Skipped
- * without the stack (test/helpers/stack.ts).
+ * installed, proving in this process from the key the module was keyed to
+ * (square#347): a policy committed from here is the one the proof is made
+ * against, a proof bound from here is the one the module verifies, and the
+ * escrow goes to whoever the proof names. Skipped without the stack
+ * (test/helpers/stack.ts).
  */
 const ready = await complianceStack();
 
 describe.skipIf(!("stack" in ready))("policy → proof → release, on chain", () => {
   const stack = ("stack" in ready ? ready.stack : undefined) as Stack;
-  const prover = createProverClient({ url: proverUrl });
+  const prover = ("stack" in ready ? createLocalProver({ artifacts }) : undefined) as LocalProver;
+  afterAll(async () => {
+    await prover?.close();
+  });
   // anvil 1 is the institution, anvil 2 owns mock agent 1 (the provider), anvil 3 buys receivables.
   const institution = () => stack.actor(1);
   const provider = () => stack.actor(2);

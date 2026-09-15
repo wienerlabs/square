@@ -9,8 +9,8 @@ import {
   networkFor,
   type SquareDeployment,
 } from "@squaresdk/core";
-import { createProverClient, describeDutyEvent, parsePolicy } from "@squaresdk/policy";
-import { fileDutyState } from "@squaresdk/policy/node";
+import { describeDutyEvent, parsePolicy } from "@squaresdk/policy";
+import { createLocalProver, fileDutyState, type LocalProver } from "@squaresdk/policy/node";
 import { createPublicClient, createWalletClient, defineChain, http, type Chain, type PublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { parseHostedConfig, type HostedAgentConfig } from "./config.js";
@@ -29,10 +29,13 @@ import { deriveSealKey, seal } from "./sealed.js";
  *   SQUARE_SEAL_SECRET       what own-tier keys are sealed under (seal, and run with an own key)
  *   ANTHROPIC_API_KEY        the platform tier's key, read by the Anthropic SDK itself
  *   PORT, HOST               where the agent listens; 3000 and 0.0.0.0
+ *   SQUARE_PROVER_ARTIFACTS  the directory holding payment.wasm, payment.zkey and payment_vk.json (a config with a compliance block)
  *
  * A config with a `compliance` block names the policy file (relative to the
- * config) and the prover; the host then keeps a proof bound to every job it
- * delegates and releases each when its window closes (square#335).
+ * config); the host proves with the circuit's files in SQUARE_PROVER_ARTIFACTS,
+ * in this process, so the policy never leaves it (square#347), keeps a proof
+ * bound to every job it delegates and releases each when its window closes
+ * (square#335).
  *
  * A key in an environment variable is a key in the process table, the same
  * trade the CLI's unattended mode makes; an institution's own key never sits
@@ -125,7 +128,7 @@ async function runCommand(path: string | undefined): Promise<void> {
       `${config.capabilities.map((c) => c.id).join(", ")}; ${config.provider.tier} key; ` +
       `${hosted.tools ? `${(await hosted.tools.tools()).length} MCP tool(s)` : "no MCP tools"}; ` +
       `${config.delegation ? `may hire ${config.delegation.allow.join(", ")}` : "no delegation"}` +
-      `${compliance ? `; proving delegated releases under policy ${compliance.policy.policy_id} at ${config.compliance!.proverUrl}` : ""}` +
+      `${compliance ? `; proving delegated releases under policy ${compliance.policy.policy_id} in this process, from ${compliance.prover.artifacts}` : ""}` +
       `${screenerUrl !== undefined ? `; screening delegated parties at ${screenerUrl}` : ""}`,
   );
   const stop = async () => {
@@ -137,15 +140,19 @@ async function runCommand(path: string | undefined): Promise<void> {
   process.once("SIGTERM", () => void stop());
 }
 
-/** The config's compliance block as the host's deps: the policy read from beside the config, the prover as a client. */
-function complianceOf(config: HostedAgentConfig, configPath: string): ComplianceDeps | undefined {
+/** The config's compliance block as the host's deps: the policy read from beside the config, the proof made in this process. */
+function complianceOf(config: HostedAgentConfig, configPath: string): (ComplianceDeps & { prover: LocalProver }) | undefined {
   if (!config.compliance) return undefined;
+  const artifacts = env("SQUARE_PROVER_ARTIFACTS");
+  if (artifacts === undefined) {
+    throw new Error("a compliance block needs SQUARE_PROVER_ARTIFACTS, the directory holding payment.wasm, payment.zkey and payment_vk.json: the proof is made in this process, so the policy never leaves it");
+  }
   const file = resolve(dirname(configPath), config.compliance.policyFile);
   const policy = parsePolicy(JSON.parse(readFileSync(file, "utf8")));
   const stateFile = config.compliance.stateFile === undefined ? `${configPath}.duty.json` : config.compliance.stateFile === false ? undefined : resolve(dirname(configPath), config.compliance.stateFile);
   return {
     policy,
-    prover: createProverClient({ url: config.compliance.proverUrl }),
+    prover: createLocalProver({ artifacts }),
     intervalMs: config.compliance.intervalMs,
     ...(stateFile !== undefined ? { state: fileDutyState(stateFile) } : {}),
     onEvent: (event) => console.error(`[square-hosted] compliance: ${describeDutyEvent(event)}`),
