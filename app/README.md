@@ -45,7 +45,7 @@ Paid to payees is the provider share of the net that each completed job settled 
 | `NEXT_PUBLIC_RPC_URL` | chain default | Overrides the RPC endpoint (`https://rpc.testnet.arc.io` or `http://127.0.0.1:8545`). |
 | `NEXT_PUBLIC_INDEXER_URL` | unset | Base URL of the indexer read API. When set, the dashboard reads the open and in-window counts from `/overview`, which counts them in the database rather than listing the rows, and the network page shows `/status`. When unset, everything is read directly from the chain. |
 | `NEXT_PUBLIC_PROVER_URL` | unset | The prover service the job page may send the policy's secret to (`services/prover`, which has to allow this origin in `CORS_ORIGINS`). When set, the client of a job binds a compliance proof from the job page; when unset, the page shows the proof's state and says which tool binds one. |
-| `NEXT_PUBLIC_SCREENER_URL` | unset | The screener service (`services/screener`) the fund step asks to screen a party the hook would refuse (square#368). Only read on a hook that screens; without it, such a funding stops before sending and the error names the party. The screener sets no CORS headers today, so a browser reaches it only from the same origin or through a proxy. |
+| `NEXT_PUBLIC_SCREENER_URL` | unset | The screener service (`services/screener`, which has to allow this origin in `CORS_ORIGINS`) the fund step asks to screen a party the hook would refuse (square#368). Only read on a hook that screens; without it, such a funding stops before sending and the error names the party. |
 
 The variables are inlined at build time. Copy `.env.example` to `.env.local` and rebuild after changing them.
 

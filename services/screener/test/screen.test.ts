@@ -12,6 +12,8 @@ import {
   screenAndSign,
   signScreening,
 } from "../src/index.js";
+import { createHealth, createLogger, createMetrics } from "@squaresdk/observability";
+import { corsOriginsFrom, screenerApp, type ScreenerService } from "../src/app.js";
 
 const fresh = (): Address => privateKeyToAccount(generatePrivateKey()).address;
 
@@ -69,5 +71,69 @@ describe("what the screener signs", () => {
 
   it("names its source in a bytes32 that reads back as the id", () => {
     expect(hexToString(stringToHex(TRM_SOURCE_ID, { size: 32 }), { size: 32 })).toBe(TRM_SOURCE_ID);
+  });
+});
+
+// square#374. The app funds from the browser and calls POST /screen first
+// (square#373); with no CORS headers the preflight stopped it and the app said
+// the screener could not be reached. What a browser checks is the preflight's
+// Access-Control-Allow-Origin, so that is what is asserted, for the origins the
+// rule names and for one it does not.
+describe("a browser calling the screener", () => {
+  const APP = "https://square-wienerlabs.vercel.app";
+  const service: ScreenerService = {
+    screen: async () => {
+      throw new Error("a preflight or a malformed request never reaches the source");
+    },
+  };
+  const app = screenerApp({
+    service,
+    health: createHealth({ service: "square-screener", version: "test", checks: {} }),
+    metrics: createMetrics({ service: "square-screener" }),
+    logger: createLogger({ service: "square-screener", version: "test" }),
+    corsOrigins: corsOriginsFrom(` ${APP} ,, https://other.example `),
+  });
+  const preflight = (origin: string, path = "/screen") =>
+    app.request(path, {
+      method: "OPTIONS",
+      headers: { origin, "access-control-request-method": "POST", "access-control-request-headers": "content-type" },
+    });
+
+  it("reads CORS_ORIGINS as a comma-separated list, blanks dropped", () => {
+    expect(corsOriginsFrom(` ${APP} ,, https://other.example `)).toEqual([APP, "https://other.example"]);
+    expect(corsOriginsFrom(undefined)).toEqual([]);
+    expect(corsOriginsFrom("")).toEqual([]);
+  });
+
+  it("answers the preflight of an origin CORS_ORIGINS names, for POST and the JSON body", async () => {
+    const response = await preflight(APP);
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe(APP);
+    expect(response.headers.get("access-control-allow-methods")).toBe("GET,POST");
+    expect(response.headers.get("access-control-allow-headers")).toBe("content-type");
+  });
+
+  it("allows localhost on any port, as the prover does", async () => {
+    for (const origin of ["http://localhost:3000", "http://localhost:5173"]) {
+      expect((await preflight(origin)).headers.get("access-control-allow-origin")).toBe(origin);
+    }
+  });
+
+  it("writes no Access-Control-Allow-Origin for an origin it does not name", async () => {
+    for (const origin of ["https://evil.example", "https://square-wienerlabs.vercel.app.evil.example", "http://localhost.evil.example:3000", "https://localhost:3000"]) {
+      expect((await preflight(origin)).headers.get("access-control-allow-origin")).toBeNull();
+    }
+  });
+
+  it("carries the header on the answer itself, so the browser can read a refusal", async () => {
+    const response = await app.request("/screen", { method: "POST", headers: { origin: APP, "content-type": "application/json" }, body: "not json" });
+    expect(response.status).toBe(400);
+    expect(response.headers.get("access-control-allow-origin")).toBe(APP);
+    const other = await app.request("/screen", { method: "POST", headers: { origin: "https://evil.example", "content-type": "application/json" }, body: "not json" });
+    expect(other.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("answers GET /health's preflight for a named origin", async () => {
+    expect((await preflight(APP, "/health")).headers.get("access-control-allow-origin")).toBe(APP);
   });
 });
