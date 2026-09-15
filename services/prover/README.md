@@ -82,14 +82,31 @@ The end-to-end suite drives `POST /prove` through a genuine Groth16 prove and
 reads back everything the service wrote to stdout and stderr. It skips, loudly,
 when the artifacts are absent rather than passing on a stub.
 
-`test/fixtures/circuit-ground-truth.json` is the witness output of the compiled
-circuit for the fixtures beside it — not a hand-written expectation. It is what
-`test/rules.test.js` compares the off-circuit rule evaluator against.
-Regenerate it after any circuit change:
+Two suites keep this service and the circuit in step, and neither reads a
+recorded fixture:
+
+- `test/rules.test.js` exercises the off-circuit rule evaluator, `src/rules.js`,
+  against witnesses built by the real request path (`buildCircuitInput`). It
+  needs no circuit and runs on every `npm test`.
+- `test/circuit-agreement.test.js` holds the same inputs against the compiled
+  circuit's wasm, `circuits/build/payment_js/payment.wasm`: the eight public
+  signals, the policy commitment, and the compliance verdict rule by rule. A
+  drift between this service and the circuit fails here. It runs whenever that
+  file exists, with or without `PROVER_ARTIFACTS_DIR`, and skips with a message
+  saying how to build it when it does not.
+
+After a circuit change there is nothing to regenerate. Rebuild the circuit and
+run the suite again, so `circuit-agreement.test.js` reads the new wasm:
 
 ```bash
-node test/tools/regenerate-ground-truth.mjs --wasm-dir ../aperture/circuits/payment-prover/build/payment_js
+(cd ../../circuits && npm run build -- --no-zkey)
+npm test
 ```
+
+CI does the same in the `prover (real proving key)` job
+(`.github/workflows/circuits.yml`), which builds the circuit and a proving key
+before running this package's tests; [docs/ci.md](../../docs/ci.md) lists the
+suite as run there.
 
 ## What changed from aperture
 
