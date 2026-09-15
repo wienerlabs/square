@@ -201,7 +201,8 @@ export async function open(values, salts, field) {
  * `if (!(await verifyDisclosure(d, root)).ok)` must be able to say "no" rather
  * than fail. square#179 found four paths that threw instead -- a salt, a value
  * or a sibling that `BigInt()` could not parse -- and the exception carried the
- * forged text in its message.
+ * forged text in its message. square#264 found two more: a disclosure that is
+ * `null` or `undefined`, and a root with no string form.
  *
  * **And it reads one encoding per value.** A number at or above the field
  * modulus is refused rather than reduced, and `value` comes back canonical, so
@@ -209,6 +210,19 @@ export async function open(values, salts, field) {
  * the commitment covers and not another spelling of it.
  */
 export async function verifyDisclosure(disclosure, expectedRoot) {
+  // square#264. The destructuring below threw on null and undefined, the two
+  // values an auditor's service is likeliest to be handed: JSON.parse('null'),
+  // a body field that was never sent. An array is refused here too, because
+  // 'index out of range' is not why it fails.
+  if (disclosure === null || typeof disclosure !== 'object' || Array.isArray(disclosure)) {
+    return { ok: false, reason: 'disclosure is not an object' };
+  }
+  // The root is held to the same contract. String() threw for an object with no
+  // primitive form, and a root is a decimal string or a bigint, never anything
+  // else.
+  if (typeof expectedRoot !== 'string' && typeof expectedRoot !== 'bigint') {
+    return { ok: false, reason: 'expected root is not a string or a bigint' };
+  }
   const { index, value, salt, siblings } = disclosure;
   if (!Number.isInteger(index) || index < 0 || index >= FIELD_COUNT) {
     return { ok: false, reason: 'index out of range' };

@@ -284,11 +284,38 @@ describe('a forged disclosure is a "no", not an exception', () => {
       (d) => ({ ...d, siblings: d.siblings.map((s, i) => (i === 3 ? {} : s)) }),
       'sibling 3 is not a field element',
     ],
+    // square#264. The destructuring on the first line threw on these two, and
+    // they are the likeliest of all: JSON.parse('null'), a body field that was
+    // never sent, a row with no disclosure in it.
+    ['a disclosure that is null', () => null, 'disclosure is not an object'],
+    ['a disclosure that is undefined', () => undefined, 'disclosure is not an object'],
+    ['a disclosure that is an array', (d) => [d.index, d.value, d.salt, d.siblings], 'disclosure is not an object'],
   ])('refuses %s with a reason', async (_name, forge, reason) => {
     const { root, disclosure } = await sound();
     const result = await verifyDisclosure(forge(disclosure), root);
     expect(result.ok).toBe(false);
     expect(result.reason).toBe(reason);
+  });
+
+  // The same contract covers the root. String(expectedRoot) threw for an object
+  // with no primitive form, so a root read from a malformed response turned a
+  // sound disclosure into an exception rather than a "no".
+  it.each([
+    ['an object with no primitive form', () => Object.create(null)],
+    ['an object whose toString throws', () => ({ toString() { throw new Error('unreadable'); } })],
+    ['null', () => null],
+    ['undefined', () => undefined],
+    ['a number', (root) => Number(root)],
+  ])('refuses an expected root that is %s with a reason', async (_name, rootFrom) => {
+    const { root, disclosure } = await sound();
+    const result = await verifyDisclosure(disclosure, rootFrom(root));
+    expect(result).toEqual({ ok: false, reason: 'expected root is not a string or a bigint' });
+  });
+
+  it('accepts the root as a decimal string or as a bigint', async () => {
+    const { root, disclosure } = await sound();
+    expect((await verifyDisclosure(disclosure, root)).ok).toBe(true);
+    expect((await verifyDisclosure(disclosure, BigInt(root))).ok).toBe(true);
   });
 
   // The point of the whole group, stated once as the thing that broke: an
@@ -305,9 +332,16 @@ describe('a forged disclosure is a "no", not an exception', () => {
       { ...disclosure, siblings: 'not an array' },
       { index: 'zero', value: '1', salt: '1', siblings: [] },
       {},
+      null,
+      undefined,
+      [disclosure.index, disclosure.value, disclosure.salt, disclosure.siblings],
     ];
     for (const forged of forgeries) {
       await expect(verifyDisclosure(forged, root)).resolves.toMatchObject({ ok: false });
+    }
+    const roots = [null, undefined, Object.create(null), { toString() { throw new Error('unreadable'); } }];
+    for (const forgedRoot of roots) {
+      await expect(verifyDisclosure(disclosure, forgedRoot)).resolves.toMatchObject({ ok: false });
     }
   });
 
