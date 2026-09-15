@@ -90,6 +90,18 @@ export function verifyPtau(file = ptauPath()) {
   return { sha256, blake2b: digest('blake2b512', file), bytes: size };
 }
 
+// What `--verify` prints for a file verifyPtau accepted. Exported so the example
+// in docs/ceremony/phase1-ptau.md is checked against this, not against a copy of
+// it: square#239 found that example still showing the power-13 file, a size and
+// a hash verifyPtau refuses.
+export function verifyReport(result) {
+  return `${ADOPTED.file}\n`
+    + `  ${result.bytes} bytes\n`
+    + `  sha256  ${result.sha256}\n`
+    + `  blake2b ${result.blake2b}\n`
+    + `  matches the adopted ${ADOPTED.ceremony} contribution ${ADOPTED.contribution}\n`;
+}
+
 async function download(url, destination) {
   process.stdout.write(`fetching ${url}\n`);
   const response = await fetch(url, { redirect: 'follow' });
@@ -121,14 +133,7 @@ async function main(argv) {
 
   const file = ptauPath();
   if (argv.includes('--verify')) {
-    const result = verifyPtau(file);
-    process.stdout.write(
-      `${ADOPTED.file}\n`
-      + `  ${result.bytes} bytes\n`
-      + `  sha256  ${result.sha256}\n`
-      + `  blake2b ${result.blake2b}\n`
-      + `  matches the adopted ${ADOPTED.ceremony} contribution ${ADOPTED.contribution}\n`,
-    );
+    process.stdout.write(verifyReport(verifyPtau(file)));
     return 0;
   }
 

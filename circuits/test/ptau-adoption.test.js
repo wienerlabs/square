@@ -11,12 +11,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { ADOPTED, ptauPath, verifyPtau } from '../scripts/fetch-ptau.mjs';
+import { ADOPTED, ptauPath, verifyPtau, verifyReport } from '../scripts/fetch-ptau.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const BUILD = path.join(ROOT, 'build');
 const ZKEY = path.join(BUILD, 'payment.zkey');
+const RECORD = path.join(ROOT, '..', 'docs', 'ceremony', 'phase1-ptau.md');
 
 const HAVE_PTAU = fs.existsSync(ptauPath());
 const HAVE_ZKEY = fs.existsSync(ZKEY);
@@ -40,6 +41,45 @@ describe('the adoption record', () => {
     expect(ADOPTED.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(ADOPTED.blake2b).toMatch(/^[0-9a-f]{128}$/);
     expect(ADOPTED.bytes).toBeGreaterThan(0);
+  });
+});
+
+// square#239. docs/ceremony/phase1-ptau.md is the record an auditor reads
+// without running anything, and after square#45 moved the adoption to power 14
+// its heading still said 13 and its `--verify` example still showed the power-13
+// file: 9530514 bytes and a sha256 verifyPtau refuses. The table beside it was
+// right, so the document contradicted itself. Every value it quotes for the
+// adopted file is held to ADOPTED here, without the file on disk.
+describe('the record in docs/ceremony/phase1-ptau.md', () => {
+  const record = fs.readFileSync(RECORD, 'utf8');
+
+  it('names the adopted power and file in its heading', () => {
+    const heading = /\*\*Adopted:\*\*([\s\S]*?)\n\n/.exec(record)?.[1] ?? '';
+    expect(heading).toContain(`truncated to power ${ADOPTED.power}`);
+    expect(heading).toContain(ADOPTED.file);
+  });
+
+  it('tabulates the adopted power, size and hashes', () => {
+    expect(record).toContain(`| Power | ${ADOPTED.power} (${2 ** ADOPTED.power} points) |`);
+    expect(record).toContain(`| File | \`${ADOPTED.file}\` |`);
+    expect(record).toContain(`| Size | ${ADOPTED.bytes.toLocaleString('en-US')} bytes |`);
+    expect(record).toContain(`| SHA-256 | \`${ADOPTED.sha256}\` |`);
+    expect(record).toContain(`| BLAKE2b | \`${ADOPTED.blake2b}\` |`);
+  });
+
+  it('shows the output --verify prints for the adopted file', () => {
+    const example = /\$ node circuits\/scripts\/fetch-ptau\.mjs --verify\n([\s\S]*?)```/.exec(record)?.[1];
+    expect(example).toBe(verifyReport({ bytes: ADOPTED.bytes, sha256: ADOPTED.sha256, blake2b: ADOPTED.blake2b }));
+  });
+
+  it('quotes no size or hash but the adopted file\'s', () => {
+    const sha256s = record.match(/\b[0-9a-f]{64}\b/g) ?? [];
+    const blake2bs = record.match(/\b[0-9a-f]{128}\b/g) ?? [];
+    const sizes = [...record.matchAll(/\b([0-9][0-9,]*) bytes\b/g)].map((m) => Number(m[1].replaceAll(',', '')));
+    expect(sha256s.length).toBeGreaterThan(0);
+    expect(new Set(sha256s)).toEqual(new Set([ADOPTED.sha256]));
+    expect(new Set(blake2bs)).toEqual(new Set([ADOPTED.blake2b]));
+    expect(new Set(sizes)).toEqual(new Set([ADOPTED.bytes]));
   });
 });
 
