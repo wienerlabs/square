@@ -14,7 +14,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { buildCircuitInput } from '../src/prover.js';
-import { padCategoryList } from '../src/hash.js';
+import { categoryToField, hashCategory, padCategoryList } from '../src/hash.js';
 import { randomPolicySalt } from '../src/commitment.js';
 
 const USDC = '0x3600000000000000000000000000000000000000';
@@ -251,6 +251,38 @@ describe('which error wins when two things are wrong', () => {
     delete req.max_daily_spend;
     await expect(buildCircuitInput(req))
       .rejects.toThrow(/Missing required field\(s\): .*max_daily_spend.*policy_salt|.*policy_salt.*max_daily_spend/);
+  });
+});
+
+// square#253. The circuit constrains the three values it looks up in the policy
+// lists to be non-zero, and the zero address is well formed, so it passed this
+// gate and failed in the rule evaluator: 500, no field named, counted as
+// witness_failed.
+describe('a lookup key cannot be zero', () => {
+  const ZERO = `0x${'0'.repeat(40)}`;
+
+  it.each(['payment_token', 'payment_recipient'])('refuses %s as the zero address, by name', async (field) => {
+    await expect(build({ [field]: ZERO }))
+      .rejects.toThrow(`${field}: must not be the zero address; the circuit rejects a zero lookup key`);
+  });
+
+  it('refuses it however the zero address is spelt', async () => {
+    await expect(build({ payment_token: `  0X${'0'.repeat(40)}  ` }))
+      .rejects.toThrow('payment_token: must not be the zero address');
+    await expect(build({ payment_recipient: '0'.repeat(40) }))
+      .rejects.toThrow('payment_recipient: must not be the zero address');
+  });
+
+  it('still takes an address that only starts with zeros', async () => {
+    const input = await build({ payment_recipient: '0x00000000000000000000000000000000000000ff' });
+    expect(input.recipient_in).toBe('255');
+  });
+
+  it('checks the category as the value the circuit compares, which is the witness value', async () => {
+    const input = await build({});
+    expect(categoryToField('api-call', 'payment_endpoint_category')).toBe(input.payment_category);
+    expect(await hashCategory('api-call', 'payment_endpoint_category')).toBe(input.payment_category);
+    expect(input.payment_category).not.toBe('0');
   });
 });
 

@@ -112,6 +112,22 @@ describe('rule 3, the token whitelist', () => {
   });
 });
 
+// square#253. The three lookup keys raised one sentence between them, so the
+// message could not say which value was wrong. validateRequest refuses a zero
+// token and recipient first; this is the refusal behind it, for a witness that
+// reached the evaluator anyway.
+describe('a zero lookup key is refused by name', () => {
+  it.each([
+    ['token_in', 'payment_token (token_in)'],
+    ['recipient_in', 'payment_recipient (recipient_in)'],
+    ['payment_category', 'payment_endpoint_category (payment_category)'],
+  ])('names %s', async (signal, key) => {
+    const input = await buildCircuitInput(request());
+    await expect(evaluateRules({ ...input, [signal]: '0' }))
+      .rejects.toThrow(`${key}: lookup key is zero; the circuit rejects this witness`);
+  });
+});
+
 describe('rule 4, the blocked list', () => {
   it('flags a blocked recipient', async () => {
     const { violated } = await evaluate({ payment_recipient: ADDR.blocked });

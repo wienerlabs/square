@@ -181,6 +181,9 @@ describe('POST /prove refuses a bad request before proving', () => {
     ['a category over 32 bytes', { allowed_endpoint_categories: ['x'.repeat(33)] }, 'allowed_endpoint_categories: exceeds the 32-byte limit'],
     ['a blocked_addresses entry that is an object', { blocked_addresses: [{ address: '0x2222222222222222222222222222222222222222' }] }, 'blocked_addresses: must be a string'],
     ['a stripe_receipt_hash that is not a number', { stripe_receipt_hash: 'garbage' }, 'stripe_receipt_hash: must be a non-negative integer'],
+    // square#253: well formed, and still no proof can come out of it.
+    ['a payment_token that is the zero address', { payment_token: `0x${'0'.repeat(40)}` }, 'payment_token: must not be the zero address; the circuit rejects a zero lookup key'],
+    ['a payment_recipient that is the zero address', { payment_recipient: `0x${'0'.repeat(40)}` }, 'payment_recipient: must not be the zero address; the circuit rejects a zero lookup key'],
   ];
 
   const failures = async () => {
@@ -198,7 +201,7 @@ describe('POST /prove refuses a bad request before proving', () => {
     expect(logs).not.toContain('"event":"proof_failed"');
   });
 
-  it('counts none of the eleven as a proof failure', async () => {
+  it('counts none of the thirteen as a proof failure', async () => {
     const before = await failures();
     for (const [, overrides] of MALFORMED) {
       expect((await post({ ...VALID, ...overrides })).status).toBe(400);

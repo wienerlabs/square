@@ -60,9 +60,14 @@ const EPOCH_WEEKDAY_OFFSET = 3n;
 // with a zero key would have failed witness generation, but this refuses to
 // answer for it rather than reporting a membership result the circuit will not
 // stand behind.
-function isInList(needle, values) {
+//
+// The refusal names the key. All three used to raise the same sentence, so a zero
+// token, recipient and category could not be told apart (square#253).
+// validateRequest now refuses each of them first, by the request field's name,
+// and this is the line behind it.
+function isInList(needle, values, key) {
   if (needle === 0n) {
-    throw new Error('lookup key is zero; the circuit rejects this witness');
+    throw new Error(`${key}: lookup key is zero; the circuit rejects this witness`);
   }
   for (let i = 0; i < values.length; i += 1) {
     if (BigInt(values[i]) === needle) return true;
@@ -121,18 +126,18 @@ export async function evaluateRules(input) {
   // Rule 3 — the payment token is on the whitelist. The address is the field
   // element itself now; the Poseidon fold of high/low halves went with the
   // Solana pubkeys that needed it.
-  if (!isInList(BigInt(input.token_in), input.token_whitelist)) {
+  if (!isInList(BigInt(input.token_in), input.token_whitelist, 'payment_token (token_in)')) {
     violated.push(RULES.TOKEN_WHITELIST);
   }
 
   // Rule 4 — the recipient is not on the blocked list.
-  if (isInList(BigInt(input.recipient_in), input.blocked_addresses)) {
+  if (isInList(BigInt(input.recipient_in), input.blocked_addresses, 'payment_recipient (recipient_in)')) {
     violated.push(RULES.BLOCKED_RECIPIENT);
   }
 
   // Rule 5 — the endpoint category is allowed. Categories are strings, so this
   // one is still a Poseidon image.
-  if (!isInList(BigInt(input.payment_category), input.allowed_categories)) {
+  if (!isInList(BigInt(input.payment_category), input.allowed_categories, 'payment_endpoint_category (payment_category)')) {
     violated.push(RULES.ENDPOINT_CATEGORY);
   }
 
