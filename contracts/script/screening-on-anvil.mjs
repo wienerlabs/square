@@ -232,7 +232,7 @@ async function main() {
     const withdrawable = (who) => publicClient.readContract({ address: d.SquareJob, abi: kernelAbi, functionName: 'withdrawable', args: [who] });
     const clientBefore = await withdrawable(client.address);
     const net = await publicClient.readContract({ address: d.SquareJob, abi: kernelAbi, functionName: 'netPayout', args: [clean] });
-    const fin = await send(cranker, d.KeeperEvaluator, keeperAbi, 'finalize', [clean, '0x']);
+    const fin = await send(cranker, d.KeeperEvaluator, keeperAbi, 'finalize', [clean]);
     const checked = parseEventLogs({ abi: hookAbi, logs: fin.logs, eventName: 'ScreeningChecked' })[0];
     check('the hook saw the payee not cleared', checked?.args.cleared, false);
     check('the buyer is paid nothing', await withdrawable(DESIGNATED_BUYER), 0n);
@@ -259,7 +259,7 @@ async function main() {
     check('screened at release', again.status, 200);
     timings.push(['E  provider, before release', again.body.timings]);
     const providerBefore = await withdrawable(provider.address);
-    const paid = await send(cranker, d.KeeperEvaluator, keeperAbi, 'finalize', [honest, '0x']);
+    const paid = await send(cranker, d.KeeperEvaluator, keeperAbi, 'finalize', [honest]);
     check('the hook saw the payee cleared', parseEventLogs({ abi: hookAbi, logs: paid.logs, eventName: 'ScreeningChecked' })[0]?.args.cleared, true);
     check('the provider is paid the net',
       (await withdrawable(provider.address)) - providerBefore,
