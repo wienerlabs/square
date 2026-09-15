@@ -220,7 +220,13 @@ describe.skipIf(!HAVE_CIRCUIT)('the prover agrees with the circuit', () => {
   });
 
   it('is rejected by the circuit when a lookup key is the zero address', async () => {
-    await expect(witnessFor(request({ payment_token: `0x${'0'.repeat(40)}` })))
+    // square#253: validateRequest refuses a zero payment_token before any witness
+    // is built, so sending one here would assert the gate, not the circuit. The
+    // input is built valid and its key zeroed after, which is what reaches the
+    // wasm.
+    await witnessFor(request());
+    const input = await buildCircuitInput(request());
+    await expect(calculator.calculateWitness({ ...input, token_in: '0' }, true))
       .rejects.toThrow();
   });
 

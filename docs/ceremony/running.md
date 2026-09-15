@@ -116,6 +116,10 @@ exports one from the final key and compares it with the `payment_vk.json`
 `finalize` wrote and with the repository's `build/payment_vk.json`, and checks
 the ceremony's file against the digest in the transcript. It exits non-zero if
 anything fails, and it reports every failure rather than stopping at the first.
+A check that cannot run at all is one of those failures, and the sections after
+it still run: circom missing from the machine doing the checking, a final key the
+inspector cannot read, a transcript that is not there. The count at the end is
+printed on every run (square#255).
 
 The pinned key is what separates "matches what drand told me" from "is what
 drand produced", so an auditor whose DNS or TLS path to `api.drand.sh` is
