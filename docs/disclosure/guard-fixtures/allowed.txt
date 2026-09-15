@@ -32,6 +32,10 @@ Use the production RPC endpoint only after the testnet run is green.
 This is the production payment instruction used by both the dashboard and the agent.
 Proving time is around 600 ms on commodity CPU hardware.
 Groth16 over BN254, verified on-chain through the 0x06, 0x07 and 0x08 precompiles.
+The circuit and the prover are live, and a proof built from them verifies against the pairing precompiles on Arc Testnet.
+The Groth16 verifier deployed there is superseded and rejects every proof this build produces.
+The on-chain verifier is not live for this key; the ceremony in #16 fixes the key that gets a permanent address.
+A proof from the circuit, the prover service and the on-chain verifier agree.
 
 # --- Turkish -----------------------------------------------------------------
 

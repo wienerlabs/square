@@ -20,6 +20,15 @@
 # aperture/dashboard/src/app/docs/page.tsx:722 (served live at a-perture.com/docs), before the fix
 Trusted setup uses the Polygon Hermez public ceremony (54 contributors). The architecture is production-grade; the deployment is on Devnet for testing.
 
+# --- Found on this repository's own surfaces (square#262) ---------------------
+
+# app/src/components/ComplianceSlot.tsx:14-15, before the fix
+The circuit, the prover and the on-chain verifier are live; settlement is not wired to them.
+# README.md:33-34, before the fix
+The circuit, the prover and the on-chain verifier are live (#14, #18, #17), and the check is wired into settlement.
+The Groth16 verifier is live on Arc Testnet.
+The deployed verifier is already live.
+
 # --- The provenance claim this disclosure got wrong itself -------------------
 
 # From the first version of this PR, and from aperture/programs/verifier/src/groth16_vk.rs:18

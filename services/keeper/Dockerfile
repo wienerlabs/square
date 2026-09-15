@@ -4,12 +4,13 @@ COPY packages/did-resolver packages/did-resolver
 COPY packages/core packages/core
 COPY packages/data packages/data
 COPY packages/observability packages/observability
+COPY packages/hardening packages/hardening
 # The keeper's package-lock records @squaresdk/indexer as a file: link. It is a
 # devDependency, used only by the anvil test, but npm resolves every link in the
 # lockfile before it decides what to omit, so the directory has to be here.
 COPY services/indexer services/indexer
 COPY services/keeper services/keeper
-RUN for p in packages/did-resolver packages/core packages/data packages/observability; do (cd $p && npm install --install-links --omit=dev --ignore-scripts && npm install --install-links --include=dev typescript && npm run build); done
+RUN for p in packages/did-resolver packages/core packages/data packages/observability packages/hardening; do (cd $p && npm install --install-links --omit=dev --ignore-scripts && npm install --install-links --include=dev typescript && npm run build); done
 # --omit=dev from the start rather than a prune at the end. `npm install
 # --install-links` copies the file: dependencies in as real directories, and
 # `npm prune --omit=dev` then deletes every one of them -- node_modules/@squaresdk

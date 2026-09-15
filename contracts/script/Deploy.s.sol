@@ -17,7 +17,8 @@ import {Groth16Verifier} from "../src/Groth16Verifier.sol";
 ///     --rpc-url "$ARC_RPC_URL" --private-key "$DEPLOYER_PRIVATE_KEY" --broadcast
 ///
 /// Arc pays gas in USDC, so the deployer needs a funded testnet account. The
-/// deployment costs roughly 486k gas by local measurement.
+/// deployment cost 714,837 gas on Arc Testnet, read from the receipt of
+/// 0xc16ff2be… (contracts/README.md, "Measured cost").
 contract Deploy is Script {
     function run() external returns (Groth16Verifier verifier) {
         vm.startBroadcast();
