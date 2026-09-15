@@ -123,7 +123,7 @@ list's root and the proof bytes are what reach the chain.
 | `square-mcp` | no (the CLI or the app) | every `square_hire` job, across restarts (`SQUARE_POLICY_FILE`, `SQUARE_PROVER_ARTIFACTS`, `SQUARE_DUTY_STATE`) | yes |
 | `square-hosted` | no | every delegated job, across restarts (`compliance` block, `stateFile`) | yes |
 | app | Policy page | job page, `Bind proof`, when `NEXT_PUBLIC_PROVER_URL` is set | the existing `Finalize` action |
-| lifecycle runner | on first run (`LIFECYCLE_POLICY_FILE`) | before each release it cranks | as before |
+| lifecycle runner | on first run (`LIFECYCLE_POLICY_FILE`) | before each release it cranks; with `LIFECYCLE_FINALIZER=keeper`, once per job before the window closes, and only when the close is within half the tolerance | as before; in keeper mode not at all, the keeper's crank is read back |
 
 ## What this does not decide
 

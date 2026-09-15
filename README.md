@@ -113,6 +113,7 @@ Design notes, each the record of a decision:
 - [A missing proof holds the escrow; only the mandate refunds](docs/decisions/proof-required.md)
 - [A hook informs, it never vetoes, on the way out of escrow](docs/decisions/hook-failure-modes.md)
 - [A lapsed dispute returns the bond](docs/decisions/lapsed-bond.md)
+- [From the mandate to the payment: the product in one flow](docs/design/mandate-to-payment.md)
 - [Gas, measured](docs/deploy/gas.md)
 - [End to end: a policy, a proof built from it, and Arc accepting it](docs/deploy/end-to-end-5042002.md)
 

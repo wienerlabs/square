@@ -161,6 +161,10 @@ jobs:
             --rpc http://127.0.0.1:8545 --deployment ../../contracts/deployments/31337.json --json
           LIFECYCLE_POLICY_FILE="$RUNNER_TEMP/lifecycle-policy.json" npm run lifecycle
           grep -c setComplianceProof "$LIFECYCLE_REPORT" | xargs -I{} echo "{} proofs bound over the lifecycle"
+          # square#31: the report's "The eight steps" table names every step with its evidence.
+          steps=$(grep -cE '^\| [1-8] \|' "$LIFECYCLE_REPORT")
+          [ "$steps" = "8" ] || { echo "expected 8 numbered steps in the report, found $steps"; exit 1; }
+          grep -q 'ReleaseVerified: the module read the proof' "$LIFECYCLE_REPORT"
 
       - name: How many tests ran
         if: always()

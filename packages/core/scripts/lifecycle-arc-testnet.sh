@@ -12,5 +12,10 @@ export FUND_PER_ACTOR="${FUND_PER_ACTOR:-1}"
 export FUND_CLIENT="${FUND_CLIENT:-3.2}"
 export BUDGET_USDC="${BUDGET_USDC:-0.25}"
 export AGENT_ID="${AGENT_ID:-892531}"
-echo "lifecycle against chain $CHAIN_ID via $RPC_URL, budget $BUDGET_USDC USDC, agent $AGENT_ID"
+# square#31, square#336: once a keeper runs against the stack, LIFECYCLE_FINALIZER=keeper
+# leaves every settlement to it and records its transactions; the runner's own crank
+# would only race it. The keeper cranks nothing under its profitability bar, so the
+# budget has to clear it (docs/design/mandate-to-payment.md, "Running it").
+export LIFECYCLE_FINALIZER="${LIFECYCLE_FINALIZER:-self}"
+echo "lifecycle against chain $CHAIN_ID via $RPC_URL, budget $BUDGET_USDC USDC, agent $AGENT_ID, settled by $LIFECYCLE_FINALIZER"
 npm run lifecycle
