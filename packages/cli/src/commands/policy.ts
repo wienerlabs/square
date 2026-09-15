@@ -429,13 +429,14 @@ function proveCommand(): Command {
       return;
     }
     const events: DutyEvent[] = [];
-    const duty = new ComplianceDuty({ client, policy, prover, onEvent: (e) => events.push(e) });
+    const duty = new ComplianceDuty({ client, policy, prover, onEvent: (e) => events.push(e), discover: false });
     duty.track(id, opts.category);
     const report = await duty.tick();
     if (opts.json) log.out(JSON.stringify({ report, events }, (_, v) => (typeof v === "bigint" ? v.toString() : v instanceof Error ? v.message : v), 2));
     else {
       log.blank();
       for (const event of events) log.raw(`  ${describeEvent(event, network)}`);
+      if (report.waiting.length > 0) log.step(`Job ${jobId}: no release is possible yet, so nothing was bound; run this again as the window closes, or watch it.`);
       if (report.current.length > 0 && report.released.length === 0) log.success(`Job ${jobId}: the bound proof is current; the window has not closed.`);
       log.blank();
     }
@@ -465,7 +466,8 @@ function watchCommand(): Command {
     const policy = readPolicy(opts.file);
     const { network, deployment } = await target(opts);
     const { client } = await signingSquare(network, deployment, `Watch ${jobIds.length} job(s)`);
-    const duty = new ComplianceDuty({ client, policy, prover: createProverClient({ url: opts.prover }), onEvent: (event) => log.raw(`  ${describeEvent(event, network)}`) });
+    // The jobs named, and only those: the chain is not scanned for others (square#348 is the servers' recovery).
+    const duty = new ComplianceDuty({ client, policy, prover: createProverClient({ url: opts.prover }), onEvent: (event) => log.raw(`  ${describeEvent(event, network)}`), discover: false });
     for (const jobId of jobIds) duty.track(BigInt(jobId), opts.category);
     const controller = new AbortController();
     process.once("SIGINT", () => controller.abort());
@@ -481,6 +483,8 @@ function describeEvent(event: DutyEvent, network: Network): string {
   switch (event.type) {
     case "no-module":
       return `${c.dim("·")} the hook holds no compliance module; nothing to prove`;
+    case "recovered":
+      return `${c.dim("·")} recovered ${event.restored.length + event.discovered.length} job(s)`;
     case "bound":
       return `${c.green("✓")} job ${event.jobId}: proof bound in ${txLine(network, event.transaction)} (${event.because.join("; ")})`;
     case "refused":

@@ -29,13 +29,22 @@ const hashOf = (label: string, n: number): Hex => `0x${Buffer.from(`${label}:${n
  * order is the point of the hire tool.
  */
 export function fakeChain(
-  options: { account?: Address | undefined; balance?: bigint | undefined; horizon?: number | undefined; now?: (() => number) | undefined; wallet?: boolean | undefined } = {},
+  options: {
+    account?: Address | undefined;
+    balance?: bigint | undefined;
+    horizon?: number | undefined;
+    now?: (() => number) | undefined;
+    wallet?: boolean | undefined;
+    /** A compliance module in the hook's slot, and whether this wallet has a policy on the registry (square#350). */
+    module?: Address | undefined;
+    policy?: boolean | undefined;
+  } = {},
 ) {
   const account = options.account ?? OWNER;
   const records = new Map<bigint, FakeRecord>();
   const agents = new Map<bigint, bigint>();
   const writes: string[] = [];
-  const state = { balance: options.balance ?? 1_000_000_000n, counter: 0n, txs: 0 };
+  const state = { balance: options.balance ?? 1_000_000_000n, counter: 0n, txs: 0, withdrawable: 0n };
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));
   const tx = (label: string) => {
     state.txs += 1;
@@ -62,12 +71,32 @@ export function fakeChain(
       record(id);
       return agents.get(id) ?? null;
     },
-    // No module in the hook's slot: square_job reports no compliance state.
+    // No module in the hook's slot unless the stage says so: square_job then
+    // reports no compliance state, and hire asks nothing of the registry.
     async complianceModule() {
-      return null;
+      return options.module ?? null;
     },
     async complianceTolerance() {
-      return null;
+      return options.module === undefined ? null : 3_600n;
+    },
+    async policyOf() {
+      return { commitment: options.policy ? `0x${"ab".repeat(32)}` : ZERO, dailyLimit: 0n, updatedAt: 0n, epoch: 0n };
+    },
+    async claimRefund(id: bigint) {
+      const job = record(id);
+      if (job.status !== JobStatus.Funded) throw new Error("WrongStatus()");
+      if (now() < job.expiredAt) throw new Error("NotExpired()");
+      job.status = JobStatus.Expired;
+      state.withdrawable += job.budget;
+      writes.push(`claimRefund(${id})`);
+      return tx("refund");
+    },
+    async withdraw() {
+      if (state.withdrawable === 0n) throw new Error("NothingToWithdraw()");
+      state.balance += state.withdrawable;
+      writes.push(`withdraw(${state.withdrawable})`);
+      state.withdrawable = 0n;
+      return tx("withdraw");
     },
     async usdcBalance() {
       return state.balance;

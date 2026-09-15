@@ -42,6 +42,8 @@ export interface FakeChain {
   tolerance: bigint;
   writes: string[];
   proofs: ProveRequest[];
+  /** The block spans the duty's recovery asked for. */
+  scans: [bigint, bigint][];
   /** What the module says to a proof, computed from its signals; override to force a verdict. */
   judge: (jobId: bigint, proof: Hex) => boolean;
 }
@@ -58,6 +60,7 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
     tolerance: options.tolerance ?? 3_600n,
     writes: [],
     proofs: [],
+    scans: [],
     judge: (jobId, proof) => {
       const decoded = decodeComplianceProof(proof);
       if (decoded === null) return false;
@@ -84,7 +87,17 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
   chain.client = {
     account: CLIENT,
     deployment: { chainId: 31337, usdc: USDC, squareJob: "0x" + "11".repeat(20), claimMarket: "0x" + "22".repeat(20), squareHook: "0x" + "33".repeat(20) },
-    publicClient: { getBlock: async () => ({ timestamp: chain.now }) },
+    publicClient: {
+      getBlock: async () => ({ timestamp: chain.now, number: 100n }),
+      // This wallet's JobCreated logs, for the duty's recovery scan: every job
+      // the map holds for CLIENT, whatever its status, the way the chain would.
+      getLogs: async (params: { args?: { client?: Address }; fromBlock: bigint; toBlock: bigint }) => {
+        chain.scans.push([params.fromBlock, params.toBlock]);
+        return [...chain.jobs.entries()]
+          .filter(([, j]) => params.args?.client === undefined || j.client.toLowerCase() === params.args.client.toLowerCase())
+          .map(([id]) => ({ args: { jobId: BigInt(id) } }));
+      },
+    },
     async getJobRecord(id: bigint) {
       const j = job(id);
       return { status: j.status, client: j.client, provider: j.provider };
@@ -155,7 +168,10 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
   chain.prover = {
     async prove(request: ProveRequest): Promise<ProveResponse> {
       chain.proofs.push(request);
-      const compliant = BigInt(request.payment_amount) <= BigInt(request.max_per_transaction);
+      const violated: string[] = [];
+      if (BigInt(request.payment_amount) > BigInt(request.max_per_transaction)) violated.push("per_transaction_limit");
+      if (!request.allowed_endpoint_categories.includes(request.payment_endpoint_category)) violated.push("endpoint_category");
+      const compliant = violated.length === 0;
       const input = [
         compliant ? "1" : "0",
         BigInt(chain.commitment).toString(),
@@ -168,7 +184,7 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
       ];
       return {
         is_compliant: compliant,
-        violated_rules: compliant ? [] : ["per_transaction_limit"],
+        violated_rules: violated as ProveResponse["violated_rules"],
         policy_data_hash: BigInt(chain.commitment).toString(),
         policy_data_hash_hex: chain.commitment,
         public_signals: {},

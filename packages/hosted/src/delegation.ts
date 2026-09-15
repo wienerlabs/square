@@ -53,8 +53,8 @@ export interface DelegationDeps {
    * model is told the hash and the transaction and nothing more.
    */
   resolveDeliverable?: ((task: TaskStatusResult, profile: AgentProfile) => Promise<string | undefined>) | undefined;
-  /** Told of every job funded, with the capability it bought: the release duty tracks it from here (square#335). */
-  onFunded?: ((jobId: bigint, capability: string) => void) | undefined;
+  /** Told of every job funded, with the capability it bought and its budget: the release duty tracks it from here (square#335). */
+  onFunded?: ((jobId: bigint, capability: string, budget: bigint) => void) | undefined;
 }
 
 export interface DelegationInput {
@@ -115,7 +115,7 @@ export async function delegate(deps: DelegationDeps, input: DelegationInput): Pr
       pollIntervalMs: deps.pollIntervalMs,
       admit: (amount) => deps.allowance.admit(amount),
       onFunded: (job) => {
-        deps.onFunded?.(job.jobId, input.capability);
+        deps.onFunded?.(job.jobId, input.capability, job.budget);
         return deps.allowance.funded(job);
       },
     });
@@ -155,7 +155,9 @@ export async function delegate(deps: DelegationDeps, input: DelegationInput): Pr
       };
     case "undispatched":
       return {
-        content: `${head}\nThe task could not be dispatched: ${result.reason ?? "no answer"}. The escrow stays on job ${result.jobId} until it expires.`,
+        content:
+          `${head}\nThe task could not be handed to the agent: ${result.reason ?? "no answer"}. The escrow stays on job ${result.jobId}; ` +
+          "delegate again with the same input to try once more, and the escrow returns to this wallet if the job expires undelivered.",
         isError: true,
         result,
       };

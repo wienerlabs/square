@@ -78,6 +78,7 @@ describe.skipIf(notReady !== null)("a hire through square-mcp is proved and rele
   let agentUrl: string;
   let client: Client;
   let stderr = "";
+  let policyFile = "";
 
   beforeAll(async () => {
     if (!existsSync(BIN)) throw new Error(`${BIN} is not built; run npm run build first`);
@@ -90,7 +91,7 @@ describe.skipIf(notReady !== null)("a hire through square-mcp is proved and rele
       tokens: [deployment.usdc],
     });
     await institution.setPolicy((await policyCommitment(policy)).hex, BigInt(policy.max_daily_spend));
-    const policyFile = join(mkdtempSync(join(tmpdir(), "square-policy-")), "policy.json");
+    policyFile = join(mkdtempSync(join(tmpdir(), "square-policy-")), "policy.json");
     writeFileSync(policyFile, policyToJson(policy));
 
     const port = await freePort();
@@ -110,6 +111,11 @@ describe.skipIf(notReady !== null)("a hire through square-mcp is proved and rele
     });
     listening = await agent.listen(port, "127.0.0.1");
 
+    ({ client } = await start(policyFile));
+  }, 120_000);
+
+  /** A `square-mcp` process over stdio, the way a desktop client launches one; the same env twice is a restart. */
+  async function start(policyFile: string): Promise<{ client: Client }> {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [BIN],
@@ -127,9 +133,10 @@ describe.skipIf(notReady !== null)("a hire through square-mcp is proved and rele
       stderr: "pipe",
     });
     transport.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    client = new Client({ name: "claude-desktop-stand-in", version: "0" });
-    await client.connect(transport);
-  }, 120_000);
+    const started = new Client({ name: "claude-desktop-stand-in", version: "0" });
+    await started.connect(transport);
+    return { client: started };
+  }
 
   afterAll(async () => {
     await client?.close();
@@ -148,7 +155,7 @@ describe.skipIf(notReady !== null)("a hire through square-mcp is proved and rele
     }
   };
 
-  it("hires, sees the proof bound and current, and after the window the provider holds the whole net", async () => {
+  it("hires, keeps the job across a restart of the server, and after the window binds one proof and pays the provider the whole net", async () => {
     const owedBefore = await provider.withdrawable(account(2).address);
 
     const hired = await call("square_hire", { agent: agentUrl, capability: "text.summarize", input: "one two three four five" });
@@ -157,16 +164,22 @@ describe.skipIf(notReady !== null)("a hire through square-mcp is proved and rele
     const jobId = (hired.structuredContent as { jobId: string }).jobId;
     expect(hired.structuredContent).toMatchObject({ task: { state: "DELIVERED" } });
 
-    // The duty binds a proof for the release as it stands: this provider, this net, today's counter.
-    const bound = await until(
-      () => call("square_job", { jobId }),
-      (result) => (result.structuredContent as { compliance?: { proof?: string } }).compliance?.proof === "current",
-      "the proof being bound",
-    );
-    expect(bound.structuredContent).toMatchObject({ status: "Submitted", compliance: { proof: "current", payee: account(2).address } });
+    // A day to the close: the duty tracks the job and binds nothing yet (square#349).
+    const tracked = await call("square_job", { jobId });
+    expect(tracked.structuredContent).toMatchObject({ status: "Submitted", compliance: { proof: "none", tracked: true, payee: account(2).address } });
+    expect((tracked.structuredContent as { compliance: { summary: string } }).compliance.summary).toContain("binds one when the window is within half the tolerance of closing");
+    expect(await institution.complianceProofOf(BigInt(jobId))).toBe("0x");
     const net = await institution.netPayout(BigInt(jobId));
 
-    // The window closes; the duty rebinds for the new clock and cranks, and the module verifies.
+    // The server restarts. The state file beside the policy carries the job (square#348).
+    await client.close();
+    const restarted = await start(policyFile);
+    client = restarted.client;
+    await until(() => Promise.resolve(stderr), (log) => log.includes("recovered 1 job(s): 1 from the state"), "the recovery", 20_000);
+    const still = await call("square_job", { jobId });
+    expect(still.structuredContent).toMatchObject({ compliance: { proof: "none", tracked: true } });
+
+    // The window closes; the duty binds once and cranks, and the module verifies.
     await testClient.increaseTime({ seconds: 86_400 + 1 });
     await testClient.mine({ blocks: 1 });
     await until(
@@ -177,6 +190,7 @@ describe.skipIf(notReady !== null)("a hire through square-mcp is proved and rele
     );
     // The server says what it did; the pipe may lag the chain by a moment.
     await until(() => Promise.resolve(stderr), (log) => log.includes(`job ${jobId}: released in`), "the server's report", 10_000);
+    expect(stderr.match(new RegExp(`job ${jobId}: proof bound in`, "g"))).toHaveLength(1);
     expect(stderr).toContain(`job ${jobId}: released in 0x`);
     expect(stderr).toContain(`, ${formatUnits(net, 6)} USDC to ${account(2).address}`);
     expect((await provider.withdrawable(account(2).address)) - owedBefore).toBe(net);
@@ -185,5 +199,7 @@ describe.skipIf(notReady !== null)("a hire through square-mcp is proved and rele
     const settled = await call("square_job", { jobId });
     expect(settled.structuredContent).toMatchObject({ status: "Completed" });
     expect((settled.structuredContent as { compliance?: unknown }).compliance).toBeUndefined();
+    // And the state file no longer holds it.
+    expect(JSON.parse(readFileSync(`${policyFile}.duty.json`, "utf8"))).toEqual({ jobs: [] });
   }, 300_000);
 });

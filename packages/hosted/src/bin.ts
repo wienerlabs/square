@@ -8,8 +8,9 @@ import {
   networkFor,
   type SquareDeployment,
 } from "@squaresdk/core";
-import { createProverClient, parsePolicy } from "@squaresdk/policy";
-import { createPublicClient, createWalletClient, defineChain, formatUnits, http, type Chain, type PublicClient } from "viem";
+import { createProverClient, describeDutyEvent, parsePolicy } from "@squaresdk/policy";
+import { fileDutyState } from "@squaresdk/policy/node";
+import { createPublicClient, createWalletClient, defineChain, http, type Chain, type PublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { parseHostedConfig, type HostedAgentConfig } from "./config.js";
 import { hostAgent, sealContext, type ComplianceDeps } from "./host.js";
@@ -137,25 +138,13 @@ function complianceOf(config: HostedAgentConfig, configPath: string): Compliance
   if (!config.compliance) return undefined;
   const file = resolve(dirname(configPath), config.compliance.policyFile);
   const policy = parsePolicy(JSON.parse(readFileSync(file, "utf8")));
+  const stateFile = config.compliance.stateFile === undefined ? `${configPath}.duty.json` : config.compliance.stateFile === false ? undefined : resolve(dirname(configPath), config.compliance.stateFile);
   return {
     policy,
     prover: createProverClient({ url: config.compliance.proverUrl }),
     intervalMs: config.compliance.intervalMs,
-    onEvent: (event) => {
-      const text =
-        event.type === "error"
-          ? `${event.jobId === null ? "duty" : `job ${event.jobId}`}: ${event.error.message}`
-          : event.type === "no-module"
-            ? "the hook holds no compliance module; nothing to prove"
-            : event.type === "bound"
-              ? `job ${event.jobId}: proof bound in ${event.transaction} (${event.because.join("; ")})`
-              : event.type === "refused"
-                ? `job ${event.jobId}: no proof bound, ${event.reason}: ${event.detail}`
-                : event.type === "released"
-                  ? `job ${event.jobId}: released in ${event.transaction}, ${event.verified === false ? `refused by the module (${event.refusedFor ?? "reason unknown"})` : `${formatUnits(event.amount, 6)} USDC to ${event.payee}`}`
-                  : `job ${event.jobId}: settled by another hand (status ${event.status})`;
-      console.error(`[square-hosted] compliance: ${text}`);
-    },
+    ...(stateFile !== undefined ? { state: fileDutyState(stateFile) } : {}),
+    onEvent: (event) => console.error(`[square-hosted] compliance: ${describeDutyEvent(event)}`),
   };
 }
 
