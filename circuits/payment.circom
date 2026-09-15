@@ -126,8 +126,18 @@ template PaymentCompliance(MAX_WHITELIST, MAX_BLOCKED, MAX_CATEGORIES) {
     // binding.
     signal input policy_salts[8];
 
-    // Time restriction. time_active = 0 means "no time gate"; the remaining
-    // time fields are then free witnesses ignored by both the hash and the rule.
+    // Time restriction. time_active = 0 means "no time gate": the commitment
+    // muxes time_field to 0 and rule 6 passes, so neither reads the other three.
+    //
+    // They are not free witnesses, though (square#256). Three constraints run
+    // whatever time_active is: Num2Bits(5) on each hour bound (Window bounds,
+    // below) and the seven-bit decomposition of time_days_bitmask (Rule 6). With
+    // the gate off each of the three must still be in range, both hours under 32
+    // and the mask under 128, or no witness satisfies the circuit and no proof
+    // comes out at all. Send 0 for all three when there is no window, as the
+    // prover does. The constraints stay where they are: without them, rule 6
+    // with the gate on could compare the hour against a field element near the
+    // modulus.
     signal input time_active;
     signal input time_days_bitmask;
     signal input time_start_hour_utc;
