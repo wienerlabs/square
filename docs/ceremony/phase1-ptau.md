@@ -1,6 +1,6 @@
 # Phase 1: the adopted powers of tau
 
-**Adopted:** Perpetual Powers of Tau, contribution 80, truncated to power 13 —
+**Adopted:** Perpetual Powers of Tau, contribution 80, truncated to power 14 —
 `ppot_0080_14.ptau`.
 
 Phase 1 of a Groth16 setup is universal: it is not circuit-specific, it does not
@@ -87,9 +87,9 @@ Two independent checks, and neither requires trusting this document.
 ```console
 $ node circuits/scripts/fetch-ptau.mjs --verify
 ppot_0080_14.ptau
-  9530514 bytes
-  sha256  ccee28086e4b81d81a6e16fdee054d1dbd5276362e2662d4205d31de45cb930f
-  blake2b bf0c2d498f1197ad04ec0dbfcdda6df6348cbd793759f1f986e5cdf1a4100842293dfad6b8961f64b7ba35c162b5c821c4c097a52f3a639b55b0e765ec311b44
+  18967698 bytes
+  sha256  3ca1149e9349b22b0ee0649399cfb787677129b7b1189d1899fc0d615d9583db
+  blake2b a91842802f01b33fd42f5f69c3e49879ae03f0ae1f448b0c151244c9957024bd30bf5e3cc999ff2aeb02ebb959124a3a6a3cc20691cb4843a1234a02232072f3
   matches the adopted Perpetual Powers of Tau contribution 80
 ```
 
