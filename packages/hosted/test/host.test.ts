@@ -8,6 +8,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { HostedAgentConfig } from "../src/config.js";
 import type { DelegationDeps } from "../src/delegation.js";
+import { newPolicy, type DutyEvent, type TrackedJob } from "@squaresdk/policy";
 import { hostAgent, hostedHandlers, sealContext, type HandlerContext } from "../src/host.js";
 import { deriveSealKey, seal } from "../src/sealed.js";
 import { CHAIN_ID, card, cardsOver, deployment, didOf, fakeAgent, fakeSquare, fetchRouting, HOST_WALLET, resolution, resolverOf, SUB_WALLET } from "./helpers/fakeSquare.js";
@@ -311,6 +312,43 @@ describe("hostAgent", () => {
     await expect(
       hostAgent({ ...config, agentId: "2", provider: { tier: "own", apiKey: sealed } }, { walletClient, publicClient, deployment, sealSecret: secret, resolver: resolverOf({}) }),
     ).rejects.toThrow(/does not open with this key for this agent/);
+  });
+
+  it("recovers the delegated jobs a restart forgot from the duty's state, budgets and all, into the allowance (square#348)", async () => {
+    const policy = newPolicy({ operator: HOST_WALLET, maxDailySpend: usdc("5"), maxPerTransaction: usdc("1"), categories: ["text.summarize"], tokens: [deployment.usdc] });
+    const kept: TrackedJob[] = [
+      { jobId: 4n, category: "text.summarize", budget: usdc("0.10") },
+      { jobId: 5n, category: undefined },
+    ];
+    const events: DutyEvent[] = [];
+    const recovered = new Promise<void>((resolve) => {
+      events.push = (event: DutyEvent) => {
+        Array.prototype.push.call(events, event);
+        if (event.type === "recovered") resolve();
+        return events.length;
+      };
+    });
+    const hosted = await hostAgent(config, {
+      walletClient,
+      publicClient,
+      deployment,
+      anthropic: scriptedModel([]),
+      resolver: resolverOf({}),
+      compliance: {
+        policy,
+        prover: { prove: async () => { throw new Error("not asked"); } },
+        state: { load: () => kept, save: () => undefined },
+        discover: false,
+        intervalMs: 60_000,
+        onEvent: (event) => events.push(event),
+      },
+    });
+    await recovered;
+    expect(events[0]).toEqual({ type: "recovered", restored: [4n, 5n], discovered: [] });
+    expect(hosted.duty!.jobs()).toEqual(kept);
+    // The budget the state kept is escrow the allowance counts again; a job with none is read back from the chain on the next view.
+    expect(hosted.allowance!.inFlightJobs()).toEqual([{ jobId: 4n, budget: usdc("0.10") }]);
+    await hosted.close();
   });
 
   it("takes the platform's client for the platform tier, and wants an endpoint to resolve the agents it delegates to", async () => {

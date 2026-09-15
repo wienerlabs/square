@@ -2,12 +2,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { A2AClient, JOB_STATUS_NAMES, TaskState, WellKnownCache, type TaskStatusResult } from "@squaresdk/a2a";
 import { JobStatus, type JobStatusValue, type SquareClient } from "@squaresdk/core";
-import { ComplianceDuty, proofState, releaseFacts, type DutyEvent, type Policy, type Prover } from "@squaresdk/policy";
+import { ComplianceDuty, proofState, releaseFacts, type DutyEvent, type DutyState, type Policy, type Prover } from "@squaresdk/policy";
 import { createPayingFetch, decodePaymentResponseHeader, networkOf, PAYMENT_RESPONSE_HEADER } from "@squaresdk/x402";
 import { formatUnits, parseUnits, type Hex, type LocalAccount } from "viem";
 import { z } from "zod";
 import { lookupAgent, type AgentProfile, type DidResolverLike } from "./agents.js";
-import { hire, HireRefusedError, type HireResult } from "./hire.js";
+import { dispatch, hire, HireRefusedError, type DispatchOutcome, type HireResult } from "./hire.js";
 
 export interface SquareMcpServerOptions {
   /**
@@ -52,6 +52,15 @@ export interface ComplianceOptions {
   /** How often the duty looks at its jobs; well inside the module's tolerance. Default 15 s. */
   intervalMs?: number | undefined;
   onEvent?: ((event: DutyEvent) => void) | undefined;
+  /**
+   * Where the duty keeps its jobs across restarts (square#348): a hire's
+   * window outlives the process that funded it. `fileDutyState` from
+   * `@squaresdk/policy/node` is one; without it the duty still finds this
+   * wallet's open jobs on the chain when it starts.
+   */
+  state?: DutyState | undefined;
+  /** Whether the duty scans the chain for this wallet's open jobs at start. Default true. */
+  discover?: boolean | undefined;
 }
 
 const USDC = /^\d+(\.\d{1,6})?$/;
@@ -62,11 +71,14 @@ type Structured = Record<string, unknown>;
 /**
  * Square as an MCP server, for a client such as Claude Desktop or Cursor.
  *
- * Five tools. `square_agent` looks an agent up by DID or URL and says what
+ * Seven tools. `square_agent` looks an agent up by DID or URL and says what
  * it offers and for how much; `square_hire` escrows a job for it on
  * SquareJob and gives it the task over A2A; `square_task` and `square_job`
- * read where the task and the job stand afterwards; `square_call` pays a
- * capability per call through x402, for an agent that serves it that way.
+ * read where the task and the job stand afterwards; `square_dispatch` hands
+ * a funded job's task to the agent again when the hire could not, and
+ * `square_refund` takes an expired job's escrow back (square#351);
+ * `square_call` pays a capability per call through x402, for an agent that
+ * serves it that way.
  *
  * The money moves the way it does everywhere else in this repository:
  * `square_hire` creates, budgets and funds the job from the wallet, the
@@ -112,27 +124,36 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
     return next;
   };
 
-  // The duty runs for as long as the server does, from the first hire on:
-  // its jobs outlive the tool call that funded them by the challenge window,
-  // and the proof they carry has to be current when the window closes.
+  // The duty runs for as long as the server does, from the start: its jobs
+  // outlive the tool call that funded them by the challenge window, and a
+  // restart in between must not lose them (square#348), so the run begins
+  // by recovering what the state holds and what the chain shows this wallet
+  // still has open, before any hire.
   let duty: ComplianceDuty | undefined;
-  let dutyRun: Promise<void> | undefined;
   const dutyStop = new AbortController();
   if (options.compliance && canSpend) {
     const compliance = options.compliance;
-    duty = new ComplianceDuty({ client, policy: compliance.policy, prover: compliance.prover, onEvent: compliance.onEvent, serialize: serially });
+    duty = new ComplianceDuty({
+      client,
+      policy: compliance.policy,
+      prover: compliance.prover,
+      onEvent: compliance.onEvent,
+      serialize: serially,
+      state: compliance.state,
+      discover: compliance.discover,
+    });
+    const run = duty.run(dutyStop.signal, { intervalMs: compliance.intervalMs }).catch((error: unknown) => {
+      compliance.onEvent?.({ type: "error", jobId: null, error: error instanceof Error ? error : new Error(String(error)) });
+    });
     const previousClose = server.server.onclose;
     server.server.onclose = () => {
       dutyStop.abort();
+      void run;
       previousClose?.();
     };
   }
-  const trackFunded = (jobId: bigint, capability: string): void => {
-    if (!duty) return;
-    duty.track(jobId, capability);
-    dutyRun ??= duty.run(dutyStop.signal, { intervalMs: options.compliance?.intervalMs }).catch((error: unknown) => {
-      options.compliance?.onEvent?.({ type: "error", jobId: null, error: error instanceof Error ? error : new Error(String(error)) });
-    });
+  const trackFunded = (jobId: bigint, capability: string, budget: bigint): void => {
+    duty?.track(jobId, capability, budget);
   };
 
   server.registerTool(
@@ -169,7 +190,7 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
         const record = await client.getJobRecord(id);
         const agentId = await client.agentOf(id);
         const status = record.status as JobStatusValue;
-        const compliance = await complianceOf(client, id, record.status);
+        const compliance = await complianceOf(client, id, record.status, duty?.jobs().some((job) => job.jobId === id) ?? false);
         const content: Structured = {
           jobId,
           status: JOB_STATUS_NAMES[status] ?? String(status),
@@ -241,10 +262,15 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
         input: z.string().describe("The work, as the capability expects it."),
         budget: z.string().regex(USDC).optional().describe("USDC to escrow. Defaults to the capability's price; required when it has none."),
         expiresInDays: z.number().int().min(1).max(365).optional().describe("How long the agent has. Default seven days."),
+        jobId: z
+          .string()
+          .regex(/^\d+$/)
+          .optional()
+          .describe("An Open job this wallet already created for the agent, to budget, fund and dispatch instead of creating another: what a hire whose funding failed part way leaves behind."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    ({ agent, capability, input, budget, expiresInDays }) =>
+    ({ agent, capability, input, budget, expiresInDays, jobId: resume }) =>
       serially(async () => {
         let profile: AgentProfile;
         try {
@@ -266,10 +292,18 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
             callerDid,
             taskTimeoutMs,
             pollIntervalMs,
-            onFunded: (job) => trackFunded(job.jobId, capability),
+            jobId: resume === undefined ? undefined : BigInt(resume),
+            onFunded: (job) => trackFunded(job.jobId, capability, job.budget),
           });
         } catch (error) {
-          if (error instanceof HireRefusedError && error.stage === "funding") return failed(error, undefined, { transactions: error.transactions });
+          if (error instanceof HireRefusedError && error.stage === "funding") {
+            const opened = error.transactions.createJob !== undefined || resume !== undefined;
+            return failed(
+              error,
+              undefined,
+              { transactions: error.transactions, ...(opened ? { hint: "The job is Open with nothing escrowed; call square_hire again with its jobId to budget, fund and dispatch it rather than opening another." } : {}) },
+            );
+          }
           return failed(error);
         }
         const { jobId, taskId } = result;
@@ -286,29 +320,120 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
         const head =
           `Job ${jobId} funded with ${formatUnits(result.budget, 6)} USDC for ${profile.name || profile.did}, capability ${capability}.` +
           (duty ? ` This server keeps the job's compliance proof current and releases it when the window closes.` : "");
-        switch (result.dispatch) {
-          case "delivered":
-            return ok(`${head}\n${describeTask(result.task!)}`, content);
-          case "failed":
-            return failed(
-              `${head}\n${describeTask(result.task!)}\nThe escrow stays on job ${jobId}; claimRefund returns it to this wallet once the job expires.`,
-              undefined,
-              content,
-            );
-          case "working":
-            return ok(
-              `${head}\nTask ${taskId} is still running after ${Math.round(taskTimeoutMs / 1000)} s. Poll it with square_task; ` +
-                `the escrow waits for the agent's submit, and returns to this wallet through claimRefund if the job expires undelivered.`,
-              { ...content, task: { state: TaskState.Working } },
-            );
-          case "undispatched":
-            return failed(
-              result.reason ?? "the task could not be dispatched",
-              `${head}\nThe task could not be dispatched. The escrow stays on job ${jobId} until the evaluator settles it or it expires, ` +
-                "when claimRefund returns it to this wallet",
-              content,
-            );
+        return dispatched(result.dispatch, result, head, content, jobId, taskId);
+      }),
+  );
+
+  const dispatched = (outcome: DispatchOutcome["dispatch"], result: DispatchOutcome, head: string, content: Structured, jobId: bigint, taskId: string): CallToolResult => {
+    switch (outcome) {
+      case "delivered":
+        return ok(`${head}\n${describeTask(result.task!)}`, content);
+      case "failed":
+        return failed(
+          `${head}\n${describeTask(result.task!)}\nThe escrow stays on job ${jobId}; once the job expires, square_refund takes it back to this wallet.`,
+          undefined,
+          content,
+        );
+      case "working":
+        return ok(
+          `${head}\nTask ${taskId} is still running after ${Math.round(taskTimeoutMs / 1000)} s. Poll it with square_task; ` +
+            `the escrow waits for the agent's submit, and square_refund takes it back if the job expires undelivered.`,
+          { ...content, task: { state: TaskState.Working } },
+        );
+      case "undispatched":
+        return failed(
+          result.reason ?? "the task could not be dispatched",
+          `${head}\nThe task could not be handed to the agent. The escrow stays on job ${jobId}: try again later with square_dispatch, ` +
+            "or once the job expires take the escrow back with square_refund",
+          content,
+        );
+    }
+  };
+
+  server.registerTool(
+    "square_dispatch",
+    {
+      title: "Hand a funded job's task to its agent again",
+      description:
+        "For a job square_hire funded but could not hand over (the agent did not answer): gives the agent the task again over A2A, under the same task id, " +
+        "and waits for it the way square_hire does. Spends nothing; the escrow is already on the job. The job has to be Funded, this wallet's, and for the agent named.",
+      inputSchema: {
+        agent: AGENT,
+        jobId: z.string().regex(/^\d+$/).describe("The job square_hire returned."),
+        capability: z.string().min(1).describe("The capability the job was hired for."),
+        input: z.string().describe("The work, as it was given to square_hire."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    ({ agent, jobId, capability, input }) =>
+      serially(async () => {
+        let profile: AgentProfile;
+        try {
+          profile = await lookup(agent);
+        } catch (error) {
+          return failed(error);
         }
+        if (profile.a2aEndpoint === undefined) return failed(`${profile.did} advertises no A2A endpoint`);
+        const id = BigInt(jobId);
+        let record;
+        try {
+          record = await client.getJobRecord(id);
+        } catch (error) {
+          return failed(error, `job ${jobId} could not be read`);
+        }
+        if (record.status !== JobStatus.Funded) return failed(`job ${jobId} is ${JOB_STATUS_NAMES[record.status as JobStatusValue] ?? record.status}, not Funded; only a funded job has a task to hand over`);
+        if (record.client.toLowerCase() !== client.account.toLowerCase()) return failed(`job ${jobId} belongs to ${record.client}, not this wallet`);
+        if (record.provider.toLowerCase() !== profile.provider.toLowerCase()) return failed(`job ${jobId} is for provider ${record.provider}, not ${profile.name || profile.did}'s ${profile.provider}`);
+        const taskId = `square-job-${id}`;
+        const result = await dispatch({ a2a, endpoint: profile.a2aEndpoint, taskId, capability, input, callerDid, jobId: id, taskTimeoutMs, pollIntervalMs });
+        const content: Structured = { jobId, taskId, agent: profile.did, provider: profile.provider, capability, budget: formatUnits(record.budget, 6), ...(result.task ? taskContent(result.task) : {}) };
+        return dispatched(result.dispatch, result, `Job ${jobId} (${formatUnits(record.budget, 6)} USDC in escrow) handed to ${profile.name || profile.did} again.`, content, id, taskId);
+      }),
+  );
+
+  server.registerTool(
+    "square_refund",
+    {
+      title: "Take an expired job's escrow back",
+      description:
+        "For a job this wallet funded that expired with nothing delivered: claims the refund on SquareJob and withdraws it to this wallet. " +
+        "Before the expiry it says when the escrow becomes claimable and spends nothing. An Open job holds no escrow and needs no refund.",
+      inputSchema: { jobId: z.string().regex(/^\d+$/).describe("Decimal job id, as square_hire returned it.") },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    ({ jobId }) =>
+      serially(async () => {
+        const id = BigInt(jobId);
+        let record;
+        try {
+          record = await client.getJobRecord(id);
+        } catch (error) {
+          return failed(error, `job ${jobId} could not be read`);
+        }
+        const status = JOB_STATUS_NAMES[record.status as JobStatusValue] ?? String(record.status);
+        if (record.client.toLowerCase() !== client.account.toLowerCase()) return failed(`job ${jobId} belongs to ${record.client}, not this wallet`);
+        if (record.status === JobStatus.Open) return ok(`Job ${jobId} is Open: nothing is escrowed on it, so there is nothing to refund.`, { jobId, status });
+        if (record.status !== JobStatus.Funded && record.status !== JobStatus.Submitted) return failed(`job ${jobId} is ${status}; the escrow has already been settled`);
+        const { timestamp } = await client.publicClient.getBlock();
+        if (timestamp < BigInt(record.expiredAt)) {
+          return ok(
+            `Job ${jobId} is ${status} and expires ${iso(record.expiredAt)}; the escrow (${formatUnits(record.budget, 6)} USDC) becomes claimable then, if nothing is delivered first.`,
+            { jobId, status, expiredAt: iso(record.expiredAt), budget: formatUnits(record.budget, 6), claimable: false },
+          );
+        }
+        let claimed: Hex;
+        try {
+          claimed = (await client.claimRefund(id)).hash;
+        } catch (error) {
+          return failed(error, `job ${jobId}'s refund could not be claimed`);
+        }
+        let withdrawn: Hex | undefined;
+        try {
+          withdrawn = (await client.withdraw()).hash;
+        } catch (error) {
+          return failed(error, `the refund of job ${jobId} is credited to this wallet on the ledger (claimed in ${claimed}) but could not be withdrawn`, { jobId, transactions: { claimRefund: claimed } });
+        }
+        return ok(`Job ${jobId}: refund claimed in ${claimed} and withdrawn to ${client.account} in ${withdrawn}.`, { jobId, status: "Expired", transactions: { claimRefund: claimed, withdraw: withdrawn } });
       }),
   );
 
@@ -402,16 +527,22 @@ export function createSquareMcpServer(options: SquareMcpServerOptions): McpServe
  * chain would make now (square#335). Read for `square_job`, so a model that
  * hired sees whether the release is provable before the window closes.
  */
-async function complianceOf(client: SquareClient, jobId: bigint, status: number): Promise<(Structured & { summary: string }) | null> {
+async function complianceOf(client: SquareClient, jobId: bigint, status: number, tracked: boolean): Promise<(Structured & { summary: string }) | null> {
   if (status !== JobStatus.Funded && status !== JobStatus.Submitted) return null;
   const tolerance = await client.complianceTolerance();
   if (tolerance === null) return null;
   const [bound, facts] = await Promise.all([client.complianceProofOf(jobId), releaseFacts(client, jobId)]);
   const state = proofState(bound, facts, tolerance / 2n);
-  const base = { payee: facts.payee, net: formatUnits(facts.amount, 6), spentToday: formatUnits(facts.dailySpentBefore, 6), toleranceSeconds: tolerance.toString() };
+  const base = { payee: facts.payee, net: formatUnits(facts.amount, 6), spentToday: formatUnits(facts.dailySpentBefore, 6), toleranceSeconds: tolerance.toString(), tracked };
   switch (state.kind) {
     case "none":
-      return { ...base, proof: "none", summary: "the hook holds a module and no proof is bound; a release now would pay the client back" };
+      return {
+        ...base,
+        proof: "none",
+        summary: tracked
+          ? "the hook holds a module and no proof is bound yet; this server binds one when the window is within half the tolerance of closing, and releases the job itself"
+          : "the hook holds a module and no proof is bound; a release now would pay the client back",
+      };
     case "malformed":
       return { ...base, proof: "malformed", summary: "the bound proof is malformed" };
     case "current":

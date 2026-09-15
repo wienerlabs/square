@@ -105,6 +105,7 @@ depends on). The server defaults to Arc Testnet; the whole environment:
 | `SQUARE_POLICY_FILE` | The institution's policy ([`@squaresdk/policy`](../policy/README.md)); with `SQUARE_PROVER_URL`, the server proves every hire's release and keeps the proof bound to the job until it is released (square#335). One without the other is refused. |
 | `SQUARE_PROVER_URL` | The prover service the policy's secret may be sent to, `http://127.0.0.1:3003` for a local one. |
 | `SQUARE_COMPLIANCE_INTERVAL_MS` | How often the bound proofs are checked. `15000` by default; well inside the module's tolerance. |
+| `SQUARE_DUTY_STATE` | Where the jobs the duty watches are kept across restarts (square#348). `<SQUARE_POLICY_FILE>.duty.json` by default; `off` keeps none. Either way the chain is scanned for this wallet's open jobs at start. |
 
 A key in an environment variable is a key in the process table, the same trade the CLI's
 unattended mode makes; it is the one a desktop client offers. Use a wallet funded for
@@ -115,9 +116,11 @@ this.
 | | |
 |---|---|
 | `square_agent` | Look an agent up by `did:aip` or https URL: the ERC-8004 owner, whether it is active, its A2A endpoint, and every capability its card offers with its price. Read-only; the model is told to call it before hiring. |
-| `square_hire` | Escrow a job for the agent and give it the task. `createJob` for the agent's wallet, `setBudget` with the capability's price (or `budget`), `fund`, then `task/create` over A2A and polling until the task ends or the wait runs out. Returns the job id, the task's state, and on `DELIVERED` the deliverable's hash and the `submit` transaction. |
+| `square_hire` | Escrow a job for the agent and give it the task. `createJob` for the agent's wallet, `setBudget` with the capability's price (or `budget`), `fund`, then `task/create` over A2A and polling until the task ends or the wait runs out. Returns the job id, the task's state, and on `DELIVERED` the deliverable's hash and the `submit` transaction. With `jobId`, carries on with an Open job this wallet already created for the agent (what a funding that failed part way leaves behind) instead of opening another. |
 | `square_task` | `task/status` at the agent, for a task `square_hire` handed back while it was still `WORKING`. |
-| `square_job` | The job record: status, client, provider, budget, expiry, deliverable, the agent bound to it, and on a stack whose hook holds a module, where the job stands with the gate: the proof bound to it, current or stale and why. |
+| `square_dispatch` | Hand a funded job's task to its agent again, under the same task id, when `square_hire` could not (the agent did not answer). Spends nothing; the escrow is already on the job. |
+| `square_refund` | Take an expired job's escrow back: `claimRefund` and `withdraw` to this wallet. Before the expiry it says when the escrow becomes claimable and spends nothing. |
+| `square_job` | The job record: status, client, provider, budget, expiry, deliverable, the agent bound to it, and on a stack whose hook holds a module, where the job stands with the gate: the proof bound to it, current or stale and why, and whether this server watches it. |
 | `square_call` | Pay a priced capability per call over x402 and return the output. Only for agents whose card says `x402Support`, and only with a wallet. |
 
 Every answer comes back as text for the model and as `structuredContent` for a client
@@ -133,13 +136,23 @@ client's policy; a release without a current one pays the client back. The
 proof binds to the payee, the net, today's counter and the clock as they
 stand at release, so it cannot be bound at funding and left. With
 `SQUARE_POLICY_FILE` and `SQUARE_PROVER_URL` the server carries that duty
-for every job `square_hire` funds, for as long as it runs: it asks the prover
-for a proof, binds it, rebinds when the release moves, and cranks the job
-when its window closes; `square_hire`'s answer says so, `square_job` shows
-the proof's state, and the log on stderr records every binding and release
+for every job `square_hire` funds, for as long as it runs: once the job's
+window is within half the module's tolerance of closing it asks the prover
+for a proof and binds it, rebinds if the release moves in between, and
+cranks the job when the window closes, one bind and one finalize on the
+ordinary path (square#349); `square_hire`'s answer says so, `square_job`
+shows the proof's state and that the server watches the job, and the log on
+stderr records every binding and release
 ([docs/decisions/proof-freshness.md](../../docs/decisions/proof-freshness.md)).
-Without them, on such a stack, hire from a wallet whose proofs another tool
-keeps (`square policy watch`, the hosted agent), or not at all.
+The jobs survive the server: they are written to `SQUARE_DUTY_STATE` on every
+change and read back at start, and the chain is scanned for this wallet's
+open jobs as well, so a server restarted inside a window picks the job up
+where it was (square#348). Without a policy and a prover, on such a stack,
+hire from a wallet whose proofs another tool keeps (`square policy watch`,
+the hosted agent), or not at all; and with a module in the hook, a wallet
+that has committed no policy is refused before any money moves, because the
+release would be refused for certain and the agent would work for nothing
+(square#350).
 
 ### What a hire returns, and what it does not
 
@@ -161,10 +174,16 @@ SquareHook accepts a submit from either.
 `square_hire` will not spend when it can see the hire failing: a capability the agent
 does not offer, a budget below the price, a wallet that cannot cover it, an expiry inside
 the settlement horizon (the agent's `submit` needs the horizon ahead of expiry), a
-deactivated agent. Once the job is funded and the agent refuses or fails the task, the
-answer says so and names the job: the escrow stays on it until the evaluator settles it
-or it expires and `claimRefund` returns it. Hires run one at a time, because two
-transactions signed from one wallet in the same instant can take the same nonce.
+deactivated agent, a wallet with no policy on a stack that gates releases. Once the job
+is funded, the escrow is the chain's, and the answer names the way on for each thing A2A
+can then say (square#351): an agent that refused or failed the task leaves the escrow on
+the job until it expires, when `square_refund` takes it back; an endpoint that did not
+answer is asked once more, and if it still does not the job is `square_dispatch`'s to hand
+over later, without opening another; a task still running is `square_task`'s to poll. A
+funding that fails after `createJob` leaves an Open job with its budget set, and the
+answer says to call `square_hire` again with that `jobId`. Hires run one at a time,
+because two transactions signed from one wallet in the same instant can take the same
+nonce.
 
 ### In a host of your own
 

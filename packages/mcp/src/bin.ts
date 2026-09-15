@@ -11,8 +11,9 @@ import {
   type SquareWalletClient,
 } from "@squaresdk/core";
 import { AipDidResolver } from "@squaresdk/did-resolver";
-import { createProverClient, parsePolicy } from "@squaresdk/policy";
-import { createPublicClient, createWalletClient, defineChain, formatUnits, http, type Chain, type PublicClient } from "viem";
+import { createProverClient, describeDutyEvent, parsePolicy } from "@squaresdk/policy";
+import { fileDutyState } from "@squaresdk/policy/node";
+import { createPublicClient, createWalletClient, defineChain, http, type Chain, type PublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { createSquareMcpServer, type ComplianceOptions } from "./server.js";
 
@@ -34,6 +35,8 @@ import { createSquareMcpServer, type ComplianceOptions } from "./server.js";
  *                            release is proved and the proof kept bound to the job until it is released (square#335)
  *   SQUARE_PROVER_URL        the prover service the policy's secret may be sent to, e.g. http://127.0.0.1:3003
  *   SQUARE_COMPLIANCE_INTERVAL_MS  how often the bound proofs are checked; 15000 by default, well inside the module's tolerance
+ *   SQUARE_DUTY_STATE        where the jobs the duty watches are kept across restarts; <SQUARE_POLICY_FILE>.duty.json by
+ *                            default, "off" to keep none (the chain is still scanned for this wallet's open jobs at start)
  *
  * A key in an environment variable is a key in the process table, the same
  * trade the CLI's unattended mode makes; it is the one a desktop client
@@ -131,25 +134,13 @@ function complianceOf(): ComplianceOptions | undefined {
   }
   const policy = parsePolicy(JSON.parse(readFileSync(file, "utf8")));
   const interval = env("SQUARE_COMPLIANCE_INTERVAL_MS");
+  const stateFile = env("SQUARE_DUTY_STATE") ?? `${file}.duty.json`;
   return {
     policy,
     prover: createProverClient({ url: proverUrl }),
     ...(interval !== undefined ? { intervalMs: Number(interval) } : {}),
-    onEvent: (event) => {
-      const text =
-        event.type === "error"
-          ? `${event.jobId === null ? "duty" : `job ${event.jobId}`}: ${event.error.message}`
-          : event.type === "no-module"
-            ? "the hook holds no compliance module; nothing to prove"
-            : event.type === "bound"
-              ? `job ${event.jobId}: proof bound in ${event.transaction} (${event.because.join("; ")})`
-              : event.type === "refused"
-                ? `job ${event.jobId}: no proof bound, ${event.reason}: ${event.detail}`
-                : event.type === "released"
-                  ? `job ${event.jobId}: released in ${event.transaction}, ${event.verified === false ? `refused by the module (${event.refusedFor ?? "reason unknown"})` : `${formatUnits(event.amount, 6)} USDC to ${event.payee}`}`
-                  : `job ${event.jobId}: settled by another hand (status ${event.status})`;
-      console.error(`[square-mcp] compliance: ${text}`);
-    },
+    ...(stateFile.toLowerCase() === "off" ? {} : { state: fileDutyState(stateFile) }),
+    onEvent: (event) => console.error(`[square-mcp] compliance: ${describeDutyEvent(event)}`),
   };
 }
 

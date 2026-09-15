@@ -1,6 +1,6 @@
 import { JobStatus } from "@squaresdk/core";
 import { describe, expect, it } from "vitest";
-import { ComplianceDuty, type DutyEvent } from "../src/duty.js";
+import { ComplianceDuty, type DutyEvent, type DutyState, type TrackedJob } from "../src/duty.js";
 import { policyCommitment } from "../src/commitment.js";
 import { MIN_POLICY_SALT, parsePolicy } from "../src/policy.js";
 import { bindComplianceProof, proofState, releaseFacts } from "../src/release.js";
@@ -102,15 +102,31 @@ describe("bindComplianceProof", () => {
 });
 
 describe("ComplianceDuty", () => {
-  const duty = (chain: ReturnType<typeof fakeChain>, events: DutyEvent[] = []) =>
-    new ComplianceDuty({ client: chain.client, policy, prover: chain.prover, onEvent: (e) => events.push(e) });
+  const duty = (chain: ReturnType<typeof fakeChain>, events: DutyEvent[] = [], extra: Partial<ConstructorParameters<typeof ComplianceDuty>[0]> = {}) =>
+    new ComplianceDuty({ client: chain.client, policy, prover: chain.prover, onEvent: (e) => events.push(e), ...extra });
+  // A Submitted job whose window closes in `left` seconds.
+  const inWindow = (chain: ReturnType<typeof fakeChain>, left: bigint) => fundedJob({ status: JobStatus.Submitted, challengeEnd: chain.now + left });
 
-  it("binds a proof to a funded job, leaves it while current, and rebinds when the release moves", async () => {
+  it("sends nothing for a Funded job, nor for a window with more than half the tolerance to run (square#349)", async () => {
     const chain = fakeChain({ commitment: commitment.hex });
     chain.jobs.set("7", fundedJob());
+    chain.jobs.set("8", inWindow(chain, 86_400n));
+    const d = duty(chain);
+    d.track(7n, "text.summarize");
+    d.track(8n, "text.summarize");
+    for (let i = 0; i < 3; i += 1) expect(await d.tick()).toMatchObject({ waiting: [7n, 8n], bound: [], current: [], released: [] });
+    expect(chain.writes).toEqual([]);
+    expect(chain.proofs).toEqual([]);
+  });
+
+  it("binds once the close is within half the tolerance, leaves it while current, and rebinds when the release moves", async () => {
+    const chain = fakeChain({ commitment: commitment.hex });
+    chain.jobs.set("7", inWindow(chain, 1_801n));
     const events: DutyEvent[] = [];
     const d = duty(chain, events);
     d.track(7n, "text.summarize");
+    expect(await d.tick()).toMatchObject({ waiting: [7n], bound: [] });
+    chain.now += 1n; // 1 800 s to the close: a proof bound now is still inside the tolerance at it
     expect(await d.tick()).toMatchObject({ bound: [7n], current: [], released: [] });
     expect(await d.tick()).toMatchObject({ bound: [], current: [7n] });
     chain.spent = 3n; // another release of the day moved the counter
@@ -118,21 +134,25 @@ describe("ComplianceDuty", () => {
     expect(events.filter((e) => e.type === "bound").map((e) => (e.type === "bound" ? e.because : []))).toEqual([["no proof is bound"], ["the day's counter is 3, the proof names 0"]]);
   });
 
-  it("rebinds when the proof ages past half the module's tolerance", async () => {
+  it("rebinds when the proof ages past half the module's tolerance, and reads the tolerance every tick", async () => {
     const chain = fakeChain({ commitment: commitment.hex, tolerance: 600n });
-    chain.jobs.set("7", fundedJob());
-    const d = duty(chain);
+    chain.jobs.set("7", inWindow(chain, 0n));
+    const d = duty(chain, [], { finalize: false });
     d.track(7n, "text.summarize");
     await d.tick();
     chain.now += 299n;
     expect(await d.tick()).toMatchObject({ current: [7n] });
     chain.now += 2n;
     expect(await d.tick()).toMatchObject({ bound: [7n] });
+    // The owner halves the tolerance: the next tick binds to the new half.
+    chain.tolerance = 300n;
+    chain.now += 151n;
+    expect(await d.tick()).toMatchObject({ bound: [7n] });
   });
 
   it("releases the job itself once the window closes, and the module verifies the proof it bound", async () => {
     const chain = fakeChain({ commitment: commitment.hex });
-    chain.jobs.set("7", fundedJob({ status: JobStatus.Submitted, challengeEnd: chain.now + 50n }));
+    chain.jobs.set("7", inWindow(chain, 50n));
     const events: DutyEvent[] = [];
     const d = duty(chain, events);
     d.track(7n, "text.summarize");
@@ -145,9 +165,22 @@ describe("ComplianceDuty", () => {
     expect(events.at(-1)).toMatchObject({ type: "released", jobId: 7n, payee: PROVIDER, amount: 985_000n });
   });
 
+  it("releases two jobs of one day in sequence, rebinding the second after the first moved the counter", async () => {
+    const chain = fakeChain({ commitment: commitment.hex });
+    chain.jobs.set("7", inWindow(chain, 0n));
+    chain.jobs.set("8", inWindow(chain, 0n));
+    const d = duty(chain);
+    d.track(7n, "text.summarize");
+    d.track(8n, "text.summarize");
+    expect(await d.tick()).toMatchObject({ bound: [7n, 8n], released: [7n, 8n] });
+    expect(chain.writes).toEqual(["setComplianceProof(7)", "finalize(7)", "setComplianceProof(8)", "finalize(8)"]);
+    expect(chain.proofs.map((p) => p.daily_spent_before)).toEqual(["0", "985000"]);
+    expect(chain.spent).toBe(1_970_000n);
+  });
+
   it("rebinds for the buyer of a sold receivable before releasing to it", async () => {
     const chain = fakeChain({ commitment: commitment.hex });
-    chain.jobs.set("7", fundedJob({ status: JobStatus.Submitted, challengeEnd: chain.now + 50n }));
+    chain.jobs.set("7", inWindow(chain, 50n));
     const d = duty(chain);
     d.track(7n, "text.summarize");
     await d.tick();
@@ -171,7 +204,7 @@ describe("ComplianceDuty", () => {
     expect(events.at(-1)).toMatchObject({ type: "released", amount: 394_000n });
   });
 
-  it("does not crank a disputed job, and stops tracking one another hand settled", async () => {
+  it("waits on an open dispute without binding, and stops tracking a job another hand settled", async () => {
     const chain = fakeChain({ commitment: commitment.hex });
     chain.jobs.set("7", fundedJob({ status: JobStatus.Submitted, challengeEnd: chain.now - 1n, disputed: true }));
     chain.jobs.set("8", fundedJob({ status: JobStatus.Completed }));
@@ -179,15 +212,15 @@ describe("ComplianceDuty", () => {
     const d = duty(chain, events);
     d.track(7n, "text.summarize");
     d.track(8n, "text.summarize");
-    expect(await d.tick()).toMatchObject({ bound: [7n], released: [], settled: [8n] });
-    expect(chain.writes).toEqual(["setComplianceProof(7)"]);
+    expect(await d.tick()).toMatchObject({ waiting: [7n], bound: [], released: [], settled: [8n] });
+    expect(chain.writes).toEqual([]);
     expect(d.jobs().map((j) => j.jobId)).toEqual([7n]);
     expect(events.find((e) => e.type === "settled")).toMatchObject({ jobId: 8n, status: JobStatus.Completed });
   });
 
   it("reports a refusal once until it changes, and keeps the job", async () => {
     const chain = fakeChain({ commitment: commitment.hex });
-    chain.jobs.set("7", fundedJob({ net: 2_000_000n }));
+    chain.jobs.set("7", { ...inWindow(chain, 0n), net: 2_000_000n });
     const events: DutyEvent[] = [];
     const d = duty(chain, events);
     d.track(7n, "text.summarize");
@@ -199,7 +232,7 @@ describe("ComplianceDuty", () => {
 
   it("does nothing on a stack without a module, and says so once", async () => {
     const chain = fakeChain({ commitment: commitment.hex, module: null });
-    chain.jobs.set("7", fundedJob());
+    chain.jobs.set("7", inWindow(chain, 0n));
     const events: DutyEvent[] = [];
     const d = duty(chain, events);
     d.track(7n, "text.summarize");
@@ -211,7 +244,7 @@ describe("ComplianceDuty", () => {
 
   it("takes a keeper's crank in its stride: a finalize that reverts on a Completed job is a settlement", async () => {
     const chain = fakeChain({ commitment: commitment.hex });
-    chain.jobs.set("7", fundedJob({ status: JobStatus.Submitted, challengeEnd: chain.now - 1n }));
+    chain.jobs.set("7", inWindow(chain, -1n));
     const d = duty(chain);
     d.track(7n, "text.summarize");
     const original = chain.client.finalize.bind(chain.client);
@@ -223,16 +256,107 @@ describe("ComplianceDuty", () => {
     chain.client.finalize = original;
   });
 
-  it("runs on a cadence until aborted", async () => {
+  it("runs on a cadence until aborted, recovering first", async () => {
     const chain = fakeChain({ commitment: commitment.hex });
-    chain.jobs.set("7", fundedJob());
-    const d = duty(chain);
-    d.track(7n, "text.summarize");
+    chain.jobs.set("7", inWindow(chain, 0n));
+    const events: DutyEvent[] = [];
+    const d = duty(chain, events);
     const controller = new AbortController();
     const done = d.run(controller.signal, { intervalMs: 5 });
-    await new Promise((r) => setTimeout(r, 40));
+    await new Promise((r) => setTimeout(r, 60));
     controller.abort();
     await done;
-    expect(chain.writes).toEqual(["setComplianceProof(7)"]);
+    // Nothing was tracked by hand: the chain scan found job 7 and the run released it.
+    expect(events[0]).toEqual({ type: "recovered", restored: [], discovered: [7n] });
+    expect(chain.writes).toEqual(["setComplianceProof(7)", "finalize(7)"]);
+  });
+});
+
+describe("ComplianceDuty across a restart (square#348)", () => {
+  const memoryState = (initial: TrackedJob[] = []) => {
+    const store = { jobs: initial, saves: 0 };
+    const state: DutyState = {
+      load: () => store.jobs.map((j) => ({ ...j })),
+      save: (jobs) => {
+        store.jobs = jobs.map((j) => ({ ...j }));
+        store.saves += 1;
+      },
+    };
+    return { store, state };
+  };
+
+  it("writes every change of the tracked set to the state, and reads it back", async () => {
+    const chain = fakeChain({ commitment: commitment.hex });
+    chain.jobs.set("7", fundedJob());
+    const { store, state } = memoryState();
+    const first = new ComplianceDuty({ client: chain.client, policy, prover: chain.prover, state, discover: false });
+    first.track(7n, "text.summarize", 1_000_000n);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(store.jobs).toEqual([{ jobId: 7n, category: "text.summarize", budget: 1_000_000n }]);
+
+    const events: DutyEvent[] = [];
+    const second = new ComplianceDuty({ client: chain.client, policy, prover: chain.prover, state, discover: false, onEvent: (e) => events.push(e) });
+    expect(second.jobs()).toEqual([]);
+    expect(await second.recover()).toEqual({ restored: [7n], discovered: [] });
+    expect(second.jobs()).toEqual([{ jobId: 7n, category: "text.summarize", budget: 1_000_000n }]);
+    expect(events).toEqual([{ type: "recovered", restored: [7n], discovered: [] }]);
+
+    // Settling drops it from the state too.
+    chain.jobs.get("7")!.status = JobStatus.Completed;
+    await second.tick();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(store.jobs).toEqual([]);
+  });
+
+  it("finds this wallet's open jobs on the chain when the state does not hold them, and skips the settled and other wallets'", async () => {
+    const chain = fakeChain({ commitment: commitment.hex });
+    chain.jobs.set("7", fundedJob());
+    chain.jobs.set("8", fundedJob({ status: JobStatus.Submitted, challengeEnd: chain.now + 10n }));
+    chain.jobs.set("9", fundedJob({ status: JobStatus.Completed }));
+    chain.jobs.set("10", fundedJob({ client: BUYER }));
+    const { store, state } = memoryState([{ jobId: 7n, category: "text.summarize" }]);
+    const d = new ComplianceDuty({ client: chain.client, policy, prover: chain.prover, state, discoverBatchBlocks: 40n });
+    expect(await d.recover()).toEqual({ restored: [7n], discovered: [8n] });
+    expect(d.jobs()).toEqual([
+      { jobId: 7n, category: "text.summarize" },
+      { jobId: 8n, category: undefined },
+    ]);
+    // The scan walked the chain from block 0 to the head in spans of 40.
+    expect(chain.scans).toEqual([[0n, 39n], [40n, 79n], [80n, 100n]]);
+    expect(store.jobs.map((j) => j.jobId)).toEqual([7n, 8n]);
+  });
+
+  it("halves the span when the endpoint refuses it", async () => {
+    const chain = fakeChain({ commitment: commitment.hex });
+    const getLogs = chain.client.publicClient.getLogs;
+    chain.client.publicClient.getLogs = (async (params: { fromBlock: bigint; toBlock: bigint }) => {
+      if (params.toBlock - params.fromBlock >= 30n) throw new Error("query returned more than 10000 results");
+      return getLogs(params as never);
+    }) as never;
+    const d = new ComplianceDuty({ client: chain.client, policy, prover: chain.prover, discoverBatchBlocks: 64n });
+    await d.recover();
+    expect(chain.scans.every(([from, to]) => to - from < 30n)).toBe(true);
+    expect(chain.scans[0]).toEqual([0n, 15n]);
+  });
+
+  it("learns a recovered job's category from its first proof, trying the policy's categories in order", async () => {
+    const wide = parsePolicy({ ...policy, allowed_endpoint_categories: ["code.review", "text.summarize", "image.caption"] });
+    const chain = fakeChain({ commitment: (await policyCommitment(wide)).hex });
+    chain.jobs.set("8", fundedJob({ status: JobStatus.Submitted, challengeEnd: chain.now }));
+    const { store, state } = memoryState();
+    const d = new ComplianceDuty({ client: chain.client, policy: wide, prover: chain.prover, state });
+    await d.recover();
+    expect(d.jobs()).toEqual([{ jobId: 8n, category: undefined }]);
+    // The fake prover refuses every category but the one the policy's list holds... which is all three;
+    // so the first answers. Narrow the prover to accept only the second.
+    const prove = chain.prover.prove.bind(chain.prover);
+    chain.prover.prove = async (request) => {
+      const response = await prove(request);
+      if (request.payment_endpoint_category !== "text.summarize") return { ...response, is_compliant: false, violated_rules: ["endpoint_category"] };
+      return response;
+    };
+    expect(await d.tick()).toMatchObject({ bound: [8n], released: [8n] });
+    expect(chain.proofs.map((p) => p.payment_endpoint_category)).toEqual(["code.review", "text.summarize"]);
+    expect(store.jobs).toEqual([]);
   });
 });
