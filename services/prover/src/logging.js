@@ -80,8 +80,12 @@ export function proofGeneratedLogEntry({ elapsedMs, isCompliant }) {
 // Every error this service raises about request content is constructed in
 // normalize.js or hash.js and names the field without its value, so the
 // message is safe to record. Errors from below (snarkjs, the witness
-// calculator, the filesystem) describe circuit structure and file paths, not
-// policy — and normalisation runs before any of them can see a raw value.
+// calculator) describe circuit structure, not policy — and normalisation runs
+// before any of them can see a raw value.
+//
+// The filesystem was the exception. A proving key that was not there put its
+// absolute path into this message, and the route returns this message as the
+// 500's body (square#254). generateProof names that failure without the path.
 export function proofFailedLogEntry(error) {
   const message = error instanceof Error ? error.message : String(error);
   return {
