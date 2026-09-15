@@ -5,7 +5,7 @@ import type { SquareDeployment, SquareWalletClient } from "@squaresdk/core";
 import { AipDidResolver } from "@squaresdk/did-resolver";
 import { ToolPool, toolsForAnthropic, type DidResolverLike, type McpTool } from "@squaresdk/mcp";
 import { parseUnits, type PublicClient } from "viem";
-import { ComplianceDuty, type DutyEvent, type Policy, type Prover } from "@squaresdk/policy";
+import { ComplianceDuty, type DutyEvent, type DutyState, type Policy, type Prover } from "@squaresdk/policy";
 import { PolicyAllowance } from "./allowance.js";
 import type { HostedAgentConfig } from "./config.js";
 import { DELEGATE_TOOL, delegate, delegateTool, type DelegationDeps, type DelegationInput } from "./delegation.js";
@@ -55,6 +55,10 @@ export interface ComplianceDeps {
   prover: Prover;
   intervalMs?: number | undefined;
   onEvent?: ((event: DutyEvent) => void) | undefined;
+  /** Where the duty keeps the delegated jobs across restarts (square#348); the binary resolves the config's `stateFile` into one. */
+  state?: DutyState | undefined;
+  /** Whether the duty scans the chain for this wallet's open jobs at start. Default true. */
+  discover?: boolean | undefined;
 }
 
 export interface HostedAgent {
@@ -126,10 +130,28 @@ export async function hostAgent(config: HostedAgentConfig, deps: HostDeps): Prom
     });
     if (deps.compliance) {
       const compliance = deps.compliance;
-      duty = new ComplianceDuty({ client: agent.client, policy: compliance.policy, prover: compliance.prover, onEvent: compliance.onEvent, serialize: serially });
+      const ledger = allowance;
+      duty = new ComplianceDuty({
+        client: agent.client,
+        policy: compliance.policy,
+        prover: compliance.prover,
+        serialize: serially,
+        state: compliance.state,
+        discover: compliance.discover,
+        onEvent: (event) => {
+          // What the duty recovers after a restart is escrow the allowance
+          // has to count too (square#348): the budgets the state kept come
+          // back as in-flight jobs; a job only the chain knew is read back
+          // from the chain on the allowance's next view.
+          if (event.type === "recovered") {
+            ledger.restore(duty!.jobs().filter((job) => job.budget !== undefined).map((job) => ({ jobId: job.jobId, budget: job.budget! })));
+          }
+          compliance.onEvent?.(event);
+        },
+      });
       // For as long as the host lives: a delegated job outlives its task by
       // the challenge window, and the proof it carries has to be current
-      // when that window closes.
+      // when that window closes. The run recovers first.
       dutyRun = duty.run(dutyStop.signal, { intervalMs: compliance.intervalMs }).catch((error: unknown) => {
         compliance.onEvent?.({ type: "error", jobId: null, error: error instanceof Error ? error : new Error(String(error)) });
       });
@@ -148,7 +170,7 @@ export async function hostAgent(config: HostedAgentConfig, deps: HostDeps): Prom
       pollIntervalMs: deps.pollIntervalMs,
       jobDays: deps.jobDays,
       resolveDeliverable: deps.resolveDeliverable,
-      ...(tracked ? { onFunded: (jobId: bigint, capability: string) => tracked.track(jobId, capability) } : {}),
+      ...(tracked ? { onFunded: (jobId: bigint, capability: string, budget: bigint) => tracked.track(jobId, capability, budget) } : {}),
     };
   }
 

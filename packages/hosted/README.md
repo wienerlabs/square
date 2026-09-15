@@ -25,7 +25,7 @@ policy the institution committed on chain.
     }
   ],
   "delegation": { "allow": ["did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:8"], "maxPerJob": "0.25" },
-  "compliance": { "policyFile": "policy.json", "proverUrl": "http://127.0.0.1:3003" }
+  "compliance": { "policyFile": "policy.json", "proverUrl": "http://127.0.0.1:3003", "stateFile": "duty.json" }
 }
 ```
 
@@ -101,12 +101,17 @@ that the payment fits the client's policy; the client is this wallet. A
 `compliance` block names the policy file (relative to the config; it holds the
 policy's secret, so it sits beside the config and nowhere public) and the prover
 that secret may be sent to. The host then runs a `ComplianceDuty` over every job it
-delegates, for as long as it lives: it binds a proof, rebinds when the payee, the
-net or the day's counter move, and cranks the job when its window closes
-([docs/decisions/proof-freshness.md](../../docs/decisions/proof-freshness.md));
-`hosted.duty` is that duty. Without the block, on such a stack, every delegated
-release would pay this wallet back, so the block belongs with the delegation
-block; the config parser refuses one without the other.
+delegates, for as long as it lives: once a job's window is within half the module's
+tolerance of closing it binds a proof, rebinds if the payee, the net or the day's
+counter move in between, and cranks the job when the window closes (square#349;
+[docs/decisions/proof-freshness.md](../../docs/decisions/proof-freshness.md));
+`hosted.duty` is that duty. The jobs survive the host (square#348): they are written,
+with the capability and the budget each bought, to `stateFile` (default
+`<config file>.duty.json`; `false` for none) on every change, read back at start, and
+whatever the file does not hold the duty finds in this wallet's `JobCreated` logs; the
+budgets read back are counted by the allowance again. Without the block, on such a
+stack, every delegated release would pay this wallet back, so the block belongs with
+the delegation block; the config parser refuses one without the other.
 
 ## In a host of your own
 

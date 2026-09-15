@@ -409,6 +409,14 @@ export async function buildCircuitInput(request) {
   // No `??` fallbacks any more: validateRequest requires all three when a
   // restriction is present, so a missing field is an error rather than a window
   // of 00:00 to 00:59 with every weekday forbidden.
+  //
+  // With no window the three are '0', and that is a requirement of the circuit,
+  // not a default (square#256). time_active = 0 keeps the commitment and rule 6
+  // from reading them, but payment.circom still range-checks both hours to five
+  // bits and decomposes the day mask into seven, whatever time_active is. A value
+  // out of those ranges -- an hour of 32, a mask of 128 -- leaves no witness that
+  // satisfies the circuit, and the proof fails to generate. So nothing from a
+  // previous window, or anything else, may stand in for them here.
   const timeActive = tr ? '1' : '0';
   const timeDaysBitmask = tr ? String(daysToBitmask(tr.allowed_days)) : '0';
   const timeStartHourUtc = tr

@@ -22,5 +22,5 @@ export { ProverError, createProverClient, proveRequest } from "./prover.js";
 export type { Payment, ProveRequest, ProveResponse, Prover, ProverClientOptions, ViolatedRule } from "./prover.js";
 export { bindComplianceProof, moduleVerdict, proofState, releaseFacts } from "./release.js";
 export type { BindOptions, BindOutcome, ProofState, ReleaseFacts } from "./release.js";
-export { ComplianceDuty } from "./duty.js";
-export type { DutyEvent, DutyOptions, TickReport, TrackedJob } from "./duty.js";
+export { ComplianceDuty, describeDutyEvent } from "./duty.js";
+export type { DutyEvent, DutyOptions, DutyState, TickReport, TrackedJob } from "./duty.js";
