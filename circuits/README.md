@@ -111,9 +111,15 @@ Poseidon images of guessable values: `max_daily` is published on chain as
 `PolicyRegistry.dailyLimit`, the time field has fewer than 150,000 possible
 values, and an empty list has a well-known image. An auditor shown seven
 "hidden" siblings could search for six of them over a coffee. That was
-[#98][i98], and this construction closes it — `test/disclosure.test.js`
-demonstrates the difference rather than asserting it, by finding an unsalted
-leaf in a two-thousand-value search and failing to find the salted one.
+[#98][i98]. The salts close it to the extent the secret they come from is hard
+to guess, and no further: an attacker who knows the construction and the values
+searches that secret, not the values. `services/prover/test/disclosure.test.js`
+shows both halves. An unsalted leaf falls to a two-thousand-value search, and
+flipping any bit of `policy_salt`, from bit 0 to bit 253, changes all eight leaf
+salts, so a derivation that kept only part of the secret fails the suite
+([#263](https://github.com/wienerlabs/square/issues/263)). How much entropy the
+secret carries is the caller's to get right; the prover enforces a magnitude
+floor of 2^128, not randomness (`services/prover/src/normalize.js`).
 
 **The salts come from the caller, not from here.** They derive from one
 `policy_salt` the operator keeps with the policy, because a policy has to

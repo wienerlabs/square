@@ -168,10 +168,24 @@ root    = Poseidon(8)(leaf[0] … leaf[7])
 
 The root is still one `Poseidon(8)`, so this registry, the verifier and the
 public signal layout are unchanged — `commitment` holds the same kind of value
-it always did. What changed is that guessing a field no longer opens it: the
-salts carry 254 bits, and `services/prover/test/disclosure.test.js` shows the
-difference by searching two thousand plausible ceilings, finding the unsalted
-leaf and not the salted one.
+it always did. What changed is that guessing a field no longer opens it without
+also guessing the secret behind its salt.
+
+That secret is where the protection lives, and it is as strong as the caller
+makes it. The eight salts are Poseidon images, so each is a 254-bit field element
+whatever went into it. But all eight derive from one `policy_salt` the operator
+keeps with the policy (`services/prover/src/commitment.js`), so together they are
+exactly as hard to guess as that one value. The prover refuses a `policy_salt`
+below 2^128, and `services/prover/src/normalize.js` says what that is: a
+magnitude check, not an entropy check. It stops 0, 1 and other small constants,
+and it cannot tell a random number from one somebody typed.
+
+`services/prover/test/disclosure.test.js` shows both halves:
+
+- an unsalted leaf falls to a search of two thousand plausible ceilings;
+- flipping any bit of `policy_salt`, from bit 0 to bit 253, changes all eight
+  salts, so a derivation that kept only part of the secret turns the suite red
+  ([#263](https://github.com/wienerlabs/square/issues/263)).
 
 Publishing `dailyLimit` is therefore no longer a crack in the commitment. It is
 what it was meant to be: one integer, disclosed on purpose, next to a commitment
