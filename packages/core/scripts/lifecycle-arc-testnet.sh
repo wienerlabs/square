@@ -11,11 +11,19 @@ export GAS_PRICE_WEI="${GAS_PRICE_WEI:-21200000000}"
 export FUND_PER_ACTOR="${FUND_PER_ACTOR:-1}"
 export FUND_CLIENT="${FUND_CLIENT:-3.2}"
 export BUDGET_USDC="${BUDGET_USDC:-0.25}"
-export AGENT_ID="${AGENT_ID:-892531}"
+# The provider's ERC-8004 agent. 892531 was registered on the 2026-09-09 run and is
+# reused, so a run costs no registration; REGISTER_AGENT=1 registers a fresh one instead,
+# which is what square#31's second step wants in its report. AGENT_ID wins over
+# REGISTER_AGENT in the runner, so it is left unset in that case.
+if [ "${REGISTER_AGENT:-0}" = "1" ]; then
+  unset AGENT_ID
+else
+  export AGENT_ID="${AGENT_ID:-892531}"
+fi
 # square#31, square#336: once a keeper runs against the stack, LIFECYCLE_FINALIZER=keeper
 # leaves every settlement to it and records its transactions; the runner's own crank
 # would only race it. The keeper cranks nothing under its profitability bar, so the
 # budget has to clear it (docs/design/mandate-to-payment.md, "Running it").
 export LIFECYCLE_FINALIZER="${LIFECYCLE_FINALIZER:-self}"
-echo "lifecycle against chain $CHAIN_ID via $RPC_URL, budget $BUDGET_USDC USDC, agent $AGENT_ID, settled by $LIFECYCLE_FINALIZER"
+echo "lifecycle against chain $CHAIN_ID via $RPC_URL, budget $BUDGET_USDC USDC, agent ${AGENT_ID:-registered on this run}, settled by $LIFECYCLE_FINALIZER"
 npm run lifecycle
