@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Chain-agnostic security layer: SSRF-safe fetch, request-hash idempotency, durable rate limiting, RPC failover, and signer-actor bound messages.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wienerlabs/square.git",
+    "directory": "packages/hardening"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

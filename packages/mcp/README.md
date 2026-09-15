@@ -91,7 +91,10 @@ delivered is the tool's text, hashed and submitted the way any capability's outp
 
 That is a `claude_desktop_config.json` entry; Cursor's is the same shape. Build first
 (`npm install --install-links && npm run build` in `packages/mcp`, after the packages it
-depends on). The server defaults to Arc Testnet; the whole environment:
+depends on). Once the `v0.1.0` tag is on npm
+([docs/decisions/distribution-channel.md](../../docs/decisions/distribution-channel.md);
+not yet, square#356) the entry is `"command": "npx", "args": ["-y", "@squaresdk/mcp"]`
+and nothing is cloned. The server defaults to Arc Testnet; the whole environment:
 
 | | |
 |---|---|

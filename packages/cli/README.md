@@ -15,6 +15,9 @@ $ square policy commit policy.json
 
 ## Install
 
+Once the `v0.1.0` tag is on npm ([docs/decisions/distribution-channel.md](../../docs/decisions/distribution-channel.md);
+not yet, square#356): `npm install -g @squaresdk/cli`. Until then, from this repository:
+
 ```console
 $ npm install && npm run build && npm link
 ```

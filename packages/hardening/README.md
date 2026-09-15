@@ -20,7 +20,18 @@ this package derives from any other codebase. License: Apache-2.0.
 ## Install
 
 ```bash
-npm install @squaresdk/hardening viem hono
+npm install @squaresdk/hardening viem hono   # once the v0.1.0 tag is on npm (square#356)
+```
+
+Not on npm yet: the packages publish under `@squaresdk` from a `v<version>` tag
+([docs/decisions/distribution-channel.md](../../docs/decisions/distribution-channel.md)),
+and the first has not been cut. Until then, from this repository, after
+`@squaresdk/data` beside it is built:
+
+```bash
+(cd packages/data && npm install && npm run build)
+(cd packages/hardening && npm install --install-links && npm run build)
+npm install ../path/to/square/packages/hardening viem hono
 ```
 
 `viem` and `hono` are peer dependencies. `viem` backs the RPC failover transport and EIP-712 signing; `hono` is only

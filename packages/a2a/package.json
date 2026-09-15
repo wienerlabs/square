@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "A2A task protocol: JSON-RPC 2.0 handshake, task lifecycle, and its mapping onto ERC-8183 job state.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wienerlabs/square.git",
+    "directory": "packages/a2a"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
