@@ -50,7 +50,7 @@ const hash = async (inputs: readonly bigint[]): Promise<bigint> => {
 /** The committed fields, in the order the circuit hashes them; index i is an input to leaf i. */
 export const POLICY_FIELDS = ["max_daily", "max_per_tx", "operator_id", "policy_id", "allowed_categories", "blocked_addresses", "token_whitelist", "time_window"] as const;
 
-const addressToField = (address: string): bigint => BigInt(`0x${address.trim().toLowerCase().replace(/^0x/, "")}`);
+export const addressToField = (address: string): bigint => BigInt(`0x${address.trim().toLowerCase().replace(/^0x/, "")}`);
 
 /** 32 bytes as two 16-byte halves, big-endian, the way the prover splits a category and a UUID. */
 function halves(bytes: Uint8Array): [bigint, bigint] {
@@ -63,13 +63,13 @@ function halves(bytes: Uint8Array): [bigint, bigint] {
   return [high, low];
 }
 
-async function hashCategory(category: string): Promise<bigint> {
+export async function hashCategory(category: string): Promise<bigint> {
   const utf8 = new TextEncoder().encode(category);
   if (utf8.length === 0 || utf8.length > 32) throw new Error(`category ${JSON.stringify(category)}: 1 to 32 bytes`);
   return hash(halves(utf8));
 }
 
-async function hashUuid(uuid: string): Promise<bigint> {
+export async function hashUuid(uuid: string): Promise<bigint> {
   const cleaned = uuid.replace(/-/g, "");
   if (cleaned.length !== 32 || !/^[0-9a-f]+$/i.test(cleaned)) throw new Error(`policy_id ${JSON.stringify(uuid)}: not a UUID`);
   const bytes = new Uint8Array(16);

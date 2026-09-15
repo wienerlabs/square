@@ -14,6 +14,7 @@ on [#245][i245], which made the proof the client's to bind.
 [i329]: https://github.com/wienerlabs/square/issues/329
 [i337]: https://github.com/wienerlabs/square/issues/337
 [i345]: https://github.com/wienerlabs/square/issues/345
+[i347]: https://github.com/wienerlabs/square/issues/347
 [i348]: https://github.com/wienerlabs/square/issues/348
 [i349]: https://github.com/wienerlabs/square/issues/349
 [i350]: https://github.com/wienerlabs/square/issues/350
@@ -104,20 +105,22 @@ is refused at release the way no proof is. The prover names the rules that
 failed, so the duty reports them and binds nothing; binding would only spend
 gas to make the module say the same thing.
 
-**The policy file is the secret, and it travels only to the prover.** The
+**The policy file is the secret, and the institution's tools never send it.** The
 eight leaf salts derive from `policy_salt`; whoever holds it can open the
 committed values. The file stays with the institution: on disk for the CLI,
-the MCP server and the hosted agent, in the browser's storage for the app,
-and in a `POST /prove` to the prover the institution runs or trusts. The
-commitment, the buyer list's root and the proof bytes are what reach the
-chain.
+the MCP server and the hosted agent, which prove in their own process from
+the circuit's files ([#347][i347],
+[prover-trust-boundary.md](prover-trust-boundary.md)), and in the browser's
+storage for the app, whose job page sends it in a `POST /prove` to the prover
+at `NEXT_PUBLIC_PROVER_URL`, whose operator sees it. The commitment, the buyer
+list's root and the proof bytes are what reach the chain.
 
 ## What each surface does
 
 | Surface | Commit the policy | Keep proofs current | Crank |
 |---|---|---|---|
 | `square policy` (CLI) | `commit` | `prove`, `watch` | `prove --release`, `watch` |
-| `square-mcp` | no (the CLI or the app) | every `square_hire` job, across restarts (`SQUARE_POLICY_FILE`, `SQUARE_PROVER_URL`, `SQUARE_DUTY_STATE`) | yes |
+| `square-mcp` | no (the CLI or the app) | every `square_hire` job, across restarts (`SQUARE_POLICY_FILE`, `SQUARE_PROVER_ARTIFACTS`, `SQUARE_DUTY_STATE`) | yes |
 | `square-hosted` | no | every delegated job, across restarts (`compliance` block, `stateFile`) | yes |
 | app | Policy page | job page, `Bind proof`, when `NEXT_PUBLIC_PROVER_URL` is set | the existing `Finalize` action |
 | lifecycle runner | on first run (`LIFECYCLE_POLICY_FILE`) | before each release it cranks | as before |

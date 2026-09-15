@@ -25,12 +25,12 @@ policy the institution committed on chain.
     }
   ],
   "delegation": { "allow": ["did:aip:eip155:5042002:0x8004a818bfb912233c491871b3d84c89a494bd9e:8"], "maxPerJob": "0.25" },
-  "compliance": { "policyFile": "policy.json", "proverUrl": "http://127.0.0.1:3003", "stateFile": "duty.json" }
+  "compliance": { "policyFile": "policy.json", "stateFile": "duty.json" }
 }
 ```
 
 ```bash
-SQUARE_PRIVATE_KEY=0x… SQUARE_SEAL_SECRET=… square-hosted acme.json
+SQUARE_PRIVATE_KEY=0x… SQUARE_SEAL_SECRET=… SQUARE_PROVER_ARTIFACTS=/path/to/artifacts square-hosted acme.json
 ```
 
 That is the whole deployment: the platform holds the wallet that owns the agent's
@@ -99,8 +99,11 @@ with the job that now holds the escrow.
 compliance module, a delegated job's release needs a proof, bound by its client,
 that the payment fits the client's policy; the client is this wallet. A
 `compliance` block names the policy file (relative to the config; it holds the
-policy's secret, so it sits beside the config and nowhere public) and the prover
-that secret may be sent to. The host then runs a `ComplianceDuty` over every job it
+policy's secret, so it sits beside the config and nowhere public), and
+`SQUARE_PROVER_ARTIFACTS` names the circuit's files the host proves with, in its
+own process, so the policy never leaves the host (square#347,
+[prover-trust-boundary.md](../../docs/decisions/prover-trust-boundary.md)); whoever
+operates the host can read it, as they can the wallet. The host then runs a `ComplianceDuty` over every job it
 delegates, for as long as it lives: once a job's window is within half the module's
 tolerance of closing it binds a proof, rebinds if the payee, the net or the day's
 counter move in between, and cranks the job when the window closes (square#349;
@@ -153,6 +156,7 @@ a host that composes its own agent; `runCapability` is the model loop alone;
 | `SQUARE_SEAL_SECRET` | What own keys are sealed under; needed by `seal` and to run an own-key configuration. |
 | `ANTHROPIC_API_KEY` | The platform tier's key. |
 | `PORT`, `HOST` | `3000`, `0.0.0.0`. |
+| `SQUARE_PROVER_ARTIFACTS` | For a configuration with a `compliance` block: the directory holding `payment.wasm`, `payment.zkey` and `payment_vk.json`, the key the hook's module is keyed to. |
 
 ## Tests
 
@@ -162,7 +166,7 @@ npm run test:anvil    # the acceptance criteria of square#38 on anvil: a hosted 
 ```
 
 `test/compliance.test.ts` runs the delegation on a stack whose hook holds a
-module keyed to a prover beside it, with a `compliance` block, and sees the
+module keyed to the key the host proves with, with a `compliance` block, and sees the
 sub-agent paid the whole net once the host released the job; it skips, with
 the reason, without that stack ([`@squaresdk/policy` README](../policy/README.md),
 "the stack the tests run against").

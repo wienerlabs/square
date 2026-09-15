@@ -16,8 +16,12 @@
   </picture></a>
 </p>
 
-An institution commits a private spending mandate on-chain. Identified agents execute
-against it. The hook that releases escrow carries a compliance slot: with a module
+An institution commits a private spending mandate on-chain: the chain holds a commitment
+to it, and the institution's own tools prove each release in their own process, so the
+policy behind the commitment never leaves them
+([prover-trust-boundary.md](docs/decisions/prover-trust-boundary.md)). The app's job page
+is the exception: it sends the policy to the prover it is configured with, whose operator
+sees it. Identified agents execute against the mandate. The hook that releases escrow carries a compliance slot: with a module
 installed, a release must first prove, in zero knowledge, that it fits the mandate.
 The receivable created during the challenge window is discountable, and sells only to
 a buyer the institution's policy approved.
@@ -100,6 +104,7 @@ Design notes, each the record of a decision:
 - [x402: own facilitator versus Circle Gateway](docs/decisions/x402-facilitator.md)
 - [ERC-4337: is sponsorship needed](docs/decisions/erc4337-sponsorship.md)
 - [The daily ceiling is public, the policy behind it is not](docs/decisions/public-daily-ceiling.md)
+- [The proof is made where the policy lives](docs/decisions/prover-trust-boundary.md)
 - [A hook informs, it never vetoes, on the way out of escrow](docs/decisions/hook-failure-modes.md)
 - [A lapsed dispute returns the bond](docs/decisions/lapsed-bond.md)
 - [Gas, measured](docs/deploy/gas.md)
