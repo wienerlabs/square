@@ -221,29 +221,54 @@ describe.skipIf(HAVE_ARTIFACTS)('the root is the on-chain commitment', () => {
 // Why the salt is not decoration.
 //
 // max_daily is published on chain as PolicyRegistry.dailyLimit, so an auditor
-// holding a sibling leaf already knows what to guess. This demonstrates the
-// difference rather than asserting it: the same search that finds an unsalted
-// leaf in a few thousand tries does not find a salted one.
+// holding a sibling leaf already knows what to guess. An unsalted leaf falls to
+// a search of a few thousand plausible values; the first test shows that.
+//
+// What a salt buys is only as much as it is hard to guess, and square#263 found
+// the test that stood here did not measure that. Its "salted" arm searched the
+// values with the salt fixed at 0n, which shows a wrong salt gives a wrong leaf:
+// true of any salt scheme, including one with no secret in it. With deriveSalts
+// cut down to 20 bits of the operator's secret the whole suite stayed green, and
+// one disclosed field then gave the secret up in 466,034 tries, 105 seconds, and
+// with it every sibling. An attacker who knows the construction and the values
+// searches the secret, not the values.
+//
+// So the second test measures the secret's reach instead. The eight salts are
+// Poseidon images and always look 254 bits wide, so their width says nothing; what
+// matters is how many distinct secrets they come from. Flipping any one bit of
+// policy_salt, from bit 0 to bit 253, has to change all eight. A derivation that
+// keeps k bits of the secret leaves every bit at or above k without effect, and
+// fails here. How much entropy the secret has is the caller's, and
+// src/normalize.js says so: the floor it enforces is a magnitude, not randomness.
 describe('the salt is what makes a sibling opaque', () => {
-  it('an unsalted leaf falls to a small search, a salted one does not', async () => {
+  it('an unsalted leaf falls to a small search', async () => {
     const poseidon = await buildPoseidon();
     const f = (x) => poseidon.F.toString(x);
 
     const secret = 25_000n;                       // 25,000 USDC, a plausible ceiling
     const unsalted = f(poseidon([secret]));
-    const salted = await leafHash(0, (await salts())[0], secret);
 
     let foundUnsalted = null;
-    let foundSalted = null;
     for (let guess = 24_000n; guess <= 26_000n; guess++) {
       if (f(poseidon([guess])) === unsalted) foundUnsalted = guess;
-      // The attacker knows the position and the construction, and still needs
-      // the salt.
-      if (await leafHash(0, 0n, guess) === salted) foundSalted = guess;
     }
 
     expect(foundUnsalted).toBe(secret);
-    expect(foundSalted).toBeNull();
+  }, 120_000);
+
+  it('carries every bit of policy_salt into every leaf salt', async () => {
+    // Below 2^252, so setting bit 253 on top of it stays under the BN254 modulus.
+    const base = BigInt(randomPolicySalt()) % (1n << 252n);
+    const baseSalts = await deriveSalts(base);
+
+    const unreached = [];
+    for (let bit = 0n; bit <= 253n; bit++) {
+      const flipped = await deriveSalts(base ^ (1n << bit));
+      const unchanged = flipped.flatMap((salt, i) => (salt === baseSalts[i] ? [i] : []));
+      if (unchanged.length > 0) unreached.push(`bit ${bit}: salts ${unchanged.join(', ')}`);
+    }
+
+    expect(unreached, 'bits of policy_salt that do not reach the leaf salts').toEqual([]);
   }, 120_000);
 
   it('gives every policy a different commitment for the same values', async () => {
