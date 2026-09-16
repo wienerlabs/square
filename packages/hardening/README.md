@@ -7,7 +7,7 @@ Chain-agnostic security layer for Square services. Five independent modules, one
 | `ssrf` | Server-side request forgery: loopback, LAN, link-local metadata endpoints, obfuscated IP literals, DNS rebinding, redirect laundering, unbounded responses |
 | `idempotency` | Duplicate side effects from client retries, idempotency-key reuse with a different payload |
 | `rateLimit` | Abuse and brute force, with counters that survive restarts and are shared across instances |
-| `rpcFailover` | Single-provider RPC outages, retry storms against a dead endpoint, invisible failovers |
+| `rpcFailover` | Single-provider RPC outages, retry storms against a dead endpoint, invisible failovers, health ledgers poisoned by answers the chain gave |
 | `signedMessages` | Signatures reused for another actor, replayed messages, stale or premature messages, cross-chain replay |
 
 Tables live in `@squaresdk/data`, not here: `idempotency_keys` and `rate_limits` are created by `square-data migrate up`
@@ -265,6 +265,19 @@ cooldown ends it is tried again. If every endpoint is cooling down the request i
 brief outage degrades the client instead of failing it closed. `onFailover(from, to, error)` fires each time a request
 moves from a failed endpoint to the next one, with the error the failed endpoint produced. `getHealth()` returns a
 snapshot per endpoint: healthy flag, consecutive failures, cooldown deadline, last error and timestamps.
+
+**A revert is an answer, not an outage.** Only a failure to answer moves an endpoint's ledger: an HTTP status error, a
+timeout, a dropped connection, a `-32603` internal error, or anything else the endpoint produced in place of a result.
+A request the node answered at the JSON-RPC level leaves `consecutiveFailures`, the cooldown, `lastError` and the
+routing untouched and fires no `onFailover`: a reverted `eth_call`, code `3`, a `-32000` whose message is an execution
+rejection (`execution reverted`, `gas required exceeds allowance`, `nonce too low`, `already known` and their
+neighbours), and the deterministic request errors `-32700`, `-32600`, `-32601` and `-32602`. Without that rule a keeper
+that simulates `finalize` every tick and gets `WindowOpen` back cools its primary endpoint down on the first simulation
+and has both endpoints marked sick by the fourth, with a contract message as the recorded `lastError`.
+`isEndpointFailure(error)` is exported, and the `isEndpointFailure` option replaces it per transport for a provider
+whose codes need a different reading. It asks a different question from `isPermanentRpcError`, which asks whether
+another attempt is worth making: `-32603` is permanent for the retry loop and still the endpoint's fault, while
+`-32000` is retryable and, when it carries a revert, not the endpoint's fault at all.
 
 **One logical request is one upstream call per endpoint.** The `fallback` wrapper is built with `retryCount: 0`
 unless the caller asks for more, so a request walks the endpoint list once: two dead endpoints cost two upstream
