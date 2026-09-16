@@ -2,22 +2,27 @@ name: services
 
 # Builds the images the long-running services ship as and publishes them to
 # GHCR, which is where the hosted stack takes them from (square#336,
-# docs/deploy/railway.md). stack.yml already builds the same Dockerfiles
+# docs/deploy/railway.md). stack.yml already builds the services' Dockerfiles
 # through compose on every pull request and asks the containers whether they
 # are healthy; this workflow is the other half: the image a push to main
 # produced is the image that runs against Arc, under a tag that names the
-# commit, and the hosted services are told to pull it.
+# commit, and the hosted services are told to pull it. The hosted agent
+# (packages/hosted/Dockerfile) is built here too; compose does not run it,
+# since it needs a model key.
 #
 #   ghcr.io/wienerlabs/square-<service>:sha-<12 hex>   the record, written once
 #   ghcr.io/wienerlabs/square-<service>:main           what main built last; the hosted services point here
 #
-# No :latest, for the reason did-aip-driver.yml gives. After the first run each
-# package has to be made PUBLIC once, by hand (Packages -> square-<service> ->
-# Package settings -> Change visibility), so the host pulls anonymously.
+# No :latest, for the reason did-aip-driver.yml gives. The packages the first
+# run created came out public, which is what the host's anonymous pull needs;
+# a new one that does not is made public once, by hand (Packages ->
+# square-<service> -> Package settings -> Change visibility).
 #
 # The smoke test is hermetic: every service starts with a dead RPC endpoint and
 # no database, and answers /health with 503, which is the check the container
-# runs at all; what a healthy answer needs is what stack.yml brings up.
+# runs at all; what a healthy answer needs is what stack.yml brings up. The
+# hosted agent, which refuses to start without a chain, is run up to its usage
+# line and through `seal`, which loads every module and needs no chain.
 
 on:
   push:
@@ -26,11 +31,17 @@ on:
       - "services/indexer/**"
       - "services/keeper/**"
       - "services/prover/**"
+      - "packages/a2a/**"
+      - "packages/agent/**"
       - "packages/core/**"
       - "packages/data/**"
       - "packages/did-resolver/**"
       - "packages/hardening/**"
+      - "packages/hosted/**"
+      - "packages/mcp/**"
       - "packages/observability/**"
+      - "packages/policy/**"
+      - "packages/x402/**"
       - ".dockerignore"
       - ".github/workflows/services.yml"
   # Only the workflow itself on pull requests: the Dockerfiles are built and run
@@ -59,7 +70,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [indexer, keeper, prover]
+        include:
+          - service: indexer
+            dockerfile: services/indexer/Dockerfile
+          - service: keeper
+            dockerfile: services/keeper/Dockerfile
+          - service: prover
+            dockerfile: services/prover/Dockerfile
+          - service: hosted
+            dockerfile: packages/hosted/Dockerfile
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/square-${{ matrix.service }}
     steps:
@@ -74,7 +93,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: .
-          file: services/${{ matrix.service }}/Dockerfile
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           load: true
           tags: ${{ env.IMAGE }}:candidate
@@ -84,11 +103,24 @@ jobs:
           cache-from: type=gha,scope=services-${{ matrix.service }}
           cache-to: type=gha,scope=services-${{ matrix.service }},mode=max
 
-      - name: Smoke test (hermetic; the container starts and answers /health)
+      - name: Smoke test (hermetic; the container starts and answers)
         env:
           SERVICE: ${{ matrix.service }}
         run: |
           set -euo pipefail
+          if [ "$SERVICE" = "hosted" ]; then
+            # No chain and no key: the binary loads every module it has and
+            # says what it needs, which is the check that the image's
+            # node_modules resolve at all.
+            set +e; out=$(docker run --rm "${IMAGE}:candidate" 2>&1); code=$?; set -e
+            echo "$out"
+            [ "$code" = "1" ] && echo "$out" | grep -q "usage: square-hosted"
+            # seal needs no chain either, and runs the configuration code path.
+            sealed=$(echo "not-a-real-key" | docker run --rm -i -e SQUARE_SEAL_SECRET=smoke-secret-sixteen-chars "${IMAGE}:candidate" node /app/dist/bin.js seal 7)
+            echo "$sealed" | grep -q "^sealed:v1:"
+            echo "square-hosted answers its usage and seals a key"
+            exit 0
+          fi
           case "$SERVICE" in
             indexer) port=3010; args=(-e CHAIN_ID=31337 -e RPC_URL=http://127.0.0.1:9 -e START_BLOCK=0) ;;
             keeper)  port=3011; args=(-e CHAIN_ID=31337 -e RPC_URL=http://127.0.0.1:9 -e KEEPER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80) ;;

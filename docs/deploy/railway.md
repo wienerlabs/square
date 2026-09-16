@@ -22,6 +22,7 @@ provider and the shape are [service-hosting.md](../decisions/service-hosting.md)
 | `square-keeper` | `ghcr.io/wienerlabs/square-keeper:main` | 3011 | finalizes every job whose window closed; `/actions` is its journal |
 | `square-screener` | `ghcr.io/wienerlabs/square-screener:main`, once [#370][i370] gives it a Dockerfile and a row in `services.yml` | 3012 | screens funding and release parties against TRM; the keeper asks it before a release |
 | `square-prover` | `ghcr.io/wienerlabs/square-prover:main` | 3003 | the app's job page only ([#347][i347]); its artifacts are [#353][i353]'s, below |
+| `square-hosted` | `ghcr.io/wienerlabs/square-hosted:main` | 3000 | the hosted agent of [#336][i336]'s addendum: an agent registered on Arc, its card resolvable, taking work through `square_hire` and delivering it |
 
 One project, one environment. Every service is a **Docker image** deployed
 from GHCR, not a build of the repository on Railway: the image that ran the
@@ -48,10 +49,12 @@ operator redeploys by hand (the service's Redeploy, or the same CLI command).
 There is no `:latest`, and `sha-` tags are never moved, so
 `docs/deploy/services-5042002-<date>.md` can name the exact build that ran.
 
-After the first run each package is private; make `square-indexer`,
-`square-keeper` and `square-prover` public once (Packages, the package,
-settings, visibility), so Railway pulls anonymously. A private package works
-too, with registry credentials on the service.
+The three packages the first run created (2026-09-16) came out public, so
+Railway pulls them anonymously; check a new package the same way (an
+anonymous `GET /v2/wienerlabs/<package>/manifests/main` at `ghcr.io` answers
+200) and make a private one public once (Packages, the package, settings,
+visibility). A private package works too, with registry credentials on the
+service.
 
 ## Setting a service up
 
@@ -154,6 +157,24 @@ is not deployed, and the app's job page binds proofs only where
 `NEXT_PUBLIC_PROVER_URL` points at a prover someone runs. The institutions'
 own tools do not use it either way ([#347][i347]).
 
+**square-hosted**
+
+| Variable | Value | |
+|---|---|---|
+| `SQUARE_HOSTED_CONFIG` | the agent's configuration, as JSON (`packages/hosted/README.md`); sealed, since a tool's `headers` may carry a bearer token | required; the image runs `square-hosted` with no path |
+| `SQUARE_PRIVATE_KEY` | sealed | required; the wallet that owns the configuration's `agentId`, registered on Arc with `square register` and funded with native USDC for `submit` |
+| `ANTHROPIC_API_KEY` | sealed | the platform tier's model key; an `own`-tier configuration carries the institution's, sealed under `SQUARE_SEAL_SECRET` |
+| `SQUARE_SEAL_SECRET` | sealed | only with an `own`-tier configuration |
+| `PORT` | `3000` | the card's `url` in the configuration is this service's public domain |
+| `SQUARE_CHAIN_ID`, `SQUARE_RPC_URL` | defaults: Arc Testnet and its endpoint | |
+| `SQUARE_PROVER_ARTIFACTS` | not set | only a configuration with a `compliance` block (an agent that delegates) proves, and that needs the circuit's files beside it, which is [#353][i353]'s question again; the first hosted agent takes work and does not delegate |
+
+The health check path is `/.well-known/agent-registration.json`: the card is
+served once the chain answered and the agent is up. `/a2a` is what
+`square_hire` talks to; a `compliance` block's duty state is written in the
+container's working directory, so an agent that delegates wants a volume there
+or accepts recovering from the chain after a restart (`proof-freshness.md`).
+
 ## Watching it
 
 Railway's health check is a readiness gate for cutovers, not a monitor. Three
@@ -188,8 +209,9 @@ transaction on Arcscan. That file supersedes
   matrix with its Dockerfile, and this document's table gets its variables
   (`RPC_URL`, `CHAIN_ID`, `SCREENING_REGISTRY`, `SCREENER_PRIVATE_KEY`,
   `SCREENING_CANARY`, `PORT`, `TRM_BASE_URL`, `CORS_ORIGINS`).
-- The hosted agent of [#336][i336]'s addendum (`square-hosted`), which has no
-  Dockerfile yet and needs the circuit's files beside it to prove.
+- A hosted agent that delegates: it proves in its own process and needs the
+  circuit's files beside it, [#353][i353]'s question; the first hosted agent
+  takes work and does not delegate.
 - The application, which is static files on Vercel (`deploy.yml`) and only
   needs `NEXT_PUBLIC_INDEXER_URL` and, if a prover is hosted,
   `NEXT_PUBLIC_PROVER_URL` pointed at the domains above.
