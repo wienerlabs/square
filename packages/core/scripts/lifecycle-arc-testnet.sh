@@ -9,8 +9,16 @@ export CHAIN_ID=5042002
 export LIFECYCLE_ACTORS_FILE="${LIFECYCLE_ACTORS_FILE:-$HOME/.square/arc-testnet-actors.env}"
 export GAS_PRICE_WEI="${GAS_PRICE_WEI:-21200000000}"
 export FUND_PER_ACTOR="${FUND_PER_ACTOR:-1}"
-export FUND_CLIENT="${FUND_CLIENT:-3.2}"
-export BUDGET_USDC="${BUDGET_USDC:-0.25}"
+# A keeper cranks nothing under its profitability bar (about 2.3 USDC a job at Arc's
+# gas price and the deployed fee, docs/design/mandate-to-payment.md), so keeper mode
+# funds bigger jobs: six of them, their bonds and the gas.
+if [ "${LIFECYCLE_FINALIZER:-self}" = "keeper" ]; then
+  export FUND_CLIENT="${FUND_CLIENT:-45}"
+  export BUDGET_USDC="${BUDGET_USDC:-6}"
+else
+  export FUND_CLIENT="${FUND_CLIENT:-3.2}"
+  export BUDGET_USDC="${BUDGET_USDC:-0.25}"
+fi
 # The provider's ERC-8004 agent. 892531 was registered on the 2026-09-09 run and is
 # reused, so a run costs no registration; REGISTER_AGENT=1 registers a fresh one instead,
 # which is what square#31's second step wants in its report. AGENT_ID wins over
