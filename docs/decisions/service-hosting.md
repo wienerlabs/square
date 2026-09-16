@@ -65,6 +65,11 @@ screening ([#372](https://github.com/wienerlabs/square/issues/372), decided
 yes), and it needs TRM reachable from the provider's network. The prover
 serves the app's job page only (above).
 
+The setup itself is [docs/deploy/railway.md](../deploy/railway.md): every
+service is a Docker image from GHCR that `.github/workflows/services.yml`
+builds, smoke-tests and publishes on each push to `main` under a tag that
+names the commit, and tells the hosted service to pull; Railway builds nothing.
+
 ## What is not decided
 
 The Railway account and project the services live in, who holds the keeper's

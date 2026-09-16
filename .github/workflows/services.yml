@@ -1,0 +1,148 @@
+name: services
+
+# Builds the images the long-running services ship as and publishes them to
+# GHCR, which is where the hosted stack takes them from (square#336,
+# docs/deploy/railway.md). stack.yml already builds the same Dockerfiles
+# through compose on every pull request and asks the containers whether they
+# are healthy; this workflow is the other half: the image a push to main
+# produced is the image that runs against Arc, under a tag that names the
+# commit, and the hosted services are told to pull it.
+#
+#   ghcr.io/wienerlabs/square-<service>:sha-<12 hex>   the record, written once
+#   ghcr.io/wienerlabs/square-<service>:main           what main built last; the hosted services point here
+#
+# No :latest, for the reason did-aip-driver.yml gives. After the first run each
+# package has to be made PUBLIC once, by hand (Packages -> square-<service> ->
+# Package settings -> Change visibility), so the host pulls anonymously.
+#
+# The smoke test is hermetic: every service starts with a dead RPC endpoint and
+# no database, and answers /health with 503, which is the check the container
+# runs at all; what a healthy answer needs is what stack.yml brings up.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/indexer/**"
+      - "services/keeper/**"
+      - "services/prover/**"
+      - "packages/core/**"
+      - "packages/data/**"
+      - "packages/did-resolver/**"
+      - "packages/hardening/**"
+      - "packages/observability/**"
+      - ".dockerignore"
+      - ".github/workflows/services.yml"
+  # Only the workflow itself on pull requests: the Dockerfiles are built and run
+  # by stack.yml on every one, so a second build would prove nothing new, and
+  # this workflow is not a required check.
+  pull_request:
+    paths:
+      - ".github/workflows/services.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: services-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: ${{ matrix.service }} image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [indexer, keeper, prover]
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/square-${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+
+      # The context is the repository root: each Dockerfile copies the packages
+      # the service depends on by path, which is why compose.yaml builds them
+      # from the root too.
+      - name: Build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE }}:candidate
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=services-${{ matrix.service }}
+          cache-to: type=gha,scope=services-${{ matrix.service }},mode=max
+
+      - name: Smoke test (hermetic; the container starts and answers /health)
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          case "$SERVICE" in
+            indexer) port=3010; args=(-e CHAIN_ID=31337 -e RPC_URL=http://127.0.0.1:9 -e START_BLOCK=0) ;;
+            keeper)  port=3011; args=(-e CHAIN_ID=31337 -e RPC_URL=http://127.0.0.1:9 -e KEEPER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80) ;;
+            prover)  port=3003; args=() ;;
+          esac
+          docker run -d --name "$SERVICE" -p "$port:$port" "${args[@]}" "${IMAGE}:candidate"
+          code=000
+          for _ in $(seq 1 60); do
+            code=$(curl -s -o /tmp/health.json -w "%{http_code}" "http://localhost:$port/health" || true)
+            [ "$code" != "000" ] && break
+            sleep 1
+          done
+          echo "/health answered $code"
+          cat /tmp/health.json 2>/dev/null; echo
+          docker logs "$SERVICE" | tail -20
+          docker rm -f "$SERVICE" >/dev/null
+          # 503 is the honest answer with no chain and no database behind it; a
+          # connection refused or a crash is the failure this step exists for.
+          [ "$code" = "503" ] || [ "$code" = "200" ]
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push sha-<commit> and main
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          short=$(echo "${GITHUB_SHA}" | cut -c1-12)
+          docker tag "${IMAGE}:candidate" "${IMAGE}:sha-${short}"
+          docker tag "${IMAGE}:candidate" "${IMAGE}:main"
+          docker push "${IMAGE}:sha-${short}"
+          docker push "${IMAGE}:main"
+          echo "published ${IMAGE}:sha-${short} and moved ${IMAGE}:main to it" >> "$GITHUB_STEP_SUMMARY"
+
+      # The hosted service points at :main and is asked to pull it. Skipped,
+      # and said so, until the project token is in the repository's secrets
+      # (docs/deploy/railway.md); a build that is not redeployed is still
+      # published above, so the operator can pull it by hand.
+      - name: Redeploy on Railway
+        if: github.event_name != 'pull_request'
+        env:
+          HAS_TOKEN: ${{ secrets.RAILWAY_TOKEN != '' }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "RAILWAY_TOKEN is not set; ${IMAGE}:main was published but no hosted service was told to pull it." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          npx -y @railway/cli@5 redeploy --service "square-$SERVICE" --from-source --yes
+          echo "square-$SERVICE on Railway is pulling ${IMAGE}:main" >> "$GITHUB_STEP_SUMMARY"
