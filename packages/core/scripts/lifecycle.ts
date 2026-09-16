@@ -518,7 +518,10 @@ async function main(): Promise<void> {
   record("2c-dispute-split", "withdraw (client share)", (await client.withdraw()).receipt);
 
   const expiryPath = "3-expiry";
-  const expiring = await client.createJob({ provider: provider.account, expiredAt: (await now()) + horizon + 30n, spec: { path: expiryPath } });
+  // Two minutes past the window: since square#326 `fund` refuses a job whose
+  // window no longer fits before its expiry, and createJob, setBudget and fund
+  // are three transactions apart on a live chain.
+  const expiring = await client.createJob({ provider: provider.account, expiredAt: (await now()) + horizon + 120n, spec: { path: expiryPath } });
   record(expiryPath, "createJob (short expiry)", expiring.receipt);
   record(expiryPath, "setBudget", (await provider.setBudget(expiring.jobId, budget)).receipt);
   record(expiryPath, "fund", (await client.fund(expiring.jobId, budget)).receipt);

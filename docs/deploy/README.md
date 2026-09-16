@@ -175,3 +175,8 @@ state rather than a surprise:
   submit window (#240, #244, #245, #248). The app on main reads
   `scheduledFees` and `complianceProofOf` only where the deployment exposes
   them; a stack redeploy is what makes them live.
+- `SquareJob`: `createJob` and `fund` refuse an expiry the settlement window
+  cannot fit, so a job the provider could never deliver never holds money, and
+  `netPayout` on an open job reads the fee a funding would pin rather than the
+  raw fields (#326, #327). The deployed kernel still creates and funds such a
+  job and still previews the stale fee.
