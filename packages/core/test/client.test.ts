@@ -383,6 +383,24 @@ describe("agentOf tells no agent from agent 0", () => {
     await expect(client.agentOf(1n)).rejects.toBeInstanceOf(ContractFunctionExecutionError);
     expect(reads.map((r) => r.functionName)).toEqual(["boundAgentOf"]);
   });
+
+  // square#382, square#396: the commitment the hook pinned at funding, which
+  // the module binds the proof to; nothing pinned reads as null, and so does a
+  // hook from before the pin.
+  it("reads the commitment pinned at funding, and null for a job with none or a hook without the function", async () => {
+    const pinned = `0x${"ab".repeat(32)}` as const;
+    const { client, reads } = hookWith({ commitmentAtFund: pinned });
+    expect(await client.commitmentAtFund(9n)).toBe(pinned);
+    expect(reads.at(-1)).toMatchObject({ functionName: "commitmentAtFund", args: [9n] });
+    const { client: nothing } = hookWith({ commitmentAtFund: `0x${"0".repeat(64)}` });
+    expect(await nothing.commitmentAtFund(9n)).toBeNull();
+    const { client: older } = square({
+      answer: () => {
+        throw unknownSelector("commitmentAtFund");
+      },
+    });
+    expect(await older.commitmentAtFund(9n)).toBeNull();
+  });
 });
 
 describe("proofState names what the gate can decide", () => {

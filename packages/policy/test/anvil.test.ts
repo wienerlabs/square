@@ -240,4 +240,28 @@ describe.skipIf(!("stack" in ready))("policy → proof → release, on chain", (
     expect(moduleVerdict(result.receipt, stack.deployment.complianceModule!)).toEqual({ verified: true });
     expect(await provider().withdrawable(account(2).address)).toBeGreaterThan(owed);
   }, 180_000);
+
+  // square#396. A job the mandate refuses on a rule that stands: the duty binds
+  // the refusal itself, the module pronounces it at release, and the net comes
+  // back to the institution instead of waiting in escrow forever.
+  it("binds the mandate's refusal for a job bought under a category the policy does not allow, and the release returns the net to the institution", async () => {
+    const jobId = await submittedJob();
+    const client = institution();
+    const duty = new ComplianceDuty({ client, policy, prover, onEvent: (e) => events.push(e), discover: false });
+    duty.track(jobId, "not.allowed");
+    await stack.testClient.increaseTime({ seconds: 86_400 + 1 });
+    await stack.testClient.mine({ blocks: 1 });
+    const owedToProvider = await provider().withdrawable(account(2).address);
+    const owedToClient = await client.withdrawable(account(1).address);
+    const report = await duty.tick();
+    expect(report.refusalBound).toEqual([jobId]);
+    expect(report.released).toEqual([jobId]);
+    expect(events.find((e) => e.type === "refusal-bound" && e.jobId === jobId)).toMatchObject({ violated: ["endpoint_category"] });
+    const released = events.find((e) => e.type === "released" && e.jobId === jobId);
+    expect(released).toMatchObject({ type: "released", verified: false, refusedFor: stringToHex("is_compliant is 0", { size: 32 }) });
+    expect((await client.getJobRecord(jobId)).status).toBe(JobStatus.Completed);
+    expect(await provider().withdrawable(account(2).address)).toBe(owedToProvider);
+    expect((await client.withdrawable(account(1).address)) - owedToClient).toBe(await client.netPayout(jobId));
+    expect(duty.jobs()).toEqual([]);
+  }, 180_000);
 });

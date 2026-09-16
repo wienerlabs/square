@@ -89,7 +89,10 @@ returns the net to the institution, with the reason on chain ([#100][i100],
 the escrow: the evaluator refuses the crank with `ProofRequired` until the
 institution binds one ([proof-required.md](../decisions/proof-required.md),
 [#382][i382]); the stack deployed today, from before that change, refunds it
-the same way as a refusal until the redeploy.
+the same way as a refusal until the redeploy. So the refusal is the
+institution's to bind too: its duty binds the refusing proof once the rule
+is one the day cannot clear, and the release returns the net
+([proof-freshness.md](../decisions/proof-freshness.md)).
 
 **The buyer is paid, the agent is credited.** The hook resolves the payee from
 the market (`payeeOf`) and writes the reputation for the agent bound at

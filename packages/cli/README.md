@@ -77,7 +77,7 @@ knows needs neither.
 | `policy show [poster]` | The commitment, limit, today's counter, buyer root and whether the hook holds a module; `--file` says whether a file is the policy on chain. |
 | `policy buyers set <address>… --out buyers.json` | Approve buyers: publish the list's root, keep every buyer's salt in the file. |
 | `policy buyers entry buyers.json <address>` | A buyer's `{salt, proof, buyer}`, what the app's purchase form takes. |
-| `policy prove <jobId> --file --artifacts --category` | Prove that the job's release fits the policy, on this machine, and bind the proof; `--release` cranks the job once its window has closed. |
+| `policy prove <jobId> --file --artifacts --category` | Prove that the job's release fits the policy, on this machine, and bind the proof; `--release` cranks the job once its window has closed; `--bind-refusal` binds the policy's refusal instead, so the release returns the net to this wallet (a job with no proof does not settle). |
 | `policy watch <jobId>… --file --artifacts --category` | Keep the proofs current and release each job when its window closes, until Ctrl-C. |
 | `policy status <jobId>` | Whether the bound proof still describes the release the chain would make now. |
 

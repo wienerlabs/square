@@ -90,8 +90,16 @@ Each tick, per tracked job: `releaseFacts` reads what the release binds to,
 proves and rebinds when they differ or the proof aged past half the
 tolerance, and once the window has closed (or the arbiters have decided) the
 duty cranks. A proof the circuit marks non-compliant is reported with the
-rules it broke and not bound. Everything is on the chain or in the policy;
-the duty remembers only which jobs it watches.
+rules it broke; since a job with no proof does not settle (square#382), the
+duty binds the refusal once it is the mandate's last word, a rule that says
+the same tomorrow or a job about to expire, and the release returns the net
+to this wallet (`refusal-bound`, then `released` with `verified: false`); a
+refusal the day's counter or the policy's hours can clear is waited out
+(`refusalIsTransient`). A job funded under a policy the client has since
+replaced is proved against the commitment pinned at funding
+(`releaseFacts.pinnedCommitment`), and a file that computes the newer one is
+refused as `policy-pinned`, naming the older file. Everything is on the chain
+or in the policy; the duty remembers only which jobs it watches.
 
 On a hook that screens ([sanctions-screening.md](../../docs/decisions/sanctions-screening.md)),
 the payee's record decides the release as much as the proof does: the hook
