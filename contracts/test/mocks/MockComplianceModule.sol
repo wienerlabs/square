@@ -18,6 +18,9 @@ contract MockComplianceModule is IComplianceModule {
     bool public refuseAll;
     bytes32 public expectedProof;
     uint256 public gasToBurn;
+    address private _policyRegistry;
+    IComplianceModule.ProofState private _forcedState;
+    bool private _forcedStateSet;
 
     error ReleaseNotCompliant(uint256 jobId, address payee, uint256 amount);
 
@@ -35,6 +38,25 @@ contract MockComplianceModule is IComplianceModule {
 
     function setGasToBurn(uint256 value) external {
         gasToBurn = value;
+    }
+
+    function setPolicyRegistry(address value) external {
+        _policyRegistry = value;
+    }
+
+    function setProofState(IComplianceModule.ProofState value) external {
+        _forcedState = value;
+        _forcedStateSet = true;
+    }
+
+    function policyRegistry() external view returns (address) {
+        return _policyRegistry;
+    }
+
+    function proofState(bytes calldata proof) external view returns (IComplianceModule.ProofState) {
+        if (_forcedStateSet) return _forcedState;
+        if (proof.length == 0) return IComplianceModule.ProofState.Missing;
+        return IComplianceModule.ProofState.Decidable;
     }
 
     /// @dev The preview a real module answers from the same state. This mock has

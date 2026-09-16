@@ -86,8 +86,10 @@ like any other, which is why step 6 is the keeper's and step 7 the institution's
 with a split, and a proof the mandate refuses pays the provider nothing and
 returns the net to the institution, with the reason on chain ([#100][i100],
 [compliance-gate.md](compliance-gate.md)). A proof that is merely missing holds
-the escrow once [#382][i382] lands ([proof-required.md](../decisions/proof-required.md));
-until then the hook refunds it the same way.
+the escrow: the evaluator refuses the crank with `ProofRequired` until the
+institution binds one ([proof-required.md](../decisions/proof-required.md),
+[#382][i382]); the stack deployed today, from before that change, refunds it
+the same way as a refusal until the redeploy.
 
 **The buyer is paid, the agent is credited.** The hook resolves the payee from
 the market (`payeeOf`) and writes the reputation for the agent bound at

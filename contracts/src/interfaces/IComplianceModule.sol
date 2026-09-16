@@ -35,6 +35,18 @@ pragma solidity ^0.8.28;
 /// docs/decisions/hook-failure-modes.md for why a verdict is a split and never
 /// a revert.
 interface IComplianceModule {
+    enum ProofState {
+        NotGated,
+        Missing,
+        Malformed,
+        Unverifiable,
+        Decidable
+    }
+
+    function proofState(bytes calldata proof) external view returns (ProofState);
+
+    function policyRegistry() external view returns (address);
+
     /// @notice Would this release be compliant? No state is touched.
     /// @dev Read by `SquareHook.resolvePayout`, which returns `providerBps = 0`
     ///      when the answer is false: the whole net goes back to the client and

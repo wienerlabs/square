@@ -273,6 +273,7 @@ contract SquareHookTest is BaseTest {
         hook.setComplianceModule(address(compliance));
         compliance.setRejectAll(true);
         uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
         pastWindow(jobId);
         vm.expectEmit(true, false, false, true);
         emit SquareHook.ComplianceCheckFailed(
@@ -312,6 +313,7 @@ contract SquareHookTest is BaseTest {
         vm.prank(owner);
         hook.setComplianceModule(address(compliance));
         uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
         pastWindow(jobId);
         vm.expectEmit(true, true, false, false);
         emit SquareHook.ReputationWriteFailed(jobId, AGENT_ID, "");
@@ -392,6 +394,7 @@ contract SquareHookTest is BaseTest {
         hook.setComplianceModule(address(compliance));
         compliance.setGasToBurn(400_000);
         uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
         pastWindow(jobId);
         keeper.finalize(jobId);
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));
@@ -402,6 +405,7 @@ contract SquareHookTest is BaseTest {
         hook.setComplianceModule(address(compliance));
         compliance.setGasToBurn(HOOK_GAS_LIMIT + 100_000);
         uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
         pastWindow(jobId);
         uint256 gasBefore = gasleft();
         vm.expectEmit(true, false, false, false);
@@ -513,6 +517,7 @@ contract SquareHookTest is BaseTest {
         vm.prank(owner);
         hook.setComplianceModule(address(compliance));
         uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
         pastWindow(jobId);
         vm.mockCallRevert(
             address(kernel), abi.encodeWithSelector(ISquareJob.netPayout.selector, jobId), "read failed"
@@ -558,6 +563,7 @@ contract SquareHookTest is BaseTest {
         hook.setComplianceModule(address(compliance));
         compliance.setRefuseAll(true);
         uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
         pastWindow(jobId);
         keeper.finalize(jobId);
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));

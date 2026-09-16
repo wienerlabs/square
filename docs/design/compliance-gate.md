@@ -33,18 +33,36 @@ The reason is in that record: after [#90][i90] closed the refund on a
 with **no exit at all** — `complete`, `reject` and `claimRefund` were all
 closed, and there is no recovery function.
 
-So the gate reads: a missing, invalid or foreign proof pays the provider
-nothing and returns the whole net to the client. The job still settles, so the
-state machine never stalls, and nobody's money is stranded. "The proof locks
-the release" is true in the only sense that does not also lock the escrow.
+So the gate reads, in two halves that used to be one.
 
-That is what the module does today, and it pays a client for binding nothing
-(#346). [proof-required.md](../decisions/proof-required.md) decides the
-split of that sentence: a proof the mandate refuses still returns the net to
-the client; a proof that is merely missing, malformed or from another key
-holds the escrow, and the client, who alone can bind one, ends the hold. The
-hold is the evaluator's refusal to settle, not a hook revert, so the contract
-above stands. #382 builds it.
+A proof the mandate itself refuses pays the provider nothing and returns the
+whole net to the client. The job settles, the state machine does not stall,
+and the reason is on chain. That is a decision, and a decision is allowed to
+go against the provider.
+
+A job with no proof, a proof of the wrong length, or bytes that do not verify
+is not a decision at all, and it no longer settles. `KeeperEvaluator.finalize`
+and `finalizeDecided` ask the hook for `proofState(jobId)` first and revert
+`ProofRequired(jobId, state)` rather than call `complete`. The job stays
+`Submitted` and the escrow stays where it is. The client is the only party who
+can bind a proof, so the client is the only party who can end the hold, which
+is the point: before this, a client who bound nothing took the escrow back
+after a delivery it had already received.
+
+The hold is the evaluator's refusal to settle, not a hook revert, so the
+contract in the paragraph above still stands: the hook never throws on the
+release path, and the escrow lock #100 removed does not come back. And
+`claimRefund` is not a way around it. The probe the kernel sends still reads
+as resolvable while a module is installed, so an expired `Submitted` job with
+no proof is refused with `SettledByEvaluator` rather than refunded.
+
+One more thing moves with it. The policy commitment a proof is checked
+against is now pinned when the job is funded, in the hook's `FUND_SELECTOR`
+branch, and read back through `commitmentAtFund(jobId)`. A client cannot fund
+a job, take delivery, move to another mandate and collect a refusal it wrote
+itself. For the same reason a client who has committed to no mandate at all
+cannot fund: `NoPolicy(client)` is raised before the money moves, because that
+job could never have released.
 
 ## Where the verdict has to be computed
 

@@ -7,7 +7,7 @@ import { policyCommitment } from "../src/commitment.js";
 import { newPolicy, type Policy } from "../src/policy.js";
 import { decodeComplianceProof, signalsOf } from "../src/proof.js";
 import { createLocalProver, type LocalProver } from "../src/local-prover.js";
-import { bindComplianceProof, proofState, releaseFacts } from "../src/release.js";
+import { bindComplianceProof, moduleVerdict, proofState, releaseFacts } from "../src/release.js";
 import { account, artifacts, complianceStack, rpcUrl, type Stack } from "./helpers/stack.js";
 
 /**
@@ -214,18 +214,30 @@ describe.skipIf(!("stack" in ready))("policy → proof → release, on chain", (
     }, 300_000);
   });
 
-  it("refuses to bind for a release the policy does not allow, naming the rule, and the module refuses a proofless release", async () => {
+  it("refuses to bind for a release the policy does not allow, naming the rule; a proofless crank is refused and the escrow waits for the client", async () => {
     const jobId = await submittedJob();
     const client = institution();
     const outcome = await bindComplianceProof({ client, policy, prover, jobId, category: "not.allowed" });
     expect(outcome).toMatchObject({ bound: false, reason: "not-compliant", violated: ["endpoint_category"] });
     expect(await client.complianceProofOf(jobId)).toBe("0x");
-    // Nothing bound and the window closed: a crank releases nothing to the provider.
+    // Nothing bound and the window closed. Since square#382 the evaluator does
+    // not settle a job it has no verdict for: the crank is refused, the job
+    // stays Submitted, nobody is paid and nobody is refunded.
     await stack.testClient.increaseTime({ seconds: 86_400 + 1 });
     await stack.testClient.mine({ blocks: 1 });
     const owed = await provider().withdrawable(account(2).address);
+    expect(await client.proofState(jobId)).toBe("missing");
+    await expect(stack.actor(4).finalize(jobId)).rejects.toThrow(/ProofRequired/);
+    expect((await client.getJobRecord(jobId)).status).toBe(JobStatus.Submitted);
+    expect(await provider().withdrawable(account(2).address)).toBe(owed);
+    // The client, and only the client, ends the wait: a proof for the release
+    // the policy does allow settles the job, and the provider is paid.
+    const bound = await bindComplianceProof({ client, policy, prover, jobId, category: "text.summarize" });
+    expect(bound.bound).toBe(true);
+    expect(await client.proofState(jobId)).toBe("decidable");
     const result = await stack.actor(4).finalize(jobId);
     expect(result.receipt.status).toBe("success");
-    expect(await provider().withdrawable(account(2).address)).toBe(owed);
+    expect(moduleVerdict(result.receipt, stack.deployment.complianceModule!)).toEqual({ verified: true });
+    expect(await provider().withdrawable(account(2).address)).toBeGreaterThan(owed);
   }, 180_000);
 });
