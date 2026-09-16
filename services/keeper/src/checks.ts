@@ -1,15 +1,16 @@
 import type { Address, PublicClient } from "viem";
 import type { Database } from "@squaresdk/data";
 import { DEFAULT_CHECK_TIMEOUT_MS, type CheckResult, type HealthCheck } from "@squaresdk/observability";
-import { screenerFetch, type ScreenerEndpoint } from "./screening.js";
+import { hookScreening, screenerFetch, type ScreenerEndpoint } from "./screening.js";
 
 export const DEFAULT_MIN_ACTIONS_FUNDED = 3;
 
 export interface KeeperChecksOptions {
   db: Pick<Database, "query">;
-  publicClient: Pick<PublicClient, "getChainId" | "getBalance" | "getGasPrice">;
+  publicClient: Pick<PublicClient, "getChainId" | "getBalance" | "getGasPrice" | "readContract">;
   chainId: number;
   account: Address;
+  hook: Address;
   finalizeGas: bigint;
   minActionsFunded?: number;
   ephemeralMirror: boolean;
@@ -43,6 +44,18 @@ export function keeperChecks(options: KeeperChecksOptions): Record<string, Healt
   };
   const screener = options.screener;
 
+  const screensWithoutAScreener = async (): Promise<CheckResult> => {
+    const registry = await hookScreening(options.publicClient, options.hook);
+    return registry === undefined
+      ? { ok: true, detail: `${options.hook} screens nobody, so no screener is needed` }
+      : {
+          ok: false,
+          detail:
+            `${options.hook} screens with ${registry} and SCREENER_URL is not set: ` +
+            "every release on it would be refused and pay the client instead of the provider",
+        };
+  };
+
   const balance = async (): Promise<CheckResult> => {
     const [balance, gasPriceWei] = await Promise.all([
       options.publicClient.getBalance({ address: options.account }),
@@ -71,6 +84,8 @@ export function keeperChecks(options: KeeperChecksOptions): Record<string, Healt
         ? "DATABASE_URL is not set, the mirror is private to this process and stays empty"
         : "reading the mirror an indexer writes",
     }),
-    ...(screener ? { screener: { check: () => screenerHealth(screener), critical: true } } : {}),
+    ...(screener
+      ? { screener: { check: () => screenerHealth(screener), critical: true } }
+      : { screening: { check: screensWithoutAScreener, critical: true } }),
   };
 }

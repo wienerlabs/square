@@ -56,7 +56,7 @@ export interface ScreenerEndpoint {
 export interface PayeeScreeningOptions {
   client: Pick<SquareClient, "getJobRecord">;
   publicClient: Pick<PublicClient, "readContract" | "getBlock">;
-  screener: ScreenerEndpoint;
+  screener?: ScreenerEndpoint;
 }
 
 function scopeAllowed(address: string, allowPrivate: boolean): boolean {
@@ -117,6 +117,34 @@ function hasNoScreeningFunction(error: unknown): boolean {
   return error instanceof BaseError && error.walk((e) => e instanceof ContractFunctionZeroDataError || e instanceof ContractFunctionRevertedError) !== null;
 }
 
+export async function hookScreening(publicClient: Pick<PublicClient, "readContract">, hook: Address): Promise<Address | undefined> {
+  if (hook === zeroAddress) return undefined;
+  let registry: Address;
+  try {
+    registry = await publicClient.readContract({ address: hook, abi: squareHookAbi, functionName: "screening" });
+  } catch (error) {
+    if (hasNoScreeningFunction(error)) return undefined;
+    throw error;
+  }
+  return registry === zeroAddress ? undefined : registry;
+}
+
+export async function assertScreenerForHook(publicClient: Pick<PublicClient, "readContract">, hook: Address): Promise<Error | undefined> {
+  let registry: Address | undefined;
+  try {
+    registry = await hookScreening(publicClient, hook);
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+  if (registry === undefined) return undefined;
+  throw new Error(
+    `SCREENER_URL is not set and ${hook} screens with ${registry}: ` +
+      "every release on that hook needs its payee freshly screened, so this keeper would finalize into a refusal " +
+      "and pay the client instead of the provider. Set SCREENER_URL (services/screener/README.md), " +
+      "or point the keeper at a hook that screens nobody.",
+  );
+}
+
 interface Screened {
   registry: Address;
   payee: Address;
@@ -142,25 +170,16 @@ export function payeeScreening(options: PayeeScreeningOptions): PayeeScreenings 
 
   const whatToScreen = async (jobId: bigint): Promise<PayeeScreening | Screened> => {
     const { hook } = await options.client.getJobRecord(jobId);
-    if (hook === zeroAddress) return { proceed: true, state: "no-screening" };
-    let registry: Address;
-    try {
-      registry = await publicClient.readContract({ address: hook, abi: squareHookAbi, functionName: "screening" });
-    } catch (error) {
-      if (hasNoScreeningFunction(error)) return { proceed: true, state: "no-screening" };
-      // Read as "no screening", an RPC failure would finalize into exactly the
-      // refusal holding the job exists to prevent.
-      throw error;
-    }
-    if (registry === zeroAddress) return { proceed: true, state: "no-screening" };
+    const registry = await hookScreening(publicClient, hook);
+    if (registry === undefined) return { proceed: true, state: "no-screening" };
     const market = await publicClient.readContract({ address: hook, abi: squareHookAbi, functionName: "claimMarket" });
     const payee = await publicClient.readContract({ address: market, abi: claimMarketAbi, functionName: "payeeOf", args: [jobId] });
     return { registry, payee: getAddress(payee) };
   };
 
-  const askScreener = async (addresses: readonly Address[]): Promise<void> => {
+  const askScreener = async (screener: ScreenerEndpoint, addresses: readonly Address[]): Promise<void> => {
     try {
-      const response = await screenerFetch(options.screener, "/screen", {
+      const response = await screenerFetch(screener, "/screen", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ addresses }),
@@ -202,8 +221,11 @@ export function payeeScreening(options: PayeeScreeningOptions): PayeeScreenings 
       }
     }
     const payees = [...new Set([...toScreen.values()].map(({ payee }) => payee))];
-    for (let start = 0; start < payees.length; start += SCREENER_MAX_ADDRESSES) {
-      await askScreener(payees.slice(start, start + SCREENER_MAX_ADDRESSES));
+    const screener = options.screener;
+    if (screener !== undefined) {
+      for (let start = 0; start < payees.length; start += SCREENER_MAX_ADDRESSES) {
+        await askScreener(screener, payees.slice(start, start + SCREENER_MAX_ADDRESSES));
+      }
     }
     for (const [jobId, screened] of toScreen) {
       try {

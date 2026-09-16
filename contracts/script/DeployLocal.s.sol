@@ -62,6 +62,7 @@ contract DeployLocal is Script {
     address internal constant ANVIL_4 = 0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65;
     address internal constant ANVIL_5 = 0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc;
     address internal constant ANVIL_6 = 0x976EA74026E726554dB657fA54763abd0C3a0aa9;
+    address internal constant ANVIL_7_SCREENER = 0x14dC79964da2C08b23698B3D3cc7Ca32193d9955;
 
     struct Mocks {
         MockUSDC3009 usdc;
@@ -183,6 +184,7 @@ contract DeployLocal is Script {
         //
         //   INSTALL_SCREENING=true forge script script/DeployLocal.s.sol ...
         s.screening = new ScreeningRegistry(deployer, 1 hours);
+        s.screening.setScreener(ANVIL_7_SCREENER, true);
         if (vm.envOr("INSTALL_SCREENING", false)) {
             s.hook.setScreening(address(s.screening));
         }

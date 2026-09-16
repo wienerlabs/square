@@ -49,9 +49,41 @@ chain.
 
 TRM Labs' sanctions screening API, without a key: one request a second and 100
 a day ([docs.sanctions.trmlabs.com](https://docs.sanctions.trmlabs.com/)). That
-is enough for development and CI, not for production. TRM's public
-documentation does not say how its free key is sent, so none is sent. Why TRM,
-and what it does not cover, is in the decision record.
+is enough for development and CI, not for production. Why TRM, and what it does
+not cover, is in the decision record.
+
+### The hundred a day, and what spends it
+
+A request carries up to 16 addresses and the canary, so the count that matters
+is requests, not addresses:
+
+- **A hire costs one**: the client, the provider and the canary go together.
+- **A release costs one**: the payee and the canary.
+- **A release that is held costs one per keeper tick.** The keeper asks again
+  every tick for every payee it could not clear. At the default
+  `POLL_INTERVAL_MS=15000` that is four a minute, so a single payee that stays
+  unscreened spends the whole daily allowance in about 25 minutes.
+
+So the free tier carries roughly fifty jobs a day *if nothing is held*, and the
+held case is what exhausts it. On a shared testnet either raise
+`POLL_INTERVAL_MS`, or get a key. A 429 or a 5xx from TRM makes `/screen`
+answer 503 and sign nothing, so an exhausted allowance holds releases rather
+than clearing anyone by mistake.
+
+### The key path
+
+No key is sent today: TRM's public documentation does not say how its free key
+is presented, and inventing a header would be a guess that fails closed at best.
+When TRM's onboarding says how, the key path is three edits and no design:
+
+1. `services/screener/src/source.ts` reads `TRM_API_KEY` and sends it as the
+   header TRM names, on the request it already builds.
+2. The variable joins the table below, required in production and optional in
+   development.
+3. `docs/deploy/railway.md` adds it to `square-screener` as a sealed variable.
+
+Until then the daily limit above is the operating constraint, and it belongs in
+whatever the shared stack's capacity is planned against.
 
 The request goes through `@squaresdk/hardening`'s `safeFetch`. The base URL
 has to resolve to a public address, which is checked at boot and again on every
@@ -65,11 +97,13 @@ read to 64 KiB and no further; TRM answered the largest request, 17 entries, in
 |---|---|---|
 | `RPC_URL` | yes | the chain the registry is on |
 | `CHAIN_ID` | no, default 5042002 | part of the EIP-712 domain |
-| `SCREENING_REGISTRY` | yes | the registry's address |
+| `SCREENING_REGISTRY` | yes, unless `SQUARE_DEPLOYMENT_FILE` carries one | the registry's address |
+| `SQUARE_DEPLOYMENT_FILE` | no | a deployment record written by a deploy script; its `ScreeningRegistry` is used when `SCREENING_REGISTRY` is unset, which is how the compose stack finds an address the chain only just produced |
 | `SCREENER_PRIVATE_KEY` | yes | signs the screenings and pays for their submission; the registry's owner must `setScreener` its address |
 | `SCREENING_CANARY` | yes, no default | an address with a published designation. Which address proves the source is live is a choice the operator can defend, not one buried in the code |
 | `TRM_BASE_URL` | no, default `https://api.trmlabs.com` | must resolve to a public address; a private, loopback or link-local one stops the service at boot |
 | `PORT` | no, default 3012 | |
+| `SQUARE_VERSION` | no, default 0.1.0 | what `/health` and `/version` report, and what every log line carries |
 | `SUBMIT_GAS`, `MIN_SUBMITS_FUNDED` | no, defaults 400000 and 3 | what the balance health check measures against |
 | `RECEIPT_POLL_MS` | no, default 250 | how often a submission's receipt is polled for. viem's own default, for a chain that declares no block time, is 4 seconds, which on Arc is several times the confirmation it waits for |
 | `CORS_ORIGINS` | no | comma-separated origins a browser may call `POST /screen` and `GET /health` from, such as the app's (`NEXT_PUBLIC_SCREENER_URL`); `localhost` on any port is always allowed. Any other origin gets no CORS headers, so its browser stops the call |

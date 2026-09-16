@@ -9,14 +9,22 @@ import type { ScreenerEndpoint } from "../src/screening.js";
 
 const CHAIN = 5042002;
 const ACCOUNT = "0xcc55417B17a31163325cB83Cf6900C98BE595e7A" as Address;
+const HOOK = "0xb44aCCBb8d1eae0e2D2e8B33CEC32f1fD613e7e6" as Address;
+const NO_SCREENING = "0x0000000000000000000000000000000000000000" as Address;
+const A_REGISTRY = "0x9A676e781A523b5d0C0e43731313A708CB607508" as Address;
 
-function statusWith(screener?: ScreenerEndpoint): Promise<HealthStatus> {
+function statusWith(screener?: ScreenerEndpoint, hookScreensWith: Address = NO_SCREENING): Promise<HealthStatus> {
   const db = { query: async () => ({ rows: [], rowCount: 1 }) } as unknown as Pick<Database, "query">;
-  const publicClient = { getChainId: async () => CHAIN, getBalance: async () => 10n ** 18n, getGasPrice: async () => 0n };
+  const publicClient = {
+    getChainId: async () => CHAIN,
+    getBalance: async () => 10n ** 18n,
+    getGasPrice: async () => 0n,
+    readContract: async () => hookScreensWith,
+  } as unknown as Parameters<typeof keeperChecks>[0]["publicClient"];
   return createHealth({
     service: "square-keeper",
     version: "0",
-    checks: keeperChecks({ db, publicClient, chainId: CHAIN, account: ACCOUNT, finalizeGas: 450_000n, ephemeralMirror: false, ...(screener ? { screener } : {}) }),
+    checks: keeperChecks({ db, publicClient, chainId: CHAIN, account: ACCOUNT, hook: HOOK, finalizeGas: 450_000n, ephemeralMirror: false, ...(screener ? { screener } : {}) }),
   }).status();
 }
 
@@ -50,6 +58,29 @@ describe("the screener check", () => {
 
   it("is not there without a screener", async () => {
     expect((await statusWith()).checks["screener"]).toBeUndefined();
+  });
+
+  it("gives way to a screening check that passes while the hook screens nobody", async () => {
+    const status = await statusWith();
+    expect(status.checks["screening"]).toMatchObject({ ok: true, critical: true });
+    expect(status.status).toBe("healthy");
+  });
+
+  it("gives way to a screening check that fails once the hook screens and no screener is set", async () => {
+    const status = await statusWith(undefined, A_REGISTRY);
+    expect(status.checks["screening"]).toMatchObject({ ok: false, critical: true });
+    expect(status.checks["screening"]?.detail).toContain(A_REGISTRY);
+    expect(status.status).toBe("unhealthy");
+  });
+
+  it("is the only screening-shaped check when a screener is configured", async () => {
+    reply = (response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "healthy", checks: {} }));
+    };
+    const status = await statusWith({ url, allowPrivate: true }, A_REGISTRY);
+    expect(status.checks["screening"]).toBeUndefined();
+    expect(screenerCheck(status).ok).toBe(true);
   });
 
   it("passes, as a critical check, when the screener reports itself healthy", async () => {

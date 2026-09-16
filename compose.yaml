@@ -1,5 +1,5 @@
 # The local stack: a chain, a database, the contracts on the chain, the circuit
-# artifacts, and the four long-running processes. `make up` is the one command;
+# artifacts, and the five long-running processes. `make up` is the one command;
 # this file is what it runs.
 #
 # Nothing here carries an address, a chain id or a key of its own. Addresses
@@ -165,6 +165,35 @@ services:
       retries: 20
       start_period: 10s
 
+  screener:
+    build:
+      context: .
+      dockerfile: services/screener/Dockerfile
+    depends_on:
+      anvil:
+        condition: service_healthy
+      deployer:
+        condition: service_completed_successfully
+    environment:
+      CHAIN_ID: ${CHAIN_ID:-31337}
+      RPC_URL: ${RPC_URL:-http://anvil:8545}
+      SQUARE_DEPLOYMENT_FILE: /deployments/${CHAIN_ID:-31337}.json
+      SCREENER_PRIVATE_KEY: ${SCREENER_PRIVATE_KEY:?set SCREENER_PRIVATE_KEY, see .env.example}
+      SCREENING_CANARY: ${SCREENING_CANARY:?set SCREENING_CANARY, see .env.example}
+      PORT: 3012
+      SQUARE_VERSION: ${SQUARE_VERSION:-0.1.0}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    volumes:
+      - ./contracts/deployments:/deployments:ro
+    ports:
+      - "${SCREENER_PORT:-3012}:3012"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3012/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
   keeper:
     build:
       context: .
@@ -176,6 +205,8 @@ services:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
+      screener:
+        condition: service_healthy
     environment:
       CHAIN_ID: ${CHAIN_ID:-31337}
       RPC_URL: ${RPC_URL:-http://anvil:8545}
@@ -185,6 +216,8 @@ services:
       # a key is the correct behaviour; .env.example carries anvil's published
       # test key for the local chain and says so.
       KEEPER_PRIVATE_KEY: ${KEEPER_PRIVATE_KEY:?set KEEPER_PRIVATE_KEY, see .env.example}
+      SCREENER_URL: ${SCREENER_URL:-http://screener:3012}
+      SCREENER_ALLOW_PRIVATE: ${SCREENER_ALLOW_PRIVATE:-true}
       PORT: 3011
       SQUARE_VERSION: ${SQUARE_VERSION:-0.1.0}
     volumes:

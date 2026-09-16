@@ -6,6 +6,8 @@ import { keeperChecks } from "../src/checks.js";
 
 const CHAIN = 5042002;
 const ACCOUNT = "0xcc55417B17a31163325cB83Cf6900C98BE595e7A" as Address;
+const HOOK = "0xb44aCCBb8d1eae0e2D2e8B33CEC32f1fD613e7e6" as Address;
+const NO_SCREENING = "0x0000000000000000000000000000000000000000" as Address;
 const FINALIZE_GAS = 450_000n;
 const GWEI = 1_000_000_000n;
 const LIVE_GAS_PRICE = 25n * GWEI;
@@ -27,7 +29,8 @@ function harness(fakes: Fakes = {}) {
     getChainId: async () => fakes.chainId ?? CHAIN,
     getBalance: async () => fakes.balance ?? 10n ** 18n,
     getGasPrice: async () => fakes.gasPriceWei ?? LIVE_GAS_PRICE,
-  };
+    readContract: async () => NO_SCREENING,
+  } as unknown as Parameters<typeof keeperChecks>[0]["publicClient"];
   return createHealth({
     service: "square-keeper",
     version: "0",
@@ -36,6 +39,7 @@ function harness(fakes: Fakes = {}) {
       publicClient,
       chainId: CHAIN,
       account: ACCOUNT,
+      hook: HOOK,
       finalizeGas: FINALIZE_GAS,
       ephemeralMirror: fakes.ephemeralMirror ?? false,
       ...(fakes.minActionsFunded === undefined ? {} : { minActionsFunded: fakes.minActionsFunded }),
