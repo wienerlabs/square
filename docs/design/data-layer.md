@@ -157,6 +157,20 @@ create table arbiter_sets (
   threshold  smallint not null,
   primary key (chain_id, version)
 );
+
+create table quarantined_events (            -- the logs that reached neither the journal nor the mirror
+  chain_id      bigint      not null,
+  block_number  bigint      not null,
+  log_index     integer     not null,
+  tx_hash       bytea       not null,
+  contract      text        not null,
+  event_name    text        not null,
+  stage         text        not null,     -- 'journal' | 'reduce', the step that refused the log
+  error         text        not null,     -- the failure, truncated to 500 characters
+  created_at    timestamptz not null default now(),
+  primary key (chain_id, block_number, log_index)
+);
+create index quarantined_events_recent on quarantined_events (chain_id, block_number desc, log_index desc);
 ```
 
 `job_events` is what makes restart safe: the primary key is the log's chain
@@ -171,6 +185,20 @@ inside one transaction. A single log that cannot be journalled or reduced is
 rolled back to its own savepoint, counted in
 `square_indexer_quarantined_events_total` and listed on the indexer's
 `/quarantine`, and the rest of the batch still commits.
+
+`quarantined_events` is where that set-aside log is written, in the same
+transaction that advances the checkpoint, and it is a table rather than a list
+in memory because of the `journal` stage. A log the reducer rejected is still in
+`job_events` and comes back through the replay on the next start; a log Postgres
+refused is in no table at all and its block range is never read again, so before
+this table existed it vanished on restart and `/quarantine` came up empty with
+the event still missing from the mirror. The primary key is the same chain
+position `job_events` uses, so the same log recorded twice updates one row
+instead of adding a second. `quarantined_events_recent` is the index
+`/quarantine` reads, which answers with the hundred most recent rows of a chain.
+Like the other derived tables it is deleted for that chain when
+`ON_DEPLOYMENT_CHANGE=restart` reindexes, because a log of the previous
+deployment explains nothing about the current one.
 
 ### One deployment at a time, and the larger shape that would hold two
 
@@ -227,19 +255,23 @@ restart, a second replica, or a crash between two requests changes nothing.
 
 ```sql
 create table x402_payments (
-  chain_id      bigint      not null,
-  asset         bytea       not null,      -- token address
-  payer         bytea       not null,      -- authorization.from
-  nonce         bytea       not null,      -- authorization.nonce, 32 bytes
-  amount        numeric(20,0) not null,
-  pay_to        bytea       not null,
-  resource      text        not null,
-  tx_hash       bytea,                     -- set at settlement
-  status        smallint    not null,      -- 1 accepted, 2 settled, 3 failed
-  valid_before  bigint      not null,
-  created_at    timestamptz not null default now(),
+  chain_id        bigint      not null,
+  asset           bytea       not null,      -- token address
+  payer           bytea       not null,      -- authorization.from
+  nonce           bytea       not null,      -- authorization.nonce, 32 bytes
+  amount          numeric(20,0) not null,
+  pay_to          bytea       not null,
+  resource        text        not null,
+  tx_hash         bytea,                     -- set at settlement
+  status          smallint    not null,      -- 1 accepted, 2 settled, 3 failed
+  valid_before    bigint      not null,
+  reason          text,                      -- why the row left 'accepted', on either terminal status
+  last_checked_at timestamptz,               -- when reconciliation last looked at an accepted row and could not close it
+  created_at      timestamptz not null default now(),
   primary key (chain_id, asset, payer, nonce)
 );
+create index x402_payments_reconcile on x402_payments (last_checked_at asc nulls first, created_at, payer, nonce) where status = 1;
+create index x402_payments_expiry    on x402_payments (valid_before);
 ```
 
 The primary key is the EIP-3009 authorization identity. Inserting it *before*
@@ -248,6 +280,30 @@ carrying the same signed authorization hits the constraint and is refused before
 any chain call. The chain enforces the same uniqueness (`authorizationState`)
 and we still keep ours, because the chain's check happens at settlement and the
 resource has already been served by then.
+
+`reason` carries why a row left `accepted`, which is the settlement failure on a
+`failed` row and, on a `settled` one, the note a settle that reported no
+transaction hash leaves behind. `last_checked_at` is what keeps the
+reconciliation queue moving: `listAccepted` orders by `last_checked_at asc nulls
+first`, so a row no pass has examined always sorts ahead of one a pass already
+examined and left open. Without it the rows nobody could close stayed at the head
+of the queue and nothing newer was ever looked at again.
+`x402_payments_reconcile` is that ordering's index and it covers `accepted` rows
+only, because a terminal row is never queued.
+
+`valid_before` is an unvalidated integer out of a client-signed payload, not a
+deadline this service chose, and the retention sweep used to read it through
+`to_timestamp`, which raises `timestamp out of range` on a large enough value. A
+single such row made the sweep throw on every run, and while the four sweeps
+still ran in one chain it took `keeper_actions` down with it.
+`0011_x402_valid_before_repair` deleted exactly the rows the old expression could
+not evaluate, those past
+`extract(epoch from timestamptz '294276-12-31 23:59:59+00' - interval '30 days')`,
+and added `x402_payments_expiry` for the comparison that replaced it. The delete
+has no inverse and the down file drops only the index. It was safe to run because
+the same change closed the door the rows came through: an authorization whose
+`validBefore` is past `now + maxTimeoutSeconds` plus five minutes of clock skew
+is refused with `invalid_valid_before` before it is ever inserted.
 
 ### Hosted agents (#38, proposal for mehmethayirli)
 
@@ -272,30 +328,73 @@ must treat a job the chain refuses as refused regardless of what this row says.
 Encrypted provider keys do not live in this table; the row holds a reference
 into whatever secret store #49 chooses.
 
-### Keeper journal (#42)
+### Keeper journal and keeper state (#42, #306)
 
 ```sql
-create table keeper_actions (
+create table keeper_actions (                -- append-only, one row per thing the keeper did
   id            bigserial   primary key,
   chain_id      bigint      not null,
   job_id        numeric(78,0) not null,
-  action        text        not null,      -- 'finalize' | 'finalizeDecided' | 'recordExpiry' | 'skipped'
+  action        text        not null,      -- 'finalize' | 'finalizeDecided' | 'lapse' | 'settleBond' | 'recordExpiry' | 'skipped'
   tx_hash       bytea,
   gas_used      bigint,
   fee_earned    numeric(20,0),
   reason        text,                      -- for 'skipped': 'unprofitable' | 'disputed' | …
+  gave_up       boolean     not null default false,
   created_at    timestamptz not null default now()
 );
-create index keeper_actions_by_job on keeper_actions (chain_id, job_id, action);
+create index keeper_actions_by_job  on keeper_actions (chain_id, job_id, action);
+create index keeper_actions_gave_up on keeper_actions (chain_id, job_id) where gave_up;
+
+create table keeper_job_state (              -- what the keeper has to still know after the journal is swept
+  chain_id            bigint        not null,
+  job_id              numeric(78,0) not null,
+  finalize_gave_up    boolean       not null default false,
+  expiry_recorded_at  timestamptz,           -- set once the expiry is on chain, whoever recorded it
+  expiry_attempts     integer       not null default 0,
+  expiry_next_at      bigint,                -- unix seconds, the earliest the sweep may try again
+  expiry_gave_up      boolean       not null default false,
+  updated_at          timestamptz   not null default now(),
+  primary key (chain_id, job_id)
+);
+create index keeper_job_state_expiry_open on keeper_job_state (chain_id, expiry_next_at)
+  where expiry_recorded_at is null and not expiry_gave_up;
 ```
 
-A `recordExpiry` row with no `reason` means the expiry is recorded on chain: it
-carries the transaction hash when this keeper sent it, and no hash when the
-keeper found it already recorded. That row is what
-`jobs.listExpiredWithAgent` anti-joins on, so a recorded expiry leaves the
-sweep's candidate set for good and a failed attempt, which does carry a
-`reason`, stays in it. `keeper_actions_by_job` is the index that anti-join
-reads.
+The `action` list is the `KeeperAction` union in
+`packages/data/src/repositories/keeperActions.ts`, and it is six values because
+the keeper sends more than the two settlements: `lapse` closes a job whose
+arbitration ran out of time and `settleBond` returns a disputer's bond on a job
+that expired under its dispute, both of which earn no fee and are journaled all
+the same.
+
+The two tables are apart on purpose, and #306 is why. `keeper_actions` is the
+journal, and `square-data sweep` deletes rows older than ninety days without
+reading them. `keeper_job_state` is the state the keeper still has to be right
+about after that sweep, so nothing sweeps it. While the give-up flag and the
+expiry mark lived on journal rows, a ninety day old expiry re-entered the sweep's
+candidate set at the head of the queue and a restarted keeper attacked every
+given-up job from zero. `0012_keeper_job_state` seeds the new table from the
+journal rows it replaces, one row per job that had a give-up and one per job
+whose expiry was already recorded, so the upgrade forgets nothing.
+
+`finalize_gave_up` is read back before the keeper's first tick, so a job it gave
+up on stays given up across a restart until an operator clears the flag. The
+three expiry columns carry the sweep's retry policy: `jobs.listExpiredWithAgent`
+left-joins this table and returns an expired job only while `expiry_recorded_at`
+is null, `expiry_gave_up` is false and `expiry_next_at` has passed, ordered by
+how long the job has waited, and `keeper_job_state_expiry_open` is the partial
+index that query reads. A `recordExpiry` journal row with no `reason` means the
+expiry is recorded on chain: it carries the transaction hash when this keeper
+sent it, and no hash when the keeper found it already recorded. Both cases also
+set `expiry_recorded_at`, and it is that mark, not the journal row, that keeps
+the job out of the next pass.
+
+`gave_up` on a journal row records that the give-up happened and is shown on the
+keeper's `/actions`. Since 0012 moved the flag itself, no statement in
+`packages/data` filters on that column or on `(chain_id, job_id, action)`: the
+journal is read only as the most recent rows of a chain, so neither
+`keeper_actions_gave_up` nor `keeper_actions_by_job` serves a query today.
 
 ## Retention
 
@@ -307,10 +406,12 @@ reads.
 | `rate_limits` | 2 windows | |
 | `x402_payments` | `valid_before` + 30 days | after `validBefore` the authorization cannot be settled on chain anyway; 30 days covers reconciliation |
 | `keeper_actions` | 90 days | operational, feeds the metrics in #50 |
+| `keeper_job_state` | forever, never swept | it is state and not history: a ninety day old give-up is still a give-up, and a ninety day old expiry mark still keeps its job out of the sweep |
+| `quarantined_events` | forever, rebuildable | it is the only record of a log that reached no other table, and a redeploy deletes it with the other derived rows |
 
-All four are removed by `square-data sweep`, which runs every sweep once and prints
-what each removed. The four are independent: a sweep that throws is reported by table
-and message, and the ones after it still run, so one unsweepable row cannot stop the
+The four tables with a finite retention are removed by `square-data sweep`, which runs
+every sweep once and prints what each removed. The four are independent: a sweep that
+throws is reported by table and message, and the ones after it still run, so one unsweepable row cannot stop the
 retention of every other table. Nothing sweeps on its own: the operator schedules that
 command hourly, from cron or a systemd timer, on the host that already holds
 `DATABASE_URL` for the migration step. `packages/data/README.md` carries both schedule
