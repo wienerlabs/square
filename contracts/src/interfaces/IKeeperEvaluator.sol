@@ -41,6 +41,7 @@ interface IKeeperEvaluator is ISettlementHorizon {
     error ArbitrationAlreadySet();
     error ArbitrationNotSet();
     error SplitNeedsAPayoutResolver();
+    error ProofRequired(uint256 jobId, uint8 state);
 
     function finalize(uint256 jobId) external;
     function dispute(uint256 jobId, bytes32 evidence) external;

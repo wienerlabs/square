@@ -18,6 +18,7 @@ import {
   deploymentFor,
   DidScopeMismatchError,
   encodeSubmitOptParams,
+  PROOF_STATES,
   squareHookAbi,
   squareJobAbi,
   TransactionRevertedError,
@@ -381,5 +382,42 @@ describe("agentOf tells no agent from agent 0", () => {
     });
     await expect(client.agentOf(1n)).rejects.toBeInstanceOf(ContractFunctionExecutionError);
     expect(reads.map((r) => r.functionName)).toEqual(["boundAgentOf"]);
+  });
+});
+
+describe("proofState names what the gate can decide", () => {
+  const hookAnswering = (value: unknown) =>
+    square({
+      answer: (request) => {
+        if (request.functionName === "proofState") return value;
+        throw new Error(`unexpected read ${request.functionName}`);
+      },
+    });
+
+  it("reads the enum the hook returns as a name", async () => {
+    for (const [index, name] of PROOF_STATES.entries()) {
+      const { client } = hookAnswering(index);
+      expect(await client.proofState(7n)).toBe(name);
+    }
+  });
+
+  it("asks the hook for the job it was given", async () => {
+    const { client, reads } = hookAnswering(4);
+    await client.proofState(31n);
+    expect(reads.at(-1)).toMatchObject({ functionName: "proofState", args: [31n] });
+  });
+
+  it("reads a hook with no such function as not gated, so an older stack still settles", async () => {
+    const { client } = square({
+      answer: () => {
+        throw new Error("execution reverted");
+      },
+    });
+    expect(await client.proofState(1n)).toBe("notGated");
+  });
+
+  it("reads a value it does not know as not gated rather than throwing", async () => {
+    const { client } = hookAnswering(99);
+    expect(await client.proofState(1n)).toBe("notGated");
   });
 });

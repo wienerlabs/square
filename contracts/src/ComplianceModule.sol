@@ -5,6 +5,7 @@ import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step
 import {IComplianceModule} from "./interfaces/IComplianceModule.sol";
 import {IGroth16Verifier} from "./interfaces/IGroth16Verifier.sol";
 import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
+import {IPolicyCommitmentPin} from "./interfaces/IPolicyCommitmentPin.sol";
 import {ISquareJob} from "./interfaces/ISquareJob.sol";
 
 /// @title ComplianceModule
@@ -156,6 +157,15 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
     /// @dev Reasons carried by `ReleaseRefused`. An operator reading a refusal
     ///      needs to know which binding failed; a boolean tells them only that
     ///      one did.
+    struct Release {
+        uint256 jobId;
+        address payee;
+        uint256 amount;
+        address token;
+        address client;
+    }
+
+    bytes32 private constant R_NO_PROOF = "no proof bound";
     bytes32 private constant R_MALFORMED = "malformed proof";
     bytes32 private constant R_INVALID = "invalid proof";
     bytes32 private constant R_NOT_COMPLIANT = "is_compliant is 0";
@@ -237,7 +247,7 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         address client,
         bytes calldata proof
     ) external view returns (bool verified) {
-        (verified,,) = _verify(jobId, payee, amount, token, client, proof);
+        (verified,,) = _verify(Release(jobId, payee, amount, token, client), proof);
     }
 
     /// @inheritdoc IComplianceModule
@@ -251,7 +261,7 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
     ) external onlyHook returns (bool verified) {
         bytes32 reason;
         bytes32 statement;
-        (verified, reason, statement) = _verify(jobId, payee, amount, token, client, proof);
+        (verified, reason, statement) = _verify(Release(jobId, payee, amount, token, client), proof);
         if (!verified) {
             emit ReleaseRefused(jobId, statement, reason);
             return false;
@@ -303,24 +313,18 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
     ///      the EVM's addressable stack. `via_ir` would also solve it and is
     ///      left off: turning it on changes the bytecode of every contract in
     ///      this repository, and the deployed addresses with it.
-    function _verify(
-        uint256 jobId,
-        address payee,
-        uint256 amount,
-        address token,
-        address client,
-        bytes calldata proof
-    ) private view returns (bool, bytes32, bytes32) {
+    function _verify(Release memory r, bytes calldata proof) private view returns (bool, bytes32, bytes32) {
         // The hook that books this release has to be the one this module lets
         // book it. `checkRelease` is `onlyHook`, and its caller is the job's own
         // hook: a preview that ignored this passed releases whose bookkeeping
         // then reverted `OnlyHook` inside the kernel's tolerant call -- after a
         // hook rotation that updated `setComplianceModule` and not `setHook`,
         // for one (#225).
-        if (!_hookBooks(jobId)) return (false, R_HOOK, bytes32(0));
+        if (!_hookBooks(r.jobId)) return (false, R_HOOK, bytes32(0));
 
         // Every component is a fixed-size type, so a well-formed proof is
         // exactly (2 + 4 + 2 + 8) words.
+        if (proof.length == 0) return (false, R_NO_PROOF, bytes32(0));
         if (proof.length != PROOF_BYTES) return (false, R_MALFORMED, bytes32(0));
 
         uint256[8] memory input;
@@ -355,7 +359,7 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         bytes32 statement = keccak256(abi.encode(input));
         if (_consumed[statement]) return (false, R_CONSUMED, statement);
 
-        (bool ok2, bytes32 reason) = _bindings(payee, amount, token, client, input);
+        (bool ok2, bytes32 reason) = _bindings(r, input);
         return (ok2, reason, statement);
     }
 
@@ -363,6 +367,23 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
     /// @dev Reverts when the proof is malformed or does not verify; `_verify`
     ///      catches that and turns it into a verdict. `external` because
     ///      Solidity cannot catch a revert in an internal call.
+    function proofState(bytes calldata proof) external view returns (IComplianceModule.ProofState) {
+        if (proof.length == 0) return IComplianceModule.ProofState.Missing;
+        if (proof.length != PROOF_BYTES) return IComplianceModule.ProofState.Malformed;
+        try this.verifiedSignals(proof) returns (uint256[8] memory) {
+            return IComplianceModule.ProofState.Decidable;
+        } catch {
+            return IComplianceModule.ProofState.Unverifiable;
+        }
+    }
+
+    function _commitmentFor(uint256 jobId, address client) private view returns (bytes32) {
+        try IPolicyCommitmentPin(_hook).commitmentAtFund(jobId) returns (bytes32 pinned) {
+            if (pinned != bytes32(0)) return pinned;
+        } catch {}
+        return _registry.commitmentOf(client);
+    }
+
     function verifiedSignals(bytes calldata proof) external view returns (uint256[8] memory input) {
         uint256[2] memory a;
         uint256[2][2] memory b;
@@ -373,25 +394,19 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
 
     /// @dev The eight bindings, in the circuit's own order. Signal by signal,
     ///      against this job's storage rather than against the proof itself.
-    function _bindings(
-        address payee,
-        uint256 amount,
-        address token,
-        address client,
-        uint256[8] memory input
-    ) private view returns (bool, bytes32) {
+    function _bindings(Release memory r, uint256[8] memory input) private view returns (bool, bytes32) {
         if (input[IS_COMPLIANT] != 1) return (false, R_NOT_COMPLIANT);
 
-        bytes32 commitment = _registry.commitmentOf(client);
+        bytes32 commitment = _commitmentFor(r.jobId, r.client);
         if (commitment == bytes32(0) || input[POLICY_DATA_HASH] != uint256(commitment)) {
             return (false, R_POLICY);
         }
 
-        if (input[RECIPIENT] != uint256(uint160(payee))) return (false, R_RECIPIENT);
-        if (input[AMOUNT] != amount) return (false, R_AMOUNT);
-        if (input[TOKEN] != uint256(uint160(token))) return (false, R_TOKEN);
+        if (input[RECIPIENT] != uint256(uint160(r.payee))) return (false, R_RECIPIENT);
+        if (input[AMOUNT] != r.amount) return (false, R_AMOUNT);
+        if (input[TOKEN] != uint256(uint160(r.token))) return (false, R_TOKEN);
 
-        uint256 spentBefore = _registry.spentToday(client);
+        uint256 spentBefore = _registry.spentToday(r.client);
         if (input[DAILY_SPENT_BEFORE] != spentBefore) return (false, R_DAILY_SPENT);
 
         if (!_withinWindow(input[CURRENT_UNIX_TIMESTAMP])) return (false, R_TIMESTAMP);
@@ -405,7 +420,7 @@ contract ComplianceModule is IComplianceModule, Ownable2Step {
         // reverting, so this is no longer about keeping `checkRelease` from
         // throwing; it is about the ceiling being a condition of payment. The
         // registry's own verdict is asserted in `checkRelease` as a second line.
-        if (spentBefore + amount > _registry.policyOf(client).dailyLimit) return (false, R_CEILING);
+        if (spentBefore + r.amount > _registry.policyOf(r.client).dailyLimit) return (false, R_CEILING);
 
         // The counter has to accept the advance. `recordSpend` reverts
         // `NotASpender` for a module the registry no longer lists -- the first

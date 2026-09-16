@@ -381,6 +381,7 @@ What the normative set does not carry and the indexer needs.
 | Event | Carries |
 |---|---|
 | `AgentBound(uint256 indexed jobId, uint256 indexed agentId, bytes32 validationRequestHash)` | at submit |
+| `PolicyPinned(uint256 indexed jobId, address indexed client, bytes32 commitment)` | at fund, when a compliance module is installed: the policy commitment the client held at that moment, which is the one every later proof for this job is checked against. A client with no commitment cannot fund, so this event exists for every funded job on a gated stack |
 | `ComplianceChecked(uint256 indexed jobId, address indexed payee, uint256 amount, bool verified)` | at complete; `verified` is false while no module is installed |
 | `ReputationRecorded(uint256 indexed jobId, uint256 indexed agentId, uint8 outcome, int128 value)` | |
 | `ReputationWriteFailed(uint256 indexed jobId, uint256 indexed agentId, bytes reason)` | the registry reverted; settlement was not rolled back |

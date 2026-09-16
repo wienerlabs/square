@@ -7,6 +7,7 @@ import {Ownable, Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step
 import {IACPHook} from "./interfaces/IACPHook.sol";
 import {IPayoutResolver} from "./interfaces/IPayoutResolver.sol";
 import {IComplianceModule} from "./interfaces/IComplianceModule.sol";
+import {IPolicyRegistry} from "./interfaces/IPolicyRegistry.sol";
 import {IScreeningRegistry} from "./interfaces/IScreeningRegistry.sol";
 import {IClaimMarket} from "./interfaces/IClaimMarket.sol";
 import {ISquareJob} from "./interfaces/ISquareJob.sol";
@@ -45,6 +46,7 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     mapping(uint256 jobId => uint256) private _boundAgentPlusOne;
     mapping(uint256 jobId => bytes32) private _validationOf;
     mapping(uint256 jobId => bool) private _recorded;
+    mapping(uint256 jobId => bytes32) private _commitmentAtFund;
     uint256 private transient _checkedJob;
     uint8 private transient _checkOutcome;
     uint8 private transient _screenOutcome;
@@ -63,6 +65,7 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     event ReputationPolicyUpdated(address indexed trustedEvaluator, uint64 minReputationBudget);
     event ReputationSkipped(uint256 indexed jobId, uint256 indexed agentId, bytes32 reason);
     event ReleaseUnconfirmed(uint256 indexed jobId, address indexed payee, uint256 amount);
+    event PolicyPinned(uint256 indexed jobId, address indexed client, bytes32 commitment);
 
     bytes32 private constant SKIP_UNTRUSTED_EVALUATOR = "untrusted evaluator";
     bytes32 private constant SKIP_BUDGET_BELOW_MINIMUM = "budget below minimum";
@@ -71,6 +74,7 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     error AgentNotOwnedByProvider(uint256 agentId, address provider);
     error ValidationRequestMismatch(bytes32 requestHash);
     error NotExpired();
+    error NoPolicy(address client);
     error AlreadyRecorded();
     error NoAgentBound();
     error NotCleared(address subject);
@@ -237,14 +241,42 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
             // square#35. The last point before money enters escrow, and a strict
             // call: a party that is not cleared reverts the funding and nothing
             // is locked, because the client still holds its USDC.
-            if (address(_screening) == address(0)) return;
+            if (address(_complianceModule) == address(0) && address(_screening) == address(0)) return;
             ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
+            if (address(_complianceModule) != address(0)) _pinPolicy(jobId, job.client);
+            if (address(_screening) == address(0)) return;
             if (!_screening.isCleared(job.client)) revert NotCleared(job.client);
             if (!_screening.isCleared(job.provider)) revert NotCleared(job.provider);
         } else if (selector == COMPLETE_SELECTOR) {
             (, bytes memory optParams) = abi.decode(data, (bytes32, bytes));
             _checkRelease(jobId, optParams);
         }
+    }
+
+    function _pinPolicy(uint256 jobId, address client) private {
+        address registry = _policyRegistry();
+        if (registry == address(0)) return;
+        bytes32 commitment = IPolicyRegistry(registry).commitmentOf(client);
+        if (commitment == bytes32(0)) revert NoPolicy(client);
+        _commitmentAtFund[jobId] = commitment;
+        emit PolicyPinned(jobId, client, commitment);
+    }
+
+    function _policyRegistry() private view returns (address) {
+        try _complianceModule.policyRegistry() returns (address registry) {
+            return registry;
+        } catch {
+            return address(0);
+        }
+    }
+
+    function commitmentAtFund(uint256 jobId) external view returns (bytes32) {
+        return _commitmentAtFund[jobId];
+    }
+
+    function proofState(uint256 jobId) external view returns (IComplianceModule.ProofState) {
+        if (address(_complianceModule) == address(0)) return IComplianceModule.ProofState.NotGated;
+        return _complianceModule.proofState(_squareJob.complianceProofOf(jobId));
     }
 
     function _checkRelease(uint256 jobId, bytes memory optParams) private {

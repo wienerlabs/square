@@ -181,6 +181,10 @@ function isUnknownSelectorRevert(error: unknown): boolean {
   return reverted instanceof ContractFunctionRevertedError && reverted.data === undefined && reverted.signature === undefined;
 }
 
+export const PROOF_STATES = ["notGated", "missing", "malformed", "unverifiable", "decidable"] as const;
+
+export type ProofState = (typeof PROOF_STATES)[number];
+
 export class SquareClient {
   readonly publicClient: PublicClient;
   readonly walletClient: SquareWalletClient | undefined;
@@ -915,6 +919,20 @@ export class SquareClient {
       functionName: "previewRelease",
       args: [params.jobId, params.payee, params.amount, this.deployment.usdc, params.client, params.proof],
     });
+  }
+
+  async proofState(jobId: bigint): Promise<ProofState> {
+    try {
+      const state = await this.read({
+        abi: squareHookAbi,
+        address: this.deployment.squareHook,
+        functionName: "proofState",
+        args: [jobId],
+      });
+      return PROOF_STATES[Number(state)] ?? "notGated";
+    } catch {
+      return "notGated";
+    }
   }
 
   async recordExpiry(jobId: bigint): Promise<TransactionResult> {

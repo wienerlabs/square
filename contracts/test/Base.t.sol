@@ -146,6 +146,11 @@ abstract contract BaseTest is Test, BuyerLists {
         return submittedJob(budget, address(hook));
     }
 
+    function bindProof(uint256 jobId) internal {
+        vm.prank(client);
+        kernel.setComplianceProof(jobId, hex"deadbeef");
+    }
+
     function pastWindow(uint256 jobId) internal {
         vm.warp(keeper.challengeEndsAt(jobId));
     }

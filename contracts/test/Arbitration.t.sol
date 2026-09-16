@@ -8,9 +8,42 @@ import {IKeeperEvaluator} from "../src/interfaces/IKeeperEvaluator.sol";
 import {KeeperEvaluator} from "../src/KeeperEvaluator.sol";
 import {Arbitration} from "../src/Arbitration.sol";
 import {MaliciousHook} from "./mocks/MaliciousHook.sol";
+import {IComplianceModule} from "../src/interfaces/IComplianceModule.sol";
 
 contract ArbitrationTest is BaseTest {
     uint256 internal constant BUDGET = 1_000 * USDC;
+
+    function test_decision_doesNotSettleAJobWhoseClientBoundNoProof() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        (uint256 jobId,) = _disputed(BUDGET);
+        vote(arb1, jobId, IArbitration.Outcome.Complete, FULL_BPS);
+        vote(arb2, jobId, IArbitration.Outcome.Complete, FULL_BPS);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IKeeperEvaluator.ProofRequired.selector, jobId, uint8(IComplianceModule.ProofState.Missing)
+            )
+        );
+        vm.prank(cranker);
+        keeper.finalizeDecided(jobId);
+
+        assertEq(
+            uint8(status(jobId)),
+            uint8(ISquareJob.JobStatus.Submitted),
+            "arbiters deciding for the provider is not a proof the mandate allowed the payment"
+        );
+        assertEq(kernel.withdrawable(provider), 0, "the escrow did not move");
+        assertEq(kernel.withdrawable(client), 0);
+
+        bindProof(jobId);
+        vm.prank(cranker);
+        keeper.finalizeDecided(jobId);
+
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET), "the decision lands once there is a proof to read");
+        assertSolvent();
+    }
 
     function _disputed(uint256 budget) internal returns (uint256 jobId, uint64 bond) {
         jobId = submittedHookedJob(budget);
