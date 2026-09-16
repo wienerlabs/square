@@ -173,6 +173,24 @@ jobs:
           npm run lifecycle
           cat "$LIFECYCLE_REPORT"
 
+  selectors:
+    name: deployed selectors (Arc Testnet)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Install
+        working-directory: packages/core
+        run: npm install --install-links --no-audit --no-fund
+
+      - name: Every selector the SDK calls is in the deployed bytecode
+        working-directory: packages/core
+        run: npm run check:selectors
+
   # Arc's precompiles, not revm's. "It verifies in Foundry" and "it verifies on
   # Arc" are different claims; this job is the second one. An eth_call with a
   # state override runs the real bytecode against the real 0x06/0x07/0x08 for

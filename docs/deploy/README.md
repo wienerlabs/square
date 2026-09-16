@@ -34,6 +34,35 @@ Other places that carry an address and have to be updated by hand:
 - `contracts/README.md`, the deployments table
 - `site/src/lib/links.ts`, the explorer link of the kernel
 - `contracts/src/PolicyRegistry.sol`, the docstring that names the deployed hook
+- the explorer itself: every deployment table here links to Arcscan, so an
+  address that is not verified there shows bytecode to whoever follows the link
+
+### What the chain has to agree with before anyone calls the deploy done
+
+Three reads, all free, and one of them is now a CI job:
+
+```bash
+cd packages/core && npm run check:selectors
+```
+
+It takes every function in the SDK's ABI, computes its selector, and looks for
+it in the `eth_getCode` of the address the record names. A selector the SDK
+calls and the bytecode does not carry means the stack is behind `main`, which is
+exactly the state that made `finalize`, `buy` and every `policyRegistry()` read
+revert on the live stack after 2026-09-13. The same run asks the explorer whether
+each address is verified. The job is `deployed selectors (Arc Testnet)` and it is
+deliberately not in the required contexts while the shared stack is behind: add
+it to the required list once a redeploy has made it green.
+
+The other two are one line each:
+
+- `PolicyRegistry.isSpender(ComplianceModule)` is true. `recordSpend` is
+  `onlySpender`, so a registry with no spender can never move its daily counter,
+  and a stack whose ceiling cannot move is a ceiling in name only. The deploy
+  script registers it; this is the read that proves it did.
+- `SquareHook.complianceModule()` is what you meant it to be. The script installs
+  a module on the hook only when `INSTALL_COMPLIANCE_MODULE=true`, because once
+  installed every release needs a proof bound to the job.
 
 ### The balance a redeploy has to reach zero
 
@@ -51,6 +80,21 @@ totalEscrowed` and nothing else. The live kernel predates both, so its
 carries them. The supersede checklist in
 [contracts/README.md](../../contracts/README.md) now reads the balance to zero
 rather than assuming the withdrawals got there.
+
+### The commit it was compiled from, and the explorer
+
+`deploy-arc-testnet.sh` passes `--verify --verifier blockscout` and writes
+`commit` and `compiler` into the record, because those two plus `foundry.toml`
+are everything a later verification needs and the explorer cannot answer for us.
+`VERIFY=0` turns verification off when the explorer is down; the addresses are in
+the record either way and `forge verify-contract --verifier blockscout` takes
+them one at a time afterwards.
+
+This matters more than it looks. Every deployment table in this repository links
+to Arcscan, and until the flag existed a reader following one of those links got
+bytecode and no `Read contract` tab, while the ERC-8004 registries on the same
+chain were verified and readable. An auditor, a Circle engineer or anyone doing
+diligence sees the contracts we point them at as an unreadable blob.
 
 ### The block, and who needs it
 
