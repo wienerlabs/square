@@ -153,6 +153,7 @@ beyond the database.
 | `0010_quarantined_events` | `quarantined_events` |
 | `0011_x402_valid_before_repair` | `x402_payments.valid_before` rows and index |
 | `0012_keeper_job_state` | `keeper_job_state`, seeded from the journal rows it replaces |
+| `0013_keeper_unprofitable_journal` | `keeper_job_state.unprofitable_journaled_at`, seeded from the `skipped` rows it replaces |
 
 Migrations never run at service boot against a configured database. They are an explicit
 deploy step, run before the new service version starts, with the connection string in

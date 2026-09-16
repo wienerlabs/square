@@ -56,6 +56,53 @@ describe("the finalize give-up", () => {
   });
 });
 
+describe("the unprofitable journal mark", () => {
+  it("is claimed by the first caller only, so the row is written once whatever restarts", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      expect(await keeperJobState.markUnprofitableJournaled(db, CHAIN, 7n)).toBe(true);
+      expect(await keeperJobState.markUnprofitableJournaled(db, CHAIN, 7n)).toBe(false);
+      expect(await keeperJobState.markUnprofitableJournaled(db, CHAIN, 7n)).toBe(false);
+      expect(await keeperJobState.markUnprofitableJournaled(db, 5042002, 7n)).toBe(true);
+
+      expect((await keeperJobState.get(db, CHAIN, 7n))?.unprofitableJournaledAt).toBeInstanceOf(Date);
+      expect((await keeperJobState.get(db, CHAIN, 8n))?.unprofitableJournaledAt).toBeUndefined();
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("stands beside a give-up on the same job instead of overwriting it", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      await keeperJobState.markFinalizeGaveUp(db, CHAIN, 3n);
+
+      expect(await keeperJobState.markUnprofitableJournaled(db, CHAIN, 3n)).toBe(true);
+
+      const state = await keeperJobState.get(db, CHAIN, 3n);
+      expect(state?.finalizeGaveUp).toBe(true);
+      expect(state?.unprofitableJournaledAt).toBeInstanceOf(Date);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("survives the ninety day journal sweep that deletes the row it guards", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      await keeperActions.append(db, { chainId: CHAIN, jobId: 5n, action: "skipped", reason: "unprofitable" });
+      await keeperJobState.markUnprofitableJournaled(db, CHAIN, 5n);
+      await db.query("update keeper_actions set created_at = now() - interval '91 days'");
+
+      expect(await keeperActions.sweep(db)).toBe(1);
+
+      expect(await keeperJobState.markUnprofitableJournaled(db, CHAIN, 5n)).toBe(false);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
 describe("the expiry sweep's candidates", () => {
   it("leave the set through the recorded mark, not through a journal row", async () => {
     const db = await openMigratedDatabase();

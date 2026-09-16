@@ -144,11 +144,14 @@ async function main(): Promise<void> {
     controller.abort();
     clearInterval(alertTimer);
     server.close();
-    void db.close();
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-  await keeper.run(integer("POLL_INTERVAL_MS", 15_000), controller.signal);
+  try {
+    await keeper.run(integer("POLL_INTERVAL_MS", 15_000), controller.signal);
+  } finally {
+    await db.close();
+  }
 }
 
 main().catch((error) => {

@@ -16,9 +16,11 @@ const ALL = [
   "0010_quarantined_events",
   "0011_x402_valid_before_repair",
   "0012_keeper_job_state",
+  "0013_keeper_unprofitable_journal",
 ];
 
-const LAST = "0012_keeper_job_state";
+const LAST = "0013_keeper_unprofitable_journal";
+const JOB_STATE = "0012_keeper_job_state";
 const REPAIR = "0011_x402_valid_before_repair";
 
 async function tableNames(db: Database): Promise<string[]> {
@@ -68,7 +70,7 @@ async function schemaSnapshot(db: Database): Promise<unknown> {
 }
 
 describe("migrations", () => {
-  it("applies all twelve in order, reverts the last one, and re-applies it", async () => {
+  it("applies all thirteen in order, reverts the last one, and re-applies it", async () => {
     const db = await pgliteDatabase();
     try {
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(ALL);
@@ -95,11 +97,12 @@ describe("migrations", () => {
       expect(await indexNames(db, "x402_payments")).toContain("x402_payments_expiry");
 
       expect((await migrate(db, MIGRATIONS_DIR, "down")).applied).toEqual([LAST]);
-      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL.slice(0, 11), pending: [LAST] });
-      expect(await tableNames(db)).not.toContain("keeper_job_state");
+      expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL.slice(0, 12), pending: [LAST] });
+      expect(await columnNames(db, "keeper_job_state")).not.toContain("unprofitable_journaled_at");
 
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual([LAST]);
       expect(await tableNames(db)).toContain("keeper_job_state");
+      expect(await columnNames(db, "keeper_job_state")).toContain("unprofitable_journaled_at");
       expect(await columnNames(db, "x402_payments")).toContain("last_checked_at");
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: ALL, pending: [] });
       expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual([]);
@@ -108,13 +111,13 @@ describe("migrations", () => {
     }
   });
 
-  it("up, down twelve steps, up leaves the schema identical", async () => {
+  it("up, down thirteen steps, up leaves the schema identical", async () => {
     const db = await pgliteDatabase();
     try {
       await migrate(db, MIGRATIONS_DIR, "up");
       const first = await schemaSnapshot(db);
 
-      expect((await migrate(db, MIGRATIONS_DIR, "down", 12)).applied).toEqual([...ALL].reverse());
+      expect((await migrate(db, MIGRATIONS_DIR, "down", 13)).applied).toEqual([...ALL].reverse());
       expect(await tableNames(db)).toEqual(["schema_migrations"]);
       expect(await migrationStatus(db, MIGRATIONS_DIR)).toEqual({ applied: [], pending: ALL });
 
@@ -157,6 +160,7 @@ describe("migrations", () => {
         "0009_x402_last_checked",
         "0010_quarantined_events",
         REPAIR,
+        JOB_STATE,
         LAST,
       ]);
 
@@ -170,6 +174,7 @@ describe("migrations", () => {
         "0009_x402_last_checked",
         "0010_quarantined_events",
         REPAIR,
+        JOB_STATE,
         LAST,
       ]);
       expect(await tableNames(db)).toContain("keeper_actions");
@@ -223,13 +228,35 @@ describe("migrations", () => {
       await db.query(insert, [bytes(0xa0), bytes(0xb1), bytes(0x03), bytes(0xc2), "9224315423999"]);
       await db.query(insert, [bytes(0xa0), bytes(0xb1), bytes(0x04), bytes(0xc2), "1800000000"]);
 
-      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0010_quarantined_events", REPAIR, LAST]);
+      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual(["0010_quarantined_events", REPAIR, JOB_STATE, LAST]);
 
       const { rows } = await db.query<{ valid_before: string }>(
         "select valid_before from x402_payments order by valid_before",
       );
       expect(rows.map((row) => row.valid_before)).toEqual(["1800000000", "9224315423999"]);
       expect(await indexNames(db, "x402_payments")).toContain("x402_payments_expiry");
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("carries the skipped rows a keeper already wrote into the unprofitable mark, so no restart writes them again", async () => {
+    const db = await pgliteDatabase();
+    try {
+      await migrate(db, MIGRATIONS_DIR, "up", 12);
+      const insert = "insert into keeper_actions (chain_id, job_id, action, reason) values ($1, $2, $3, $4)";
+      await db.query(insert, [31337, "1", "skipped", "unprofitable"]);
+      await db.query(insert, [31337, "1", "skipped", "unprofitable"]);
+      await db.query(insert, [31337, "2", "finalize", null]);
+
+      expect((await migrate(db, MIGRATIONS_DIR, "up")).applied).toEqual([LAST]);
+
+      const { rows } = await db.query<{ job_id: string; unprofitable_journaled_at: Date | null }>(
+        "select job_id, unprofitable_journaled_at from keeper_job_state order by job_id",
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.job_id).toBe("1");
+      expect(rows[0]?.unprofitable_journaled_at).toBeInstanceOf(Date);
     } finally {
       await db.close();
     }
