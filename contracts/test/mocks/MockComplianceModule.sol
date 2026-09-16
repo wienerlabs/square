@@ -21,6 +21,7 @@ contract MockComplianceModule is IComplianceModule {
     address private _policyRegistry;
     IComplianceModule.ProofState private _forcedState;
     bool private _forcedStateSet;
+    uint256 private _proofStateGasToBurn;
 
     error ReleaseNotCompliant(uint256 jobId, address payee, uint256 amount);
 
@@ -44,6 +45,10 @@ contract MockComplianceModule is IComplianceModule {
         _policyRegistry = value;
     }
 
+    function setProofStateGasToBurn(uint256 value) external {
+        _proofStateGasToBurn = value;
+    }
+
     function setProofState(IComplianceModule.ProofState value) external {
         _forcedState = value;
         _forcedStateSet = true;
@@ -54,6 +59,11 @@ contract MockComplianceModule is IComplianceModule {
     }
 
     function proofState(bytes calldata proof) external view returns (IComplianceModule.ProofState) {
+        if (_proofStateGasToBurn > 0) {
+            uint256 start = gasleft();
+            uint256 x;
+            while (start - gasleft() < _proofStateGasToBurn) x = uint256(keccak256(abi.encode(x)));
+        }
         if (_forcedStateSet) return _forcedState;
         if (proof.length == 0) return IComplianceModule.ProofState.Missing;
         return IComplianceModule.ProofState.Decidable;

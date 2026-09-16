@@ -110,7 +110,9 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
 
     function _requireDecidableProof(ISquareJob.JobRecord memory job, uint256 jobId) private view {
         if (!job.hookResolvesPayout || job.hook == address(0)) return;
-        try IProofState(job.hook).proofState(jobId) returns (IComplianceModule.ProofState state) {
+        try IProofState(job.hook).proofState{gas: _squareJob.hookGasLimit()}(jobId) returns (
+            IComplianceModule.ProofState state
+        ) {
             if (state == IComplianceModule.ProofState.NotGated) return;
             if (state == IComplianceModule.ProofState.Decidable) return;
             revert ProofRequired(jobId, uint8(state));
@@ -120,7 +122,9 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
     function proofStateOf(uint256 jobId) external view returns (IComplianceModule.ProofState) {
         ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
         if (!job.hookResolvesPayout || job.hook == address(0)) return IComplianceModule.ProofState.NotGated;
-        try IProofState(job.hook).proofState(jobId) returns (IComplianceModule.ProofState state) {
+        try IProofState(job.hook).proofState{gas: _squareJob.hookGasLimit()}(jobId) returns (
+            IComplianceModule.ProofState state
+        ) {
             return state;
         } catch {
             return IComplianceModule.ProofState.NotGated;
