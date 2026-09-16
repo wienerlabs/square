@@ -38,3 +38,4 @@ exclude_lints = ["mixed-case-function", "mixed-case-variable", "incorrect-shift"
 arc_testnet = "${ARC_RPC_URL}"
 
 [etherscan]
+arc-testnet = { key = "", chain = 5042002, url = "https://testnet.arcscan.app/api/" }

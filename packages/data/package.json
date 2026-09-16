@@ -28,7 +28,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:schema": "node scripts/check-schema-documented.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",

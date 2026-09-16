@@ -67,6 +67,7 @@ export type {
 export {
   RpcEndpointCooldownError,
   createFailoverTransport,
+  isEndpointFailure,
   isPermanentRpcError,
   jitteredBackoffDelay,
   withRpcRetry,

@@ -47,8 +47,8 @@ proves it by comparing the rebuilt state with the chain field by field.
   resuming would skip every log it emitted before the checkpoint.
 - `ON_DEPLOYMENT_CHANGE=restart` is destructive on purpose: before it reindexes
   it deletes every derived row of that chain (`jobs`, `disputes`,
-  `claim_listings`, `ledger_balances`, `arbiter_sets` and the `job_events`
-  journal) in one transaction, and drops the in-memory state with them. Without
+  `claim_listings`, `ledger_balances`, `arbiter_sets`, `quarantined_events` and
+  the `job_events` journal) in one transaction, and drops the in-memory state with them. Without
   that deletion the earlier deployment's jobs stayed in the mirror and
   `/jobs/open`, `/jobs/:id`, `/listings` and `/disputes/open` served them as
   current while `/status` counted only the rebuilt state, so one service
@@ -137,6 +137,8 @@ would let a page skip a row whose deadline sorts before a row already returned.
 ```bash
 export CHAIN_ID=5042002
 export RPC_URL=https://rpc.testnet.arc.io
+export SQUARE_DEPLOYMENT_FILE=        # empty takes the addresses from @squaresdk/core for a known chain
+export SQUARE_VERSION=0.1.0           # what /health and /version report, and what every log line carries
 export DATABASE_URL=postgres://...    # empty means an ephemeral PGlite database
 export START_BLOCK=                    # empty takes the block from the deployment record; neither is an error, not a scan from genesis
 export BATCH_BLOCKS=2000              # Arc refuses a span above roughly 20 000 blocks, and a refused batch is halved until it fits
@@ -152,6 +154,22 @@ export ON_DEPLOYMENT_CHANGE=fail      # or restart, to delete this chain's deriv
 npx square-data migrate up
 npm install --install-links && npm run build && npm start
 ```
+
+`SQUARE_DEPLOYMENT_FILE` is a path to a deployment record, and it decides which
+addresses this indexer follows: the record is read from disk when the variable is
+set, and the addresses come from `@squaresdk/core` for a known chain when it is
+empty. The file is the way through a redeploy, because
+`packages/core/src/deployments.ts` is updated by hand after one and until it is,
+pointing this at `contracts/deployments/<chainId>.json` is what runs the indexer
+against the current stack. [docs/deploy/README.md](../../docs/deploy/README.md)
+lists the services as readers of that file for exactly this reason. The record
+carries more than addresses: the block it was deployed in is where `START_BLOCK`
+comes from when that variable is unset, and the addresses in it are what the
+deployment-change check compares with `indexer_checkpoints` on start.
+
+`SQUARE_VERSION` is the version `/health` and `/version` report and the logger
+stamps on every line. It falls back to `0.1.0` whatever is deployed, so an
+operator who wants those to name the image tag has to pass the tag in.
 
 `START_BLOCK` is the block the settlement stack was deployed in. A deploy script
 writes it into the deployment record as `block`, and the indexer reads it from

@@ -20,6 +20,7 @@ export interface FailoverTransportOptions {
   retryCount?: number | undefined;
   retryDelay?: number | undefined;
   onFailover?: ((from: string, to: string, error: Error) => void) | undefined;
+  isEndpointFailure?: ((error: unknown) => boolean) | undefined;
   transportFactory?: ((url: string) => Transport) | undefined;
   now?: (() => number) | undefined;
   key?: string | undefined;
@@ -57,6 +58,45 @@ interface AttemptTrail {
 type RequestArgs = Parameters<EIP1193RequestFn>[0];
 type RequestOptions = Parameters<EIP1193RequestFn>[1];
 
+const PERMANENT_JSON_RPC_CODES = new Set([-32600, -32601, -32602, -32603]);
+const REQUEST_SCOPED_JSON_RPC_CODES = new Set([3, -32700, -32600, -32601, -32602]);
+const EXECUTION_REVERTED = /execution reverted/i;
+const REQUEST_SCOPED_MESSAGE =
+  /execution reverted|gas required exceeds allowance|always failing transaction|invalid opcode|out of gas|insufficient funds|nonce too (?:low|high)|already known|underpriced|intrinsic gas too low|max fee per gas less than block base fee/i;
+const MAX_CAUSE_DEPTH = 8;
+
+function causeChain(error: unknown): unknown[] {
+  const chain: unknown[] = [];
+  let current = error;
+  while (chain.length < MAX_CAUSE_DEPTH && typeof current === "object" && current !== null && !chain.includes(current)) {
+    chain.push(current);
+    current = (current as { cause?: unknown }).cause;
+  }
+  return chain;
+}
+
+function jsonRpcCode(candidate: unknown): number | undefined {
+  const code = (candidate as { code?: unknown }).code;
+  if (typeof code === "number" && Number.isInteger(code)) return code;
+  if (typeof code === "string" && /^-?\d+$/.test(code)) return Number(code);
+  return undefined;
+}
+
+function errorMessage(candidate: unknown): string | undefined {
+  const message = (candidate as { message?: unknown }).message;
+  return typeof message === "string" ? message : undefined;
+}
+
+export function isEndpointFailure(error: unknown): boolean {
+  for (const link of causeChain(error)) {
+    const message = errorMessage(link);
+    if (message !== undefined && REQUEST_SCOPED_MESSAGE.test(message)) return false;
+    const code = jsonRpcCode(link);
+    if (code !== undefined && REQUEST_SCOPED_JSON_RPC_CODES.has(code)) return false;
+  }
+  return true;
+}
+
 export function createFailoverTransport(
   urls: readonly string[],
   options: FailoverTransportOptions = {}
@@ -69,6 +109,7 @@ export function createFailoverTransport(
   const transportFactory =
     options.transportFactory ??
     ((url: string) => http(url, options.timeout === undefined ? {} : { timeout: options.timeout }));
+  const countsAsEndpointFailure = options.isEndpointFailure ?? isEndpointFailure;
   const trail = new AsyncLocalStorage<AttemptTrail>();
   const endpoints: EndpointState[] = urls.map((url) => ({
     url,
@@ -123,8 +164,10 @@ export function createFailoverTransport(
           return result;
         } catch (error) {
           const failure = error instanceof Error ? error : new Error(String(error));
-          recordFailure(endpoint, index, failure);
-          if (attempt !== undefined) attempt.lastFailure = { url: endpoint.url, error: failure };
+          if (countsAsEndpointFailure(failure)) {
+            recordFailure(endpoint, index, failure);
+            if (attempt !== undefined) attempt.lastFailure = { url: endpoint.url, error: failure };
+          }
           throw error;
         }
       }) as EIP1193RequestFn;
@@ -184,27 +227,6 @@ export interface RpcRetryOptions {
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-const PERMANENT_JSON_RPC_CODES = new Set([-32600, -32601, -32602, -32603]);
-const EXECUTION_REVERTED = /execution reverted/i;
-const MAX_CAUSE_DEPTH = 8;
-
-function causeChain(error: unknown): unknown[] {
-  const chain: unknown[] = [];
-  let current = error;
-  while (chain.length < MAX_CAUSE_DEPTH && typeof current === "object" && current !== null && !chain.includes(current)) {
-    chain.push(current);
-    current = (current as { cause?: unknown }).cause;
-  }
-  return chain;
-}
-
-function jsonRpcCode(candidate: unknown): number | undefined {
-  const code = (candidate as { code?: unknown }).code;
-  if (typeof code === "number" && Number.isInteger(code)) return code;
-  if (typeof code === "string" && /^-?\d+$/.test(code)) return Number(code);
-  return undefined;
-}
 
 export function isPermanentRpcError(error: unknown): boolean {
   for (const link of causeChain(error)) {
