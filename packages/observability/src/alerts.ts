@@ -12,6 +12,10 @@ export interface AlertSnapshot {
   proofFailures?: number;
   disputesOpen?: number;
   lastKeeperTickAt?: number;
+  finalizeGasAssumed?: number;
+  finalizeGasUsed?: number;
+  releaseRefusals?: number;
+  releaseRefusalsWithAmount?: number;
   hookWriteFailures?: number;
   [key: string]: unknown;
 }
@@ -208,6 +212,7 @@ export const DEFAULT_FAILURE_WINDOW_SECONDS = 300;
 export const DEFAULT_MIN_ATTEMPTS = 5;
 export const DEFAULT_MAX_OPEN_DISPUTES = 10;
 export const DEFAULT_MAX_TICK_AGE_SECONDS = 300;
+export const DEFAULT_MAX_GAS_OVERSHOOT_RATIO = 0.25;
 
 export interface RuleOptions {
   forSeconds?: number;
@@ -337,6 +342,56 @@ export function hookWriteFailures(options: HookWriteFailuresOptions = {}): Alert
         return { firing: true, detail: `${failures} hook writes or hook calls failed, these should never fire` };
       }
       return { firing: false, detail: "no hook write or hook call has failed" };
+    },
+  };
+}
+
+export interface FinalizeGasUnderestimatedOptions extends RuleOptions {
+  maxOvershootRatio?: number;
+}
+
+export function finalizeGasUnderestimated(options: FinalizeGasUnderestimatedOptions = {}): AlertRule {
+  const max = options.maxOvershootRatio ?? DEFAULT_MAX_GAS_OVERSHOOT_RATIO;
+  return {
+    name: "finalizeGasUnderestimated",
+    severity: options.severity ?? "warn",
+    forSeconds: options.forSeconds ?? 0,
+    evaluate(snapshot) {
+      const assumed = numeric(snapshot.finalizeGasAssumed);
+      const used = numeric(snapshot.finalizeGasUsed);
+      if (assumed === undefined || used === undefined || assumed <= 0 || used <= 0) {
+        return { firing: false, detail: "no settlement receipt to compare the gas assumption with" };
+      }
+      const overshoot = (used - assumed) / assumed;
+      const summary = `the last settlement burned ${used} gas against an assumption of ${assumed}`;
+      if (overshoot > max) {
+        return { firing: true, detail: `${summary}, ${(overshoot * 100).toFixed(1)}% over, above ${(max * 100).toFixed(1)}%` };
+      }
+      return { firing: false, detail: `${summary}, within ${(max * 100).toFixed(1)}%` };
+    },
+  };
+}
+
+export interface ReleaseRefusedOptions extends RuleOptions {
+  maxRefusals?: number;
+}
+
+export function releaseRefused(options: ReleaseRefusedOptions = {}): AlertRule {
+  const max = options.maxRefusals ?? 0;
+  return {
+    name: "releaseRefused",
+    severity: options.severity ?? "warn",
+    forSeconds: options.forSeconds ?? 0,
+    evaluate(snapshot) {
+      const refused = numeric(snapshot.releaseRefusalsWithAmount);
+      if (refused === undefined) return { firing: false, detail: "no release refusal sample" };
+      if (refused > max) {
+        return {
+          firing: true,
+          detail: `${refused} releases were refused with money on them: the payee got nothing and the client was paid back, above ${max}`,
+        };
+      }
+      return { firing: false, detail: "no release with money on it has been refused" };
     },
   };
 }

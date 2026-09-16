@@ -6,6 +6,8 @@ import {
   proofFailureRate,
   disputesPilingUp,
   hookWriteFailures,
+  finalizeGasUnderestimated,
+  releaseRefused,
   webhookNotifier,
   logNotifier,
   type Alert,
@@ -385,5 +387,54 @@ describe("hook write failures", () => {
     expect(h.notified).toHaveLength(1);
     expect(h.notified[0]).toMatchObject({ rule: "hookWriteFailures", kind: "firing", severity: "warn" });
     expect(h.notified[0]?.detail).toContain("should never fire");
+  });
+});
+
+describe("a gas assumption the chain has left behind", () => {
+  it("stays quiet with no receipt and inside the band, and warns once the receipt overshoots it", async () => {
+    const h = harness([finalizeGasUnderestimated()], "keeper");
+
+    await h.alerting.evaluate({});
+    expect(h.notified).toHaveLength(0);
+
+    await h.alerting.evaluate({ finalizeGasAssumed: 450_000, finalizeGasUsed: 449_893 });
+    expect(h.notified).toHaveLength(0);
+
+    await h.alerting.evaluate({ finalizeGasAssumed: 450_000, finalizeGasUsed: 562_500 });
+    expect(h.notified).toHaveLength(0);
+
+    await h.alerting.evaluate({ finalizeGasAssumed: 450_000, finalizeGasUsed: 1_052_107 });
+    expect(h.notified).toHaveLength(1);
+    expect(h.notified[0]).toMatchObject({ rule: "finalizeGasUnderestimated", kind: "firing", severity: "warn" });
+    expect(h.notified[0]?.detail).toContain("1052107 gas against an assumption of 450000");
+    expect(h.notified[0]?.detail).toContain("above 25.0%");
+
+    await h.alerting.evaluate({ finalizeGasAssumed: 1_060_000, finalizeGasUsed: 1_052_107 });
+    expect(h.notified).toHaveLength(2);
+    expect(h.notified[1]).toMatchObject({ rule: "finalizeGasUnderestimated", kind: "resolved" });
+  });
+
+  it("takes the band from the operator", async () => {
+    const h = harness([finalizeGasUnderestimated({ maxOvershootRatio: 0.05 })], "keeper");
+    await h.alerting.evaluate({ finalizeGasAssumed: 450_000, finalizeGasUsed: 490_000 });
+    expect(h.notified).toHaveLength(1);
+    expect(h.notified[0]?.detail).toContain("above 5.0%");
+  });
+});
+
+describe("a release the module refused", () => {
+  it("fires on the first refusal that had money on it and says what it cost", async () => {
+    const h = harness([releaseRefused()], "keeper");
+
+    await h.alerting.evaluate({});
+    expect(h.notified).toHaveLength(0);
+
+    await h.alerting.evaluate({ releaseRefusals: 3, releaseRefusalsWithAmount: 0 });
+    expect(h.notified).toHaveLength(0);
+
+    await h.alerting.evaluate({ releaseRefusals: 4, releaseRefusalsWithAmount: 1 });
+    expect(h.notified).toHaveLength(1);
+    expect(h.notified[0]).toMatchObject({ rule: "releaseRefused", kind: "firing", severity: "warn" });
+    expect(h.notified[0]?.detail).toContain("the payee got nothing and the client was paid back");
   });
 });

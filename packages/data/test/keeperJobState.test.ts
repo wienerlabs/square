@@ -169,3 +169,50 @@ describe("the ninety day journal sweep", () => {
     }
   });
 });
+
+describe("the hold", () => {
+  it("keeps the clock of a standing hold, restarts it when the reason changes, and clears on release", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      expect(await keeperJobState.hold(db, CHAIN, 1n, "proofStale", NOW)).toBe(NOW);
+      expect(await keeperJobState.hold(db, CHAIN, 1n, "proofStale", NOW + 600n)).toBe(NOW);
+      expect(await keeperJobState.hold(db, CHAIN, 1n, "unscreened", NOW + 900n)).toBe(NOW + 900n);
+      expect(await keeperJobState.hold(db, CHAIN, 2n, "proofStale", NOW + 30n)).toBe(NOW + 30n);
+
+      expect(await keeperJobState.listHeld(db, CHAIN)).toEqual([
+        { jobId: 1n, reason: "unscreened", since: NOW + 900n },
+        { jobId: 2n, reason: "proofStale", since: NOW + 30n },
+      ]);
+      expect(await keeperJobState.countHeld(db, CHAIN)).toEqual({ proofStale: 1, unscreened: 1 });
+
+      expect(await keeperJobState.releaseHold(db, CHAIN, 1n)).toBe(true);
+      expect(await keeperJobState.releaseHold(db, CHAIN, 1n)).toBe(false);
+      expect(await keeperJobState.countHeld(db, CHAIN)).toEqual({ proofStale: 1 });
+      expect((await keeperJobState.get(db, CHAIN, 1n))?.heldReason).toBeNull();
+      expect((await keeperJobState.get(db, CHAIN, 1n))?.heldSince).toBeNull();
+      expect((await keeperJobState.get(db, CHAIN, 2n))?.heldSince).toBe(NOW + 30n);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("holds a job the keeper already gave up on without touching the give-up or the expiry state", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      await keeperJobState.markFinalizeGaveUp(db, CHAIN, 7n);
+      await keeperJobState.bumpExpiryAttempts(db, CHAIN, 7n);
+      await keeperJobState.hold(db, CHAIN, 7n, "proofStale", NOW);
+
+      const state = await keeperJobState.get(db, CHAIN, 7n);
+      expect(state?.finalizeGaveUp).toBe(true);
+      expect(state?.expiryAttempts).toBe(1);
+      expect(state?.heldReason).toBe("proofStale");
+
+      await keeperJobState.releaseHold(db, CHAIN, 7n);
+      expect((await keeperJobState.get(db, CHAIN, 7n))?.finalizeGaveUp).toBe(true);
+      expect((await keeperJobState.get(db, CHAIN, 7n))?.expiryAttempts).toBe(1);
+    } finally {
+      await db.close();
+    }
+  });
+});

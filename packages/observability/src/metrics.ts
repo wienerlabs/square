@@ -51,7 +51,11 @@ export interface MetricsSnapshot {
   keeperFailures: number;
   keeperFeeEarnedUsdc: number;
   lastKeeperTickAt: number;
+  finalizeGasAssumed: number;
+  finalizeGasUsed: number;
   finalizeGasGap: number;
+  releaseRefusals: number;
+  releaseRefusalsWithAmount: number;
   hookWriteFailures: number;
   alertDispatchFailures: number;
   quarantinedEvents: number;
@@ -77,6 +81,8 @@ export interface MetricNames {
   keeperLastTick: string;
   finalizeGasUsed: string;
   finalizeGasGap: string;
+  releaseRefusals: string;
+  keeperHeld: string;
   hookWriteFailures: string;
   alertDispatchFailures: string;
   quarantinedEvents: string;
@@ -105,6 +111,8 @@ export interface Metrics {
   addKeeperFeeUsdc(amount: number): void;
   recordKeeperTick(at?: number): void;
   recordFinalizeGas(action: string, assumedGas: number | bigint, usedGas: number | bigint): void;
+  recordReleaseRefused(reason: string, amount: number | bigint): void;
+  setHeldJobs(reason: string, count: number): void;
   recordHookWriteFailure(kind: HookWriteKind): void;
   recordAlertDispatchFailure(rule: string, stage: AlertDispatchStage): void;
   recordQuarantinedEvent(contract: string, event: string): void;
@@ -136,6 +144,8 @@ export function metricNames(prefix: string = DEFAULT_PREFIX): MetricNames {
     keeperLastTick: `${prefix}_keeper_last_tick_timestamp_seconds`,
     finalizeGasUsed: `${prefix}_finalize_gas_used`,
     finalizeGasGap: `${prefix}_finalize_gas_gap`,
+    releaseRefusals: `${prefix}_release_refused_total`,
+    keeperHeld: `${prefix}_keeper_held_jobs`,
     hookWriteFailures: `${prefix}_hook_write_failures_total`,
     alertDispatchFailures: `${prefix}_alert_dispatch_failures_total`,
     quarantinedEvents: `${prefix}_indexer_quarantined_events_total`,
@@ -288,6 +298,18 @@ export function createMetrics(options: MetricsOptions): Metrics {
     labelNames: ["action"] as const,
     registers,
   });
+  const releaseRefusals = new Counter({
+    name: names.releaseRefusals,
+    help: "Releases the compliance module refused, by the reason it named. A refusal pays the client back and the payee nothing, so any of these with money on them is a job somebody expected to be paid for.",
+    labelNames: ["reason"] as const,
+    registers,
+  });
+  const keeperHeld = new Gauge({
+    name: names.keeperHeld,
+    help: "Jobs the keeper found, will not crank this tick, and did not count as a failed attempt, by the reason it is holding them for.",
+    labelNames: ["reason"] as const,
+    registers,
+  });
   const hookWriteFailures = new Counter({
     name: names.hookWriteFailures,
     help: "Hook work the kernel could not land, by kind: a registry write that reverted, a hook call that never completed, or a release the compliance check did not confirm. These should never fire.",
@@ -337,7 +359,11 @@ export function createMetrics(options: MetricsOptions): Metrics {
     keeperFailures: 0,
     keeperFeeEarnedUsdc: 0,
     lastKeeperTickAt: Date.now(),
+    finalizeGasAssumed: 0,
+    finalizeGasUsed: 0,
     finalizeGasGap: 0,
+    releaseRefusals: 0,
+    releaseRefusalsWithAmount: 0,
     hookWriteFailures: 0,
     alertDispatchFailures: 0,
     quarantinedEvents: 0,
@@ -457,9 +483,21 @@ export function createMetrics(options: MetricsOptions): Metrics {
       const assumed = toCount(assumedGas);
       const used = toCount(usedGas);
       if (!finite(assumed) || !finite(used) || used <= 0) return;
+      state.finalizeGasAssumed = assumed;
+      state.finalizeGasUsed = used;
       state.finalizeGasGap = assumed - used;
       finalizeGasUsed.set({ action: label(action) }, used);
       finalizeGasGap.set({ action: label(action) }, assumed - used);
+    },
+    recordReleaseRefused(reason, amount) {
+      const refused = toCount(amount);
+      state.releaseRefusals += 1;
+      if (finite(refused) && refused > 0) state.releaseRefusalsWithAmount += 1;
+      releaseRefusals.inc({ reason: label(reason) });
+    },
+    setHeldJobs(reason, count) {
+      if (!finite(count) || count < 0) return;
+      keeperHeld.set({ reason: label(reason) }, count);
     },
     recordHookWriteFailure(kind) {
       state.hookWriteFailures += 1;
