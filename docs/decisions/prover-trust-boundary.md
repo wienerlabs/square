@@ -78,7 +78,7 @@ it when a command ends, and `square-mcp` calls it when its client disconnects.
 | `square-mcp` | `SQUARE_POLICY_FILE` | the server's process | nobody |
 | `square-hosted` | `compliance.policyFile`, beside the config | the host's process | whoever operates the host: the institution when it runs its own, the platform when the platform runs it, which already holds the agent's wallet |
 | app, job page | the browser's storage | the prover at `NEXT_PUBLIC_PROVER_URL` | that prover's operator |
-| lifecycle runner (development) | `LIFECYCLE_POLICY_FILE` | the prover at `LIFECYCLE_PROVER_URL` | that prover's operator |
+| lifecycle runner (development) | `LIFECYCLE_POLICY_FILE` | the runner's process from `LIFECYCLE_PROVER_ARTIFACTS`, or the prover at `LIFECYCLE_PROVER_URL` | nobody, or that prover's operator |
 
 The chain sees what it saw before:
 
