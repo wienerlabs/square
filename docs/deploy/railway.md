@@ -49,10 +49,12 @@ operator redeploys by hand (the service's Redeploy, or the same CLI command).
 There is no `:latest`, and `sha-` tags are never moved, so
 `docs/deploy/services-5042002-<date>.md` can name the exact build that ran.
 
-After the first run each package is private; make `square-indexer`,
-`square-keeper`, `square-prover` and `square-hosted` public once (Packages,
-the package, settings, visibility), so Railway pulls anonymously. A private
-package works too, with registry credentials on the service.
+The three packages the first run created (2026-09-16) came out public, so
+Railway pulls them anonymously; check a new package the same way (an
+anonymous `GET /v2/wienerlabs/<package>/manifests/main` at `ghcr.io` answers
+200) and make a private one public once (Packages, the package, settings,
+visibility). A private package works too, with registry credentials on the
+service.
 
 ## Setting a service up
 

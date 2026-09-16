@@ -13,9 +13,10 @@ name: services
 #   ghcr.io/wienerlabs/square-<service>:sha-<12 hex>   the record, written once
 #   ghcr.io/wienerlabs/square-<service>:main           what main built last; the hosted services point here
 #
-# No :latest, for the reason did-aip-driver.yml gives. After the first run each
-# package has to be made PUBLIC once, by hand (Packages -> square-<service> ->
-# Package settings -> Change visibility), so the host pulls anonymously.
+# No :latest, for the reason did-aip-driver.yml gives. The packages the first
+# run created came out public, which is what the host's anonymous pull needs;
+# a new one that does not is made public once, by hand (Packages ->
+# square-<service> -> Package settings -> Change visibility).
 #
 # The smoke test is hermetic: every service starts with a dead RPC endpoint and
 # no database, and answers /health with 503, which is the check the container
