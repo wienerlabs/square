@@ -1,5 +1,6 @@
 import { JobStatus, squareHookAbi, type SquareClient } from "@squaresdk/core";
 import { encodeAbiParameters, encodeEventTopics, type Address, type Hex } from "viem";
+import { policyCommitment } from "../../src/commitment.js";
 import { decodeComplianceProof, encodeComplianceProof, signalsOf } from "../../src/proof.js";
 import type { ProveRequest, ProveResponse, Prover } from "../../src/prover.js";
 
@@ -31,6 +32,10 @@ export interface FakeJob {
   outcome?: number;
   providerBps?: number;
   proof: Hex;
+  /** The commitment the hook pinned at funding (square#382); undefined for a job funded before the pin. */
+  pinned?: Hex;
+  /** After it the job can only expire; far away unless a test says otherwise. */
+  expiredAt?: bigint;
 }
 
 /** A screening record as the registry judges it: fresh and clean clears; fresh and sanctioned is a standing "no"; older than maxAge is nothing. */
@@ -83,9 +88,11 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
       const job = chain.jobs.get(jobId.toString())!;
       const age = chain.now > s.timestamp ? chain.now - s.timestamp : s.timestamp - chain.now;
       const share = job.disputed && (job.outcome ?? 0) !== 0 ? (job.net * BigInt(job.providerBps ?? 0)) / 10_000n : job.net;
+      // The module binds to the commitment pinned at funding, else the live one (square#382).
+      const binds = (job.pinned ?? chain.commitment).toLowerCase();
       return (
         s.isCompliant &&
-        `0x${s.policyDataHash.toString(16).padStart(64, "0")}` === chain.commitment.toLowerCase() &&
+        `0x${s.policyDataHash.toString(16).padStart(64, "0")}` === binds &&
         s.recipient.toLowerCase() === job.payee.toLowerCase() &&
         s.amount === share &&
         s.token.toLowerCase() === USDC.toLowerCase() &&
@@ -135,7 +142,10 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
     },
     async getJobRecord(id: bigint) {
       const j = job(id);
-      return { status: j.status, client: j.client, provider: j.provider, hook: HOOK };
+      return { status: j.status, client: j.client, provider: j.provider, hook: HOOK, expiredAt: j.expiredAt ?? chain.now + 30n * 86_400n };
+    },
+    async commitmentAtFund(id: bigint) {
+      return job(id).pinned ?? null;
     },
     async screening() {
       return chain.screening;
@@ -217,11 +227,14 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
       chain.proofs.push(request);
       const violated: string[] = [];
       if (BigInt(request.payment_amount) > BigInt(request.max_per_transaction)) violated.push("per_transaction_limit");
+      if (BigInt(request.daily_spent_before) + BigInt(request.payment_amount) > BigInt(request.max_daily_spend)) violated.push("daily_limit");
       if (!request.allowed_endpoint_categories.includes(request.payment_endpoint_category)) violated.push("endpoint_category");
       const compliant = violated.length === 0;
+      // A proof under a policy carries that policy's commitment, as the real prover's does.
+      const under = (await policyCommitment(request)).hex;
       const input = [
         compliant ? "1" : "0",
-        BigInt(chain.commitment).toString(),
+        BigInt(under).toString(),
         BigInt(request.payment_recipient).toString(),
         request.payment_amount,
         BigInt(request.payment_token).toString(),
@@ -232,8 +245,8 @@ export function fakeChain(options: { commitment: Hex; module?: Address | null; t
       return {
         is_compliant: compliant,
         violated_rules: violated as ProveResponse["violated_rules"],
-        policy_data_hash: BigInt(chain.commitment).toString(),
-        policy_data_hash_hex: chain.commitment,
+        policy_data_hash: BigInt(under).toString(),
+        policy_data_hash_hex: under,
         public_signals: {},
         solidity: { a: ["1", "2"], b: [["3", "4"], ["5", "6"]], c: ["7", "8"], input },
       };

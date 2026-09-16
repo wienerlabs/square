@@ -56,6 +56,53 @@ describe("the finalize give-up", () => {
   });
 });
 
+describe("the unprofitable journal mark", () => {
+  it("is claimed by the first caller only, so the row is written once whatever restarts", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      expect(await keeperJobState.markUnprofitableJournaled(db, CHAIN, 7n)).toBe(true);
+      expect(await keeperJobState.markUnprofitableJournaled(db, CHAIN, 7n)).toBe(false);
+      expect(await keeperJobState.markUnprofitableJournaled(db, CHAIN, 7n)).toBe(false);
+      expect(await keeperJobState.markUnprofitableJournaled(db, 5042002, 7n)).toBe(true);
+
+      expect((await keeperJobState.get(db, CHAIN, 7n))?.unprofitableJournaledAt).toBeInstanceOf(Date);
+      expect((await keeperJobState.get(db, CHAIN, 8n))?.unprofitableJournaledAt).toBeUndefined();
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("stands beside a give-up on the same job instead of overwriting it", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      await keeperJobState.markFinalizeGaveUp(db, CHAIN, 3n);
+
+      expect(await keeperJobState.markUnprofitableJournaled(db, CHAIN, 3n)).toBe(true);
+
+      const state = await keeperJobState.get(db, CHAIN, 3n);
+      expect(state?.finalizeGaveUp).toBe(true);
+      expect(state?.unprofitableJournaledAt).toBeInstanceOf(Date);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("survives the ninety day journal sweep that deletes the row it guards", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      await keeperActions.append(db, { chainId: CHAIN, jobId: 5n, action: "skipped", reason: "unprofitable" });
+      await keeperJobState.markUnprofitableJournaled(db, CHAIN, 5n);
+      await db.query("update keeper_actions set created_at = now() - interval '91 days'");
+
+      expect(await keeperActions.sweep(db)).toBe(1);
+
+      expect(await keeperJobState.markUnprofitableJournaled(db, CHAIN, 5n)).toBe(false);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
 describe("the expiry sweep's candidates", () => {
   it("leave the set through the recorded mark, not through a journal row", async () => {
     const db = await openMigratedDatabase();
@@ -117,6 +164,53 @@ describe("the ninety day journal sweep", () => {
       expect(await keeperActions.recent(db, CHAIN, 10)).toEqual([]);
       expect((await jobs.listExpiredWithAgent(db, CHAIN, evaluator, 10, NOW)).map((row) => row.jobId)).toEqual([2n]);
       expect(await keeperJobState.listFinalizeGaveUp(db, CHAIN)).toEqual([9n]);
+    } finally {
+      await db.close();
+    }
+  });
+});
+
+describe("the hold", () => {
+  it("keeps the clock of a standing hold, restarts it when the reason changes, and clears on release", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      expect(await keeperJobState.hold(db, CHAIN, 1n, "proofStale", NOW)).toBe(NOW);
+      expect(await keeperJobState.hold(db, CHAIN, 1n, "proofStale", NOW + 600n)).toBe(NOW);
+      expect(await keeperJobState.hold(db, CHAIN, 1n, "unscreened", NOW + 900n)).toBe(NOW + 900n);
+      expect(await keeperJobState.hold(db, CHAIN, 2n, "proofStale", NOW + 30n)).toBe(NOW + 30n);
+
+      expect(await keeperJobState.listHeld(db, CHAIN)).toEqual([
+        { jobId: 1n, reason: "unscreened", since: NOW + 900n },
+        { jobId: 2n, reason: "proofStale", since: NOW + 30n },
+      ]);
+      expect(await keeperJobState.countHeld(db, CHAIN)).toEqual({ proofStale: 1, unscreened: 1 });
+
+      expect(await keeperJobState.releaseHold(db, CHAIN, 1n)).toBe(true);
+      expect(await keeperJobState.releaseHold(db, CHAIN, 1n)).toBe(false);
+      expect(await keeperJobState.countHeld(db, CHAIN)).toEqual({ proofStale: 1 });
+      expect((await keeperJobState.get(db, CHAIN, 1n))?.heldReason).toBeNull();
+      expect((await keeperJobState.get(db, CHAIN, 1n))?.heldSince).toBeNull();
+      expect((await keeperJobState.get(db, CHAIN, 2n))?.heldSince).toBe(NOW + 30n);
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("holds a job the keeper already gave up on without touching the give-up or the expiry state", async () => {
+    const db = await openMigratedDatabase();
+    try {
+      await keeperJobState.markFinalizeGaveUp(db, CHAIN, 7n);
+      await keeperJobState.bumpExpiryAttempts(db, CHAIN, 7n);
+      await keeperJobState.hold(db, CHAIN, 7n, "proofStale", NOW);
+
+      const state = await keeperJobState.get(db, CHAIN, 7n);
+      expect(state?.finalizeGaveUp).toBe(true);
+      expect(state?.expiryAttempts).toBe(1);
+      expect(state?.heldReason).toBe("proofStale");
+
+      await keeperJobState.releaseHold(db, CHAIN, 7n);
+      expect((await keeperJobState.get(db, CHAIN, 7n))?.finalizeGaveUp).toBe(true);
+      expect((await keeperJobState.get(db, CHAIN, 7n))?.expiryAttempts).toBe(1);
     } finally {
       await db.close();
     }

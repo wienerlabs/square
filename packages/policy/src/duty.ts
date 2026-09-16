@@ -2,7 +2,7 @@ import { JobStatus, squareJobAbi, type Screener, type ScreeningVerdict, type Squ
 import { formatUnits, getAbiItem, type Address, type Hex } from "viem";
 import type { Policy } from "./policy.js";
 import type { Prover, ViolatedRule } from "./prover.js";
-import { bindComplianceProof, moduleVerdict, proofState, releaseFacts, screeningVerdict, type BindOutcome, type ProofState, type ReleaseFacts } from "./release.js";
+import { bindComplianceProof, moduleVerdict, proofState, refusalIsTransient, releaseFacts, screeningVerdict, type BindOutcome, type ProofState, type ReleaseFacts } from "./release.js";
 
 /**
  * The institution's release duty.
@@ -87,6 +87,7 @@ export type DutyEvent =
   | { type: "recovered"; restored: bigint[]; discovered: bigint[] }
   | { type: "bound"; jobId: bigint; transaction: Hex; because: string[] }
   | { type: "refused"; jobId: bigint; reason: Exclude<BindOutcome, { bound: true }>["reason"]; detail: string; violated?: ViolatedRule[] | null }
+  | { type: "refusal-bound"; jobId: bigint; transaction: Hex; violated: ViolatedRule[] | null }
   | { type: "released"; jobId: bigint; transaction: Hex; verified: boolean | null; payee: Address; amount: bigint; refusedFor?: Hex | undefined; payeeCleared?: boolean | null | undefined }
   | { type: "held"; jobId: bigint; payee: Address; reason: string }
   | { type: "settled"; jobId: bigint; status: number }
@@ -119,6 +120,8 @@ export interface TickReport {
   settled: bigint[];
   /** Jobs the proof could not be bound for, with why. */
   refused: { jobId: bigint; reason: string }[];
+  /** Jobs whose refusal was bound on purpose, so the module pronounces it and the escrow returns (square#396). */
+  refusalBound: bigint[];
   errors: { jobId: bigint | null; error: Error }[];
 }
 
@@ -229,7 +232,7 @@ export class ComplianceDuty {
 
   /** One pass over every tracked job. Never throws for one job's sake; errors are in the report. */
   async tick(): Promise<TickReport> {
-    const report: TickReport = { bound: [], current: [], waiting: [], released: [], held: [], settled: [], refused: [], errors: [] };
+    const report: TickReport = { bound: [], current: [], waiting: [], released: [], held: [], settled: [], refused: [], refusalBound: [], errors: [] };
     if (this.tracked.size === 0) return report;
     const { client } = this.options;
     let module: Address | null;
@@ -283,6 +286,7 @@ export class ComplianceDuty {
     }
     const bound = await client.complianceProofOf(job.jobId);
     let state: ProofState = proofState(bound, facts, refreshAfter);
+    let refusalOnTheJob = false;
     if (state.kind !== "current") {
       const because = state.kind === "stale" ? state.reasons : [state.kind === "none" ? "no proof is bound" : "the bound proof is malformed"];
       const outcome = await bindComplianceProof({ client, policy, prover, jobId: job.jobId, category: job.category, facts });
@@ -300,14 +304,34 @@ export class ComplianceDuty {
           this.emit({ type: "refused", jobId: job.jobId, reason: outcome.reason, detail, ...(outcome.reason === "not-compliant" ? { violated: outcome.violated } : {}) });
         }
         if (outcome.reason === "terminal") this.settled(job, facts.status, report);
-        return;
+        // square#396. Since square#382 a job with no proof does not settle,
+        // so the mandate's no has to reach the chain to end the escrow. A
+        // refusal on a rule that says the same tomorrow (the category, the
+        // recipient, the token, the per-transaction ceiling) is bound now and
+        // the release refuses it, returning the net to this wallet; one the
+        // day's counter or the policy's hours can clear is waited out, until
+        // the job is about to expire, when it is the mandate's last word too.
+        if (outcome.reason !== "not-compliant") return;
+        const transient = refusalIsTransient(outcome.violated, facts, policy);
+        const expiring = facts.expiredAt - facts.now <= refreshAfter;
+        if (transient && !expiring) return;
+        const refusal = await bindComplianceProof({ client, policy, prover, jobId: job.jobId, category: job.category, facts, bindRefusal: true });
+        if (!refusal.bound) {
+          report.refused.push({ jobId: job.jobId, reason: `${refusal.reason}: ${"detail" in refusal ? refusal.detail : "the refusal could not be bound"}` });
+          return;
+        }
+        report.refusalBound.push(job.jobId);
+        this.emit({ type: "refusal-bound", jobId: job.jobId, transaction: refusal.transaction, violated: refusal.verdict === "refusal" ? refusal.violated : null });
+        refusalOnTheJob = true;
+        facts = await releaseFacts(client, job.jobId);
+      } else {
+        job.lastRefusal = undefined;
+        report.bound.push(job.jobId);
+        this.emit({ type: "bound", jobId: job.jobId, transaction: outcome.transaction, because });
+        // The binding took a block; what the release binds to may have moved.
+        facts = await releaseFacts(client, job.jobId);
+        state = proofState(outcome.proof, facts, refreshAfter);
       }
-      job.lastRefusal = undefined;
-      report.bound.push(job.jobId);
-      this.emit({ type: "bound", jobId: job.jobId, transaction: outcome.transaction, because });
-      // The binding took a block; what the release binds to may have moved.
-      facts = await releaseFacts(client, job.jobId);
-      state = proofState(outcome.proof, facts, refreshAfter);
     } else {
       report.current.push(job.jobId);
     }
@@ -316,7 +340,9 @@ export class ComplianceDuty {
     // Optimistic: the window has to have closed. Disputed: the arbiters have
     // to have decided, and `finalizeDecided` applies what they decided.
     if (facts.disputed ? facts.providerBps === null : facts.challengeEnd === null || facts.challengeEnd > facts.now) return;
-    if (state.kind !== "current") return; // rebound and moved again; next tick
+    // A bound refusal is cranked as it is: the module's no is the point. A
+    // compliant proof that moved again waits for the next tick's rebind.
+    if (!refusalOnTheJob && state.kind !== "current") return;
     if (!(await this.payeeCleared(job, facts, report))) return;
     try {
       const result = facts.disputed ? await client.finalizeDecided(job.jobId) : await client.finalize(job.jobId);
@@ -421,6 +447,8 @@ export function describeDutyEvent(event: DutyEvent): string {
       return `job ${event.jobId}: proof bound in ${event.transaction} (${event.because.join("; ")})`;
     case "refused":
       return `job ${event.jobId}: no proof bound, ${event.reason}: ${event.detail}`;
+    case "refusal-bound":
+      return `job ${event.jobId}: the mandate's refusal bound in ${event.transaction} (${(event.violated ?? ["rules unknown"]).join(", ")}); the release returns the net to this wallet`;
     case "released":
       return `job ${event.jobId}: released in ${event.transaction}, ${
         event.verified === false

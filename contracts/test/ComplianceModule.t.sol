@@ -13,6 +13,8 @@ import {PolicyRegistry} from "../src/PolicyRegistry.sol";
 import {Groth16Verifier} from "../src/Groth16Verifier.sol";
 import {ComplianceModule} from "../src/ComplianceModule.sol";
 import {ISquareJob} from "../src/interfaces/ISquareJob.sol";
+import {IComplianceModule} from "../src/interfaces/IComplianceModule.sol";
+import {IKeeperEvaluator} from "../src/interfaces/IKeeperEvaluator.sol";
 import {SCALAR_FIELD} from "../src/interfaces/IGroth16Verifier.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 import {MockIdentityRegistry, MockReputationRegistry, MockValidationRegistry} from "./mocks/MockRegistries.sol";
@@ -454,9 +456,9 @@ contract ComplianceModuleTest is Test, BuyerLists {
     /// this used to pass the raw keccak digest, which is above the field and so
     /// is a commitment no proof can carry at all (#231).
     function _refusedOnPolicyDataHash() internal {
-        uint256 jobId = submittedJob();
         vm.prank(client);
         registry.setPolicy(bytes32(uint256(keccak256("some other policy")) % SCALAR_FIELD), DAILY_LIMIT);
+        uint256 jobId = submittedJob();
         _refusedHere(jobId, compliantProof(), FULL_BPS, FIXTURE_TIMESTAMP, "policy commitment");
         assertEq(kernel.withdrawable(provider), 0, "policy_data_hash is not bound");
         assertEq(kernel.withdrawable(client), FIXTURE_AMOUNT);
@@ -588,7 +590,86 @@ contract ComplianceModuleTest is Test, BuyerLists {
         assertEq(kernel.withdrawable(provider), FIXTURE_AMOUNT, "the edge of the window is inside it");
     }
 
-    function test_binding_noPolicyIsRefused() public {
+    function finalizableJob() internal returns (uint256 jobId) {
+        vm.warp(FIXTURE_TIMESTAMP - 2 days);
+        jobId = submittedJob();
+        vm.warp(FIXTURE_TIMESTAMP);
+    }
+
+    function assertHeld(uint256 jobId, IComplianceModule.ProofState state) internal {
+        vm.expectRevert(abi.encodeWithSelector(IKeeperEvaluator.ProofRequired.selector, jobId, uint8(state)));
+        keeper.finalize(jobId);
+        assertEq(
+            uint8(kernel.getJobRecord(jobId).status),
+            uint8(ISquareJob.JobStatus.Submitted),
+            "a job with nothing to decide stays submitted"
+        );
+        assertEq(kernel.withdrawable(client), 0, "the escrow did not move to the client");
+        assertEq(kernel.withdrawable(provider), 0, "and not to the provider");
+        assertEq(kernel.totalEscrowed(), BUDGET, "the whole budget is still held");
+    }
+
+    function test_finalize_holdsAJobWhoseClientBoundNoProof() public {
+        uint256 jobId = finalizableJob();
+        assertEq(uint8(hook.proofState(jobId)), uint8(IComplianceModule.ProofState.Missing));
+        assertHeld(jobId, IComplianceModule.ProofState.Missing);
+
+        bindProof(jobId, compliantProof());
+        keeper.finalize(jobId);
+
+        assertEq(uint8(kernel.getJobRecord(jobId).status), uint8(ISquareJob.JobStatus.Completed));
+        assertEq(kernel.withdrawable(provider), FIXTURE_AMOUNT, "binding the proof is what releases the money");
+    }
+
+    function test_finalize_holdsAJobWhoseProofIsTheWrongLength() public {
+        uint256 jobId = finalizableJob();
+        bindProof(jobId, hex"deadbeef");
+        assertEq(uint8(hook.proofState(jobId)), uint8(IComplianceModule.ProofState.Malformed));
+        assertHeld(jobId, IComplianceModule.ProofState.Malformed);
+    }
+
+    function test_finalize_holdsAJobWhoseProofDoesNotVerify() public {
+        uint256 jobId = finalizableJob();
+        bytes memory broken = compliantProof();
+        broken[0] = bytes1(uint8(broken[0]) ^ 0x01);
+        bindProof(jobId, broken);
+        assertEq(uint8(hook.proofState(jobId)), uint8(IComplianceModule.ProofState.Unverifiable));
+        assertHeld(jobId, IComplianceModule.ProofState.Unverifiable);
+    }
+
+    function test_finalize_settlesARefusalTheMandateItselfPronounced() public {
+        vm.warp(FIXTURE_TIMESTAMP - 2 days);
+        Proof memory blocked = _load(".blocked");
+        assertEq(blocked.input[0], 0, "the blocked fixture is the non-compliant one");
+        uint256 jobId = submittedJob();
+        vm.warp(FIXTURE_TIMESTAMP);
+        bindProof(jobId, encoded(blocked));
+
+        assertEq(
+            uint8(hook.proofState(jobId)),
+            uint8(IComplianceModule.ProofState.Decidable),
+            "a proof that verifies is a decision, whichever way it went"
+        );
+        keeper.finalize(jobId);
+
+        assertEq(uint8(kernel.getJobRecord(jobId).status), uint8(ISquareJob.JobStatus.Completed));
+        assertEq(kernel.withdrawable(provider), 0, "the mandate said no, so the provider is paid nothing");
+        assertEq(kernel.withdrawable(client), FIXTURE_AMOUNT, "and the net goes back to the client");
+    }
+
+    function test_claimRefund_refusesAnExpiredSubmittedJobWithNoProofBound() public {
+        uint256 jobId = submittedJob();
+        vm.warp(kernel.getJobRecord(jobId).expiredAt);
+        assertEq(uint8(hook.proofState(jobId)), uint8(IComplianceModule.ProofState.Missing));
+
+        vm.expectRevert(ISquareJob.SettledByEvaluator.selector);
+        vm.prank(client);
+        kernel.claimRefund(jobId);
+
+        assertEq(kernel.totalEscrowed(), BUDGET, "expiry is not a way around a proof the client never bound");
+    }
+
+    function test_fund_refusesAClientWhoHasCommittedToNoPolicy() public {
         address poor = makeAddr("client without a policy");
         usdc.mint(poor, 1_000_000_000);
         vm.prank(poor);
@@ -597,15 +678,42 @@ contract ComplianceModuleTest is Test, BuyerLists {
         uint256 jobId = kernel.createJob(provider, address(keeper), block.timestamp + 30 days, "spec", address(hook));
         vm.prank(provider);
         kernel.setBudget(jobId, BUDGET, "");
+
+        vm.expectRevert(abi.encodeWithSelector(SquareHook.NoPolicy.selector, poor));
         vm.prank(poor);
         kernel.fund(jobId, BUDGET, "");
-        vm.prank(provider);
-        kernel.submit(jobId, DELIVERABLE, abi.encode(AGENT_ID, REQUEST_HASH));
+
+        assertEq(
+            uint8(kernel.getJobRecord(jobId).status),
+            uint8(ISquareJob.JobStatus.Open),
+            "a job that could never release never takes the money"
+        );
+        assertEq(kernel.totalEscrowed(), 0, "nothing is escrowed");
+        assertEq(usdc.balanceOf(poor), 1_000_000_000, "the client still holds its own USDC");
+    }
+
+    function test_fund_pinsThePolicyTheClientHadAtThatMoment() public {
+        uint256 jobId = submittedJob();
+        assertEq(hook.commitmentAtFund(jobId), FIXTURE_COMMITMENT, "the funding pinned the live commitment");
+    }
+
+    function test_release_readsThePinnedPolicyAndNotTheOneTheClientMovedTo() public {
+        uint256 jobId = submittedJob();
+
+        vm.prank(client);
+        registry.setPolicy(bytes32(uint256(keccak256("a policy chosen after delivery")) % SCALAR_FIELD), DAILY_LIMIT);
+        assertTrue(registry.commitmentOf(client) != FIXTURE_COMMITMENT, "the client moved to another mandate");
 
         completeWith(jobId, compliantProof());
-        assertEq(kernel.withdrawable(provider), 0, "a client with no policy cannot release");
-        assertEq(kernel.withdrawable(poor), FIXTURE_AMOUNT);
+
+        assertEq(
+            kernel.withdrawable(provider),
+            FIXTURE_AMOUNT,
+            "a policy changed after funding cannot turn a delivery into a refund"
+        );
+        assertEq(kernel.withdrawable(client), 0);
     }
+
 
     // ----------------------------------------------------------------- replay
 

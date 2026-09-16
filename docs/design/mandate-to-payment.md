@@ -86,8 +86,13 @@ like any other, which is why step 6 is the keeper's and step 7 the institution's
 with a split, and a proof the mandate refuses pays the provider nothing and
 returns the net to the institution, with the reason on chain ([#100][i100],
 [compliance-gate.md](compliance-gate.md)). A proof that is merely missing holds
-the escrow once [#382][i382] lands ([proof-required.md](../decisions/proof-required.md));
-until then the hook refunds it the same way.
+the escrow: the evaluator refuses the crank with `ProofRequired` until the
+institution binds one ([proof-required.md](../decisions/proof-required.md),
+[#382][i382]); the stack deployed today, from before that change, refunds it
+the same way as a refusal until the redeploy. So the refusal is the
+institution's to bind too: its duty binds the refusing proof once the rule
+is one the day cannot clear, and the release returns the net
+([proof-freshness.md](../decisions/proof-freshness.md)).
 
 **The buyer is paid, the agent is credited.** The hook resolves the payee from
 the market (`payeeOf`) and writes the reputation for the agent bound at
@@ -115,10 +120,17 @@ cranks itself, which on a chain with a keeper only races it and loses with
 ```bash
 # the shared stack, once it carries the module and a keeper runs against it (#324, #336)
 LIFECYCLE_FINALIZER=keeper REGISTER_AGENT=1 \
-LIFECYCLE_POLICY_FILE=~/.square/lifecycle-policy.json LIFECYCLE_PROVER_URL=http://127.0.0.1:3003 \
-BUDGET_USDC=6 FUND_CLIENT=45 \
+LIFECYCLE_POLICY_FILE=~/.square/lifecycle-policy.json LIFECYCLE_PROVER_ARTIFACTS=services/prover/artifacts \
 packages/core/scripts/lifecycle-arc-testnet.sh
 ```
+
+The runner proves in its own process from the circuit's files, as the
+institutions' tools do ([#347](https://github.com/wienerlabs/square/issues/347));
+the files have to be the ones the shared stack's verifier is keyed to
+([#353](https://github.com/wienerlabs/square/issues/353)). `LIFECYCLE_PROVER_URL`
+names a prover service instead, which is what CI's gated run uses. In keeper
+mode the Arc script funds `BUDGET_USDC=6` and `FUND_CLIENT=45` unless told
+otherwise, for the reason below.
 
 Two things the run needs on a shared chain that the local stack does not:
 
@@ -131,7 +143,8 @@ Two things the run needs on a shared chain that the local stack does not:
   gated finalize costs 1.0 to 1.2 M gas on the fork rather than the 450 000 the
   keeper assumes ([#344](https://github.com/wienerlabs/square/issues/344)), so
   `BUDGET_USDC=6` keeps the crank paid at its real cost too, and `FUND_CLIENT`
-  has to cover six funded jobs, their bonds and the gas.
+  has to cover six funded jobs, their bonds and the gas: the Arc script's
+  keeper-mode defaults.
 - **Fresh actors.** Arc Testnet refuses anvil's published accounts:
   `register()` from them reverts, and the RPC answers `Blocked address` for
   some. `lifecycle-arc-testnet.sh` already draws fresh keys into

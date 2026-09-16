@@ -402,6 +402,7 @@ interface ProveOpts extends NetworkOpts {
   artifacts?: string;
   category: string;
   release?: boolean;
+  bindRefusal?: boolean;
   json?: boolean;
 }
 
@@ -414,6 +415,7 @@ function proveCommand(): Command {
       .option(ARTIFACTS_OPTION, ARTIFACTS_HELP)
       .requiredOption("--category <id>", "The capability the job bought; one of the policy's categories")
       .option("--release", "Finalize the job after binding, if its challenge window has closed")
+      .option("--bind-refusal", "When the policy refuses the release, bind the refusing proof anyway: the module refuses it at release and the net returns to this wallet (a job with no proof does not settle)")
       .option("--json", "Machine-readable result"),
   ).action(async (jobId: string, opts: ProveOpts) => {
     if (!/^\d+$/.test(jobId)) throw new ValidationError(`${jobId} is not a job id`);
@@ -432,17 +434,25 @@ async function prove(jobId: string, policy: Policy, prover: LocalProver, opts: P
   const { client } = await signingSquare(network, deployment, `Bind a proof to job ${jobId}`);
   const id = BigInt(jobId);
   if (!opts.release) {
-    const outcome = await bindComplianceProof({ client, policy, prover, jobId: id, category: opts.category });
+    const outcome = await bindComplianceProof({ client, policy, prover, jobId: id, category: opts.category, bindRefusal: opts.bindRefusal === true });
     // With --json the outcome is on stdout either way; a refusal still exits non-zero.
     if (opts.json) log.out(JSON.stringify(outcome, (_, v) => (typeof v === "bigint" ? v.toString() : v), 2));
     if (outcome.bound) {
       if (!opts.json) {
         log.blank();
-        log.success(`Proof bound to job ${jobId} in ${txLine(network, outcome.transaction)}: payee ${outcome.facts.payee}, net ${formatUnits(outcome.facts.amount, 6)} USDC, counter ${formatUnits(outcome.facts.dailySpentBefore, 6)} USDC.`);
+        if (outcome.verdict === "refusal") {
+          log.warn(`The policy refuses this release (${(outcome.violated ?? ["rules unknown"]).join(", ")}); the refusal is bound to job ${jobId} in ${txLine(network, outcome.transaction)}. The module refuses it at release and the net returns to this wallet.`);
+        } else {
+          log.success(`Proof bound to job ${jobId} in ${txLine(network, outcome.transaction)}: payee ${outcome.facts.payee}, net ${formatUnits(outcome.facts.amount, 6)} USDC, counter ${formatUnits(outcome.facts.dailySpentBefore, 6)} USDC.`);
+        }
         log.blank();
       }
     } else if (outcome.reason === "not-compliant") {
-      throw new SquareError(`The policy does not allow this release: ${(outcome.violated ?? ["rules unknown"]).join(", ")}`, undefined, "Nothing was bound. A release the policy refuses pays the client back, whatever proof is bound.");
+      throw new SquareError(
+        `The policy does not allow this release: ${(outcome.violated ?? ["rules unknown"]).join(", ")}`,
+        undefined,
+        "Nothing was bound. A job with no proof does not settle; to end it with the mandate's refusal and take the net back, bind the refusal with --bind-refusal (or let `watch` do it once the rule is one the day cannot clear).",
+      );
     } else {
       throw new SquareError(`No proof bound to job ${jobId}: ${outcome.detail}`);
     }
@@ -513,6 +523,8 @@ function describeEvent(event: DutyEvent, network: Network): string {
       return `${c.green("✓")} job ${event.jobId}: proof bound in ${txLine(network, event.transaction)} (${event.because.join("; ")})`;
     case "refused":
       return `${c.red("✗")} job ${event.jobId}: no proof bound, ${event.reason}: ${event.detail}`;
+    case "refusal-bound":
+      return `${c.yellow("✗")} job ${event.jobId}: the policy's refusal bound in ${txLine(network, event.transaction)} (${(event.violated ?? ["rules unknown"]).join(", ")}); the release returns the net to this wallet`;
     case "released":
       return event.verified === false
         ? `${c.red("✗")} job ${event.jobId}: released in ${txLine(network, event.transaction)}, refused by the module (${event.refusedFor ?? "reason unknown"})`
@@ -559,10 +571,11 @@ function statusCommand(): Command {
     log.field("payee", facts.payee);
     log.field("net", `${formatUnits(facts.amount, 6)} USDC`);
     log.field("counter", `${formatUnits(facts.dailySpentBefore, 6)} USDC spent today by ${facts.client}`);
+    log.field("policy", facts.pinnedCommitment === null ? `${facts.commitment} (the live commitment; nothing was pinned at funding)` : `${facts.pinnedCommitment} pinned at funding${facts.pinnedCommitment.toLowerCase() === facts.liveCommitment.toLowerCase() ? "" : `; the client has since committed ${facts.liveCommitment}, so this job is proved with the older file`}`);
     log.field("window", facts.challengeEnd === null ? "not submitted yet" : facts.challengeEnd <= facts.now ? `closed at ${facts.challengeEnd}` : `closes at ${facts.challengeEnd}, in ${facts.challengeEnd - facts.now}s`);
     if (tolerance === null) log.field("gate", "no module on the hook: the release is not proof gated");
     else if (state === null) log.field("proof", "unknown");
-    else if (state.kind === "none") log.field("proof", "none bound: a release now would pay the client back");
+    else if (state.kind === "none") log.field("proof", "none bound: the release waits for one; nobody is paid or refunded until the client binds a proof");
     else if (state.kind === "malformed") log.field("proof", "malformed");
     else if (state.kind === "current") log.field("proof", `current, ${state.age}s old (tolerance ${tolerance}s)`);
     else log.field("proof", `stale: ${state.reasons.join("; ")}`);

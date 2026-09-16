@@ -1,5 +1,5 @@
 import type { Address, PublicClient } from "viem";
-import type { Database } from "@squaresdk/data";
+import { keeperJobState, type Database } from "@squaresdk/data";
 import { DEFAULT_CHECK_TIMEOUT_MS, type CheckResult, type HealthCheck } from "@squaresdk/observability";
 import { hookScreening, screenerFetch, type ScreenerEndpoint } from "./screening.js";
 
@@ -11,7 +11,7 @@ export interface KeeperChecksOptions {
   chainId: number;
   account: Address;
   hook: Address;
-  finalizeGas: bigint;
+  finalizeGas: bigint | (() => bigint);
   minActionsFunded?: number;
   ephemeralMirror: boolean;
   /**
@@ -26,6 +26,7 @@ export interface KeeperChecksOptions {
 
 export function keeperChecks(options: KeeperChecksOptions): Record<string, HealthCheck> {
   const minActions = BigInt(options.minActionsFunded ?? DEFAULT_MIN_ACTIONS_FUNDED);
+  const finalizeGas = (): bigint => (typeof options.finalizeGas === "function" ? options.finalizeGas() : options.finalizeGas);
 
   const screenerHealth = async (endpoint: ScreenerEndpoint): Promise<CheckResult> => {
     const response = await screenerFetch(endpoint, "/health", { method: "GET" }, DEFAULT_CHECK_TIMEOUT_MS);
@@ -57,11 +58,12 @@ export function keeperChecks(options: KeeperChecksOptions): Record<string, Healt
   };
 
   const balance = async (): Promise<CheckResult> => {
+    const gas = finalizeGas();
     const [balance, gasPriceWei] = await Promise.all([
       options.publicClient.getBalance({ address: options.account }),
       options.publicClient.getGasPrice(),
     ]);
-    const perAction = gasPriceWei * options.finalizeGas;
+    const perAction = gasPriceWei * gas;
     if (perAction === 0n) {
       return { ok: true, detail: `${balance} wei of native USDC for gas, and gas is free at the current price` };
     }
@@ -70,7 +72,19 @@ export function keeperChecks(options: KeeperChecksOptions): Record<string, Healt
       ok: covered >= minActions,
       detail:
         `${balance} wei of native USDC covers ${covered} finalize sends ` +
-        `at ${gasPriceWei} wei per gas and ${options.finalizeGas} gas each, minimum ${minActions}`,
+        `at ${gasPriceWei} wei per gas and ${gas} gas each, minimum ${minActions}`,
+    };
+  };
+
+  const held = async (): Promise<CheckResult> => {
+    const counts = await keeperJobState.countHeld(options.db, options.chainId);
+    const reasons = Object.entries(counts).filter(([, count]) => count > 0);
+    if (reasons.length === 0) return { ok: true, detail: "no job is held" };
+    const total = reasons.reduce((sum, [, count]) => sum + count, 0);
+    const listed = reasons.map(([reason, count]) => `${reason} ${count}`).join(", ");
+    return {
+      ok: false,
+      detail: `${total} jobs found and not cranked, each waiting on its reason rather than on a retry: ${listed}`,
     };
   };
 
@@ -78,6 +92,7 @@ export function keeperChecks(options: KeeperChecksOptions): Record<string, Healt
     database: { check: async () => ({ ok: (await options.db.query("select 1")).rowCount === 1 }), critical: true },
     rpc: { check: async () => ({ ok: (await options.publicClient.getChainId()) === options.chainId }), critical: true },
     balance: { check: balance, critical: true },
+    held: { check: held, critical: false },
     mirror: () => ({
       ok: !options.ephemeralMirror,
       detail: options.ephemeralMirror

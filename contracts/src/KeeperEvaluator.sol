@@ -9,6 +9,8 @@ import {ISquareJob} from "./interfaces/ISquareJob.sol";
 import {IKeeperEvaluator} from "./interfaces/IKeeperEvaluator.sol";
 import {ISettlementHorizon} from "./interfaces/ISettlementHorizon.sol";
 import {IArbitration} from "./interfaces/IArbitration.sol";
+import {IComplianceModule} from "./interfaces/IComplianceModule.sol";
+import {IProofState} from "./interfaces/IProofState.sol";
 
 contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGuard {
     uint16 private constant FULL_BPS = 10_000;
@@ -56,6 +58,7 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
         if (_disputes[jobId].disputedAt != 0) revert Disputed();
         uint48 end = job.submittedAt + windowFor(job.submittedAt).challengeWindow;
         if (block.timestamp < end) revert WindowOpen(end);
+        _requireDecidableProof(job, jobId);
 
         _squareJob.complete(jobId, finalizeReason(jobId, job.deliverable), abi.encode(FULL_BPS, bytes("")));
         uint256 fee = _forwardFee();
@@ -92,15 +95,40 @@ contract KeeperEvaluator is IKeeperEvaluator, ERC165, Ownable2Step, ReentrancyGu
         if (ref.resolved) revert AlreadyResolved();
         (IArbitration.Outcome outcome, uint16 providerBps, bytes32 resolutionHash) = _arbitration.decision(jobId);
         if (outcome != IArbitration.Outcome.Complete && outcome != IArbitration.Outcome.Lapsed) revert NotDecided();
-        if (providerBps != FULL_BPS && !_squareJob.getJobRecord(jobId).hookResolvesPayout) {
+        ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
+        if (providerBps != FULL_BPS && !job.hookResolvesPayout) {
             revert SplitNeedsAPayoutResolver();
         }
+        _requireDecidableProof(job, jobId);
 
         ref.resolved = true;
         _squareJob.complete(jobId, resolutionHash, abi.encode(providerBps, bytes("")));
         _arbitration.settleBond(jobId);
         uint256 fee = _forwardFee();
         emit DecisionApplied(jobId, uint8(outcome), providerBps, msg.sender, fee);
+    }
+
+    function _requireDecidableProof(ISquareJob.JobRecord memory job, uint256 jobId) private view {
+        if (!job.hookResolvesPayout || job.hook == address(0)) return;
+        try IProofState(job.hook).proofState{gas: _squareJob.hookGasLimit()}(jobId) returns (
+            IComplianceModule.ProofState state
+        ) {
+            if (state == IComplianceModule.ProofState.NotGated) return;
+            if (state == IComplianceModule.ProofState.Decidable) return;
+            revert ProofRequired(jobId, uint8(state));
+        } catch {}
+    }
+
+    function proofStateOf(uint256 jobId) external view returns (IComplianceModule.ProofState) {
+        ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
+        if (!job.hookResolvesPayout || job.hook == address(0)) return IComplianceModule.ProofState.NotGated;
+        try IProofState(job.hook).proofState{gas: _squareJob.hookGasLimit()}(jobId) returns (
+            IComplianceModule.ProofState state
+        ) {
+            return state;
+        } catch {
+            return IComplianceModule.ProofState.NotGated;
+        }
     }
 
     function settlementHorizon() external view returns (uint48) {

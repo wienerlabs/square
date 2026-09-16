@@ -3,6 +3,7 @@ import type { Address } from "viem";
 import type { Database } from "@squaresdk/data";
 import { createHealth, type CheckReport, type HealthStatus } from "@squaresdk/observability";
 import { keeperChecks } from "../src/checks.js";
+import { GATED_FINALIZE_GAS } from "../src/gas.js";
 
 const CHAIN = 5042002;
 const ACCOUNT = "0xcc55417B17a31163325cB83Cf6900C98BE595e7A" as Address;
@@ -21,10 +22,18 @@ interface Fakes {
   gasPriceWei?: bigint;
   minActionsFunded?: number;
   ephemeralMirror?: boolean;
+  held?: Record<string, number>;
+  finalizeGas?: bigint | (() => bigint);
 }
 
 function harness(fakes: Fakes = {}) {
-  const db = { query: async () => ({ rows: [], rowCount: fakes.rowCount ?? 1 }) } as unknown as Database;
+  const held = Object.entries(fakes.held ?? {}).map(([reason, count]) => ({ held_reason: reason, held: String(count) }));
+  const db = {
+    query: async (text: string) =>
+      text.includes("held_reason is not null")
+        ? { rows: held, rowCount: held.length }
+        : { rows: [], rowCount: fakes.rowCount ?? 1 },
+  } as unknown as Database;
   const publicClient = {
     getChainId: async () => fakes.chainId ?? CHAIN,
     getBalance: async () => fakes.balance ?? 10n ** 18n,
@@ -40,7 +49,7 @@ function harness(fakes: Fakes = {}) {
       chainId: CHAIN,
       account: ACCOUNT,
       hook: HOOK,
-      finalizeGas: FINALIZE_GAS,
+      finalizeGas: fakes.finalizeGas ?? FINALIZE_GAS,
       ephemeralMirror: fakes.ephemeralMirror ?? false,
       ...(fakes.minActionsFunded === undefined ? {} : { minActionsFunded: fakes.minActionsFunded }),
     }),
@@ -123,5 +132,38 @@ describe("the database, rpc and mirror checks", () => {
     expect(checkOf(alone, "mirror")).toMatchObject({ ok: false, critical: false });
     expect(checkOf(alone, "mirror").detail).toContain("DATABASE_URL");
     expect(alone.status).toBe("degraded");
+  });
+});
+
+describe("the balance check follows the keeper's own gas assumption", () => {
+  it("asks for the gated gas the moment the keeper is assuming it", async () => {
+    let assumed = FINALIZE_GAS;
+    const balanceFor = async (): Promise<CheckReport> =>
+      checkOf(await harness({ balance: ONE_FINALIZE * 3n, finalizeGas: () => assumed }).status(), "balance");
+
+    const moduleless = await balanceFor();
+    expect(moduleless.ok).toBe(true);
+    expect(moduleless.detail).toContain("450000 gas each");
+
+    assumed = GATED_FINALIZE_GAS;
+    const gated = await balanceFor();
+    expect(gated.ok).toBe(false);
+    expect(gated.detail).toContain("1060000 gas each");
+    expect(gated.detail).toContain("covers 1 finalize sends");
+  });
+});
+
+describe("the held check", () => {
+  it("is quiet with nothing held and degrades with the count and the reason when something is", async () => {
+    const quiet = await harness().status();
+    expect(checkOf(quiet, "held")).toMatchObject({ ok: true, critical: false, detail: "no job is held" });
+    expect(quiet.status).toBe("healthy");
+
+    const holding = await harness({ held: { proofStale: 2 } }).status();
+    expect(checkOf(holding, "held").ok).toBe(false);
+    expect(checkOf(holding, "held").critical).toBe(false);
+    expect(checkOf(holding, "held").detail).toContain("2 jobs found and not cranked");
+    expect(checkOf(holding, "held").detail).toContain("proofStale 2");
+    expect(holding.status).toBe("degraded");
   });
 });

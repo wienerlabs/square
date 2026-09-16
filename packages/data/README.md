@@ -153,6 +153,8 @@ beyond the database.
 | `0010_quarantined_events` | `quarantined_events` |
 | `0011_x402_valid_before_repair` | `x402_payments.valid_before` rows and index |
 | `0012_keeper_job_state` | `keeper_job_state`, seeded from the journal rows it replaces |
+| `0013_keeper_unprofitable_journal` | `keeper_job_state.unprofitable_journaled_at`, seeded from the `skipped` rows it replaces |
+| `0014_keeper_hold` | `keeper_job_state.held_reason`, `keeper_job_state.held_since` and the partial index over them |
 
 Migrations never run at service boot against a configured database. They are an explicit
 deploy step, run before the new service version starts, with the connection string in
@@ -184,7 +186,7 @@ could damage; a configured Postgres is never touched at boot.
 The test suite applies up, down and up again on PGlite and checks that the schema comes
 back identical, so every migration is exercised on every run without a daemon.
 
-`0010_x402_valid_before_repair` is the one migration that also touches rows. `valid_before`
+`0011_x402_valid_before_repair` is the one migration that also touches rows. `valid_before`
 is a client-signed integer, and the sweep used to read it with `to_timestamp(valid_before)
 + interval '30 days'`, an expression that raises `timestamp out of range` from
 `9224315424000` up. A single row in that range made the sweep throw on every run, which
@@ -199,7 +201,7 @@ no inverse; the down script drops the index.
 Sweeps encode the retention table from the design document: `idempotencyKeys.sweepExpired`
 removes keys 24 hours after `expires_at`, `rateLimits.sweep(db, windowMs)` keeps two
 windows, `x402Payments.sweep` removes authorizations 30 days after `valid_before`, and
-`keeperActions.sweep` removes journal rows older than 90 days, and only journal rows: the keeper's state (`keeper_job_state`: the finalize give-up, the expiry mark, the expiry backoff) is a separate table that no sweep touches. Mirror tables and
+`keeperActions.sweep` removes journal rows older than 90 days, and only journal rows: the keeper's state (`keeper_job_state`: the finalize give-up, the expiry mark, the expiry backoff, the hold) is a separate table that no sweep touches. Mirror tables and
 `job_events` are kept forever.
 
 `square-data sweep` runs all four in one pass and prints the row count each removed, and

@@ -156,6 +156,25 @@ export const squareHookAbi = [
   },
   {
     "type": "function",
+    "name": "commitmentAtFund",
+    "inputs": [
+      {
+        "name": "jobId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "complianceModule",
     "inputs": [],
     "outputs": [
@@ -249,6 +268,25 @@ export const squareHookAbi = [
         "name": "",
         "type": "bool",
         "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "proofState",
+    "inputs": [
+      {
+        "name": "jobId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint8",
+        "internalType": "enum IComplianceModule.ProofState"
       }
     ],
     "stateMutability": "view"
@@ -583,6 +621,31 @@ export const squareHookAbi = [
   },
   {
     "type": "event",
+    "name": "PolicyPinned",
+    "inputs": [
+      {
+        "name": "jobId",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "client",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "commitment",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "ReleaseUnconfirmed",
     "inputs": [
       {
@@ -819,6 +882,17 @@ export const squareHookAbi = [
     "type": "error",
     "name": "NoAgentBound",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NoPolicy",
+    "inputs": [
+      {
+        "name": "client",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
     "type": "error",

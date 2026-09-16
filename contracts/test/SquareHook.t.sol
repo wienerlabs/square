@@ -273,6 +273,7 @@ contract SquareHookTest is BaseTest {
         hook.setComplianceModule(address(compliance));
         compliance.setRejectAll(true);
         uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
         pastWindow(jobId);
         vm.expectEmit(true, false, false, true);
         emit SquareHook.ComplianceCheckFailed(
@@ -312,6 +313,7 @@ contract SquareHookTest is BaseTest {
         vm.prank(owner);
         hook.setComplianceModule(address(compliance));
         uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
         pastWindow(jobId);
         vm.expectEmit(true, true, false, false);
         emit SquareHook.ReputationWriteFailed(jobId, AGENT_ID, "");
@@ -392,9 +394,30 @@ contract SquareHookTest is BaseTest {
         hook.setComplianceModule(address(compliance));
         compliance.setGasToBurn(400_000);
         uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
         pastWindow(jobId);
         keeper.finalize(jobId);
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));
+    }
+
+    function test_gasLimit_aRunawayProofStateCannotStopTheEvaluatorFromSettling() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        compliance.setProofStateGasToBurn(type(uint256).max);
+        uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
+        pastWindow(jobId);
+
+        uint256 gasBefore = gasleft();
+        keeper.finalize{gas: 5_000_000}(jobId);
+
+        assertLt(gasBefore - gasleft(), 3_000_000, "the runaway proofState is cut at the kernel's hook cap");
+        assertEq(
+            uint8(status(jobId)),
+            uint8(ISquareJob.JobStatus.Completed),
+            "a hook that will not answer whether a proof is decidable cannot hold the escrow"
+        );
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET));
     }
 
     function test_gasLimit_aRunawayComplianceCheckCannotBlockSettlement() public {
@@ -402,6 +425,7 @@ contract SquareHookTest is BaseTest {
         hook.setComplianceModule(address(compliance));
         compliance.setGasToBurn(HOOK_GAS_LIMIT + 100_000);
         uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
         pastWindow(jobId);
         uint256 gasBefore = gasleft();
         vm.expectEmit(true, false, false, false);
@@ -513,6 +537,7 @@ contract SquareHookTest is BaseTest {
         vm.prank(owner);
         hook.setComplianceModule(address(compliance));
         uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
         pastWindow(jobId);
         vm.mockCallRevert(
             address(kernel), abi.encodeWithSelector(ISquareJob.netPayout.selector, jobId), "read failed"
@@ -558,6 +583,7 @@ contract SquareHookTest is BaseTest {
         hook.setComplianceModule(address(compliance));
         compliance.setRefuseAll(true);
         uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
         pastWindow(jobId);
         keeper.finalize(jobId);
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));

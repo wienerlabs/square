@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ComplianceDuty, type DutyEvent, type DutyState, type TrackedJob } from "../src/duty.js";
 import { policyCommitment } from "../src/commitment.js";
 import { MIN_POLICY_SALT, parsePolicy } from "../src/policy.js";
-import { bindComplianceProof, proofState, releaseFacts } from "../src/release.js";
+import { bindComplianceProof, proofState, refusalIsTransient, releaseFacts } from "../src/release.js";
 import { BUYER, CLIENT, fakeChain, fundedJob, PROVIDER, proofWith, REGISTRY, USDC, ZERO32 } from "./helpers/fakeChain.js";
 
 const policy = parsePolicy({
@@ -17,6 +17,9 @@ const policy = parsePolicy({
   token_whitelist: [USDC],
 });
 const commitment = await policyCommitment(policy);
+// The policy the client commits after funding under the first: same rules, another salt.
+const rotated = parsePolicy({ ...policy, policy_id: "0b2d3c4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e", policy_salt: (MIN_POLICY_SALT + 777777n).toString() });
+const rotatedCommitment = await policyCommitment(rotated);
 
 describe("proofState", () => {
   it("is current when every signal matches the release the chain would make now", async () => {
@@ -98,6 +101,44 @@ describe("bindComplianceProof", () => {
     chain.judge = () => false;
     expect(await bindComplianceProof({ client: chain.client, policy, prover: chain.prover, jobId: 7n, category: "text.summarize" })).toMatchObject({ bound: false, reason: "module-refuses" });
     expect(chain.writes).toEqual([]);
+  });
+
+  // square#396. The hook pins the client's commitment at funding (square#382)
+  // and the module binds the proof to the pin, whatever the client committed since.
+  it("proves against the commitment pinned at funding, and names the pin when the file is the policy committed since", async () => {
+    const chain = fakeChain({ commitment: rotatedCommitment.hex });
+    chain.jobs.set("7", fundedJob({ pinned: commitment.hex }));
+    const facts = await releaseFacts(chain.client, 7n);
+    expect(facts).toMatchObject({ commitment: commitment.hex, liveCommitment: rotatedCommitment.hex, pinnedCommitment: commitment.hex });
+    const withTheNewFile = await bindComplianceProof({ client: chain.client, policy: rotated, prover: chain.prover, jobId: 7n, category: "text.summarize" });
+    expect(withTheNewFile).toMatchObject({ bound: false, reason: "policy-pinned" });
+    expect("detail" in withTheNewFile ? withTheNewFile.detail : "").toMatch(/funded under commitment 0x.*prove --file/);
+    expect(chain.proofs).toHaveLength(0);
+    const withTheOldFile = await bindComplianceProof({ client: chain.client, policy, prover: chain.prover, jobId: 7n, category: "text.summarize" });
+    expect(withTheOldFile).toMatchObject({ bound: true, verdict: "compliant" });
+    expect(chain.writes).toEqual(["setComplianceProof(7)"]);
+  });
+
+  it("binds the mandate's refusal when asked to, without a preview, and says what it refused for", async () => {
+    const chain = fakeChain({ commitment: commitment.hex });
+    chain.jobs.set("7", fundedJob({ net: 2_000_000n }));
+    const outcome = await bindComplianceProof({ client: chain.client, policy, prover: chain.prover, jobId: 7n, category: "text.summarize", bindRefusal: true });
+    expect(outcome).toMatchObject({ bound: true, verdict: "refusal", violated: ["per_transaction_limit"] });
+    expect(chain.writes).toEqual(["setComplianceProof(7)"]);
+    expect(chain.judge(7n, chain.jobs.get("7")!.proof)).toBe(false);
+  });
+
+  it("tells a refusal the day or the hours can clear from one that stands", () => {
+    const facts = { amount: 985_000n };
+    expect(refusalIsTransient(["daily_limit"], facts, policy)).toBe(true);
+    expect(refusalIsTransient(["time_window"], facts, policy)).toBe(true);
+    expect(refusalIsTransient(["daily_limit", "time_window"], facts, policy)).toBe(true);
+    // A single payment above the day's ceiling never fits.
+    expect(refusalIsTransient(["daily_limit"], { amount: 6_000_000n }, policy)).toBe(false);
+    expect(refusalIsTransient(["endpoint_category"], facts, policy)).toBe(false);
+    expect(refusalIsTransient(["daily_limit", "blocked_recipient"], facts, policy)).toBe(false);
+    expect(refusalIsTransient(null, facts, policy)).toBe(false);
+    expect(refusalIsTransient([], facts, policy)).toBe(false);
   });
 });
 
@@ -218,16 +259,79 @@ describe("ComplianceDuty", () => {
     expect(events.find((e) => e.type === "settled")).toMatchObject({ jobId: 8n, status: JobStatus.Completed });
   });
 
-  it("reports a refusal once until it changes, and keeps the job", async () => {
+  // square#396. Since square#382 a job with no proof does not settle, so a
+  // refusal the mandate will give tomorrow too is bound, and the release
+  // refuses it: the net comes back to this wallet and the job is done.
+  it("binds a refusal on a rule that stands, and the release refuses it back to this wallet", async () => {
     const chain = fakeChain({ commitment: commitment.hex });
     chain.jobs.set("7", { ...inWindow(chain, 0n), net: 2_000_000n });
     const events: DutyEvent[] = [];
     const d = duty(chain, events);
     d.track(7n, "text.summarize");
-    expect((await d.tick()).refused).toEqual([{ jobId: 7n, reason: "not-compliant: not compliant: per_transaction_limit" }]);
+    const report = await d.tick();
+    expect(report.refused).toEqual([{ jobId: 7n, reason: "not-compliant: not compliant: per_transaction_limit" }]);
+    expect(report.refusalBound).toEqual([7n]);
+    expect(report.released).toEqual([7n]);
+    expect(chain.writes).toEqual(["setComplianceProof(7)", "finalize(7) refused"]);
+    expect(events.map((e) => e.type)).toEqual(["refused", "refusal-bound", "released"]);
+    expect(events.find((e) => e.type === "refusal-bound")).toMatchObject({ violated: ["per_transaction_limit"] });
+    expect(events.find((e) => e.type === "released")).toMatchObject({ verified: null });
+    expect(d.jobs()).toHaveLength(0);
+  });
+
+  it("waits out a refusal the day's counter can clear, reporting it once, and binds and pays when it does", async () => {
+    const chain = fakeChain({ commitment: commitment.hex });
+    chain.spent = 4_500_000n; // 4.5 of the day's 5 USDC spent; this 0.985 does not fit today
+    chain.jobs.set("7", inWindow(chain, 0n));
+    const events: DutyEvent[] = [];
+    const d = duty(chain, events);
+    d.track(7n, "text.summarize");
+    const first = await d.tick();
+    expect(first.refused).toEqual([{ jobId: 7n, reason: "not-compliant: not compliant: daily_limit" }]);
+    expect(first.refusalBound).toEqual([]);
+    expect(chain.writes).toEqual([]);
     await d.tick();
     expect(events.filter((e) => e.type === "refused")).toHaveLength(1);
     expect(d.jobs()).toHaveLength(1);
+    // The day rolled over.
+    chain.spent = 0n;
+    const later = await d.tick();
+    expect(later.bound).toEqual([7n]);
+    expect(later.released).toEqual([7n]);
+    expect(chain.writes).toEqual(["setComplianceProof(7)", "finalize(7)"]);
+    expect(d.jobs()).toHaveLength(0);
+  });
+
+  it("binds a refusal it was waiting out once the job is about to expire", async () => {
+    const chain = fakeChain({ commitment: commitment.hex });
+    chain.spent = 4_500_000n;
+    chain.jobs.set("7", { ...inWindow(chain, 0n), expiredAt: chain.now + 600n });
+    const events: DutyEvent[] = [];
+    const d = duty(chain, events);
+    d.track(7n, "text.summarize");
+    const report = await d.tick();
+    expect(report.refusalBound).toEqual([7n]);
+    expect(report.released).toEqual([7n]);
+    expect(chain.writes).toEqual(["setComplianceProof(7)", "finalize(7) refused"]);
+  });
+
+  it("names the pin for a job funded under the policy the client has since replaced, and binds nothing", async () => {
+    const chain = fakeChain({ commitment: rotatedCommitment.hex });
+    chain.jobs.set("7", { ...inWindow(chain, 0n), pinned: commitment.hex });
+    const events: DutyEvent[] = [];
+    const d = duty(chain, events, { policy: rotated });
+    d.track(7n, "text.summarize");
+    const report = await d.tick();
+    expect(report.refused).toHaveLength(1);
+    expect(report.refused[0]!.reason).toMatch(/^policy-pinned: /);
+    expect(chain.writes).toEqual([]);
+    expect(events.filter((e) => e.type === "refused")).toMatchObject([{ reason: "policy-pinned" }]);
+    // The duty run with the older file proves and releases it.
+    const older = duty(chain, [], { policy });
+    older.track(7n, "text.summarize");
+    const done = await older.tick();
+    expect(done.released).toEqual([7n]);
+    expect(chain.writes).toEqual(["setComplianceProof(7)", "finalize(7)"]);
   });
 
   it("does nothing on a stack without a module, and says so once", async () => {

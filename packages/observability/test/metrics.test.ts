@@ -53,6 +53,8 @@ describe("metric names", () => {
       "square_keeper_last_tick_timestamp_seconds",
       "square_finalize_gas_used",
       "square_finalize_gas_gap",
+      "square_release_refused_total",
+      "square_keeper_held_jobs",
       "square_hook_write_failures_total",
       "square_alert_dispatch_failures_total",
       "square_indexer_quarantined_events_total",
@@ -298,8 +300,34 @@ describe("progress and failure signals the alerting reads", () => {
     const metrics = createMetrics({ service: "keeper", defaultMetrics: false });
     metrics.recordFinalizeGas("finalize", 450_000n, 465_486n);
     expect(metrics.snapshot().finalizeGasGap).toBe(-15_486);
+    expect(metrics.snapshot().finalizeGasAssumed).toBe(450_000);
+    expect(metrics.snapshot().finalizeGasUsed).toBe(465_486);
     expect(await valueOf(metrics.registry, metrics.names.finalizeGasUsed, { action: "finalize" })).toBe(465_486);
     expect(await valueOf(metrics.registry, metrics.names.finalizeGasGap, { action: "finalize" })).toBe(-15_486);
+  });
+
+  it("counts refused releases by reason and separates the ones that had money on them", async () => {
+    const metrics = createMetrics({ service: "keeper", defaultMetrics: false });
+    metrics.recordReleaseRefused("malformed proof", 0n);
+    metrics.recordReleaseRefused("daily_spent_before", 4_925_000n);
+    metrics.recordReleaseRefused("daily_spent_before", 1n);
+
+    expect(metrics.snapshot().releaseRefusals).toBe(3);
+    expect(metrics.snapshot().releaseRefusalsWithAmount).toBe(2);
+    expect(await valueOf(metrics.registry, metrics.names.releaseRefusals, { reason: "daily_spent_before" })).toBe(2);
+    expect(await valueOf(metrics.registry, metrics.names.releaseRefusals, { reason: "malformed proof" })).toBe(1);
+  });
+
+  it("reports held jobs by reason and lets a reason fall back to zero", async () => {
+    const metrics = createMetrics({ service: "keeper", defaultMetrics: false });
+    metrics.setHeldJobs("proofStale", 2);
+    expect(await valueOf(metrics.registry, metrics.names.keeperHeld, { reason: "proofStale" })).toBe(2);
+
+    metrics.setHeldJobs("proofStale", 0);
+    expect(await valueOf(metrics.registry, metrics.names.keeperHeld, { reason: "proofStale" })).toBe(0);
+
+    metrics.setHeldJobs("proofStale", -1);
+    expect(await valueOf(metrics.registry, metrics.names.keeperHeld, { reason: "proofStale" })).toBe(0);
   });
 
   it("counts hook write failures, alert dispatch failures and quarantined events", async () => {

@@ -1,3 +1,4 @@
+import { hexToString, type Address } from "viem";
 import { JobStatus, squareHookAbi, type SquareClient } from "@squaresdk/core";
 import { disputes, jobs, keeperActions, keeperJobState, type Database } from "@squaresdk/data";
 import { waitUnlessAborted, type Logger, type Metrics } from "@squaresdk/observability";
@@ -5,6 +6,7 @@ import {
   decide,
   expiryIsNear,
   EXPIRY_WARNING_SECONDS,
+  FULL_BPS,
   gasCostInUsdc,
   keeperFee,
   oldestPendingAge,
@@ -12,6 +14,7 @@ import {
   type KeeperCandidate,
   type KeeperEconomics,
 } from "./decide.js";
+import { gasAssumption, type GasAssumption, type GasSource, type SettlementAction } from "./gas.js";
 import type { PayeeScreening, PayeeScreenings } from "./screening.js";
 
 export interface KeeperRetryPolicy {
@@ -23,6 +26,23 @@ export interface KeeperRetryPolicy {
 
 export const DEFAULT_EXPIRY_BATCH_SIZE = 25;
 export const DEFAULT_EXPIRY_INTERVAL_MS = 60_000;
+export const DEFAULT_PROOF_GRACE_SECONDS = 3_600n;
+
+export const HOLD_REASONS = Object.freeze(["noProof", "proofStale"] as const);
+
+export type HoldReason = (typeof HOLD_REASONS)[number];
+
+export interface HoldRule {
+  reason: HoldReason;
+  graceSeconds: bigint | null;
+  examine(candidate: KeeperCandidate): Promise<string | null>;
+}
+
+interface Refusal {
+  reason: HoldReason;
+  detail: string;
+  graceSeconds: bigint | null;
+}
 
 export const KEEPER_LOG_FIELDS: readonly string[] = Object.freeze(["attempts", "retryInSeconds"]);
 
@@ -42,6 +62,10 @@ export interface KeeperOptions {
   minimumMarginBps: number;
   defaultFinalizeGas: bigint;
   defaultFinalizeDecidedGas: bigint;
+  pinnedFinalizeGas?: boolean;
+  finalizeGasSamples?: number;
+  complianceModule?: Address | null;
+  proofGraceSeconds?: bigint;
   recordExpiries: boolean;
   expiryBatchSize?: number;
   expiryIntervalMs?: number;
@@ -70,6 +94,7 @@ export interface TickReport {
   lapsed: bigint[];
   bondsSettled: bigint[];
   skipped: Array<{ jobId: bigint; reason: string }>;
+  held: Array<{ jobId: bigint; reason: HoldReason }>;
   nearExpiry: bigint[];
   pending: number;
   unprofitable: number;
@@ -88,12 +113,85 @@ function usdc(amount: bigint): number {
   return Number(amount) / 1_000_000;
 }
 
+type NotYetOnChain = "windowOpen" | "notLapsed";
+
+function notYetOnChain(message: string): NotYetOnChain | null {
+  if (message.includes("WindowOpen")) return "windowOpen";
+  if (message.includes("NotLapsed")) return "notLapsed";
+  return null;
+}
+
+export function refusedForWantOfAProof(message: string): boolean {
+  return message.includes("ProofRequired");
+}
+
 export class Keeper {
   private readonly journaledSkips = new Set<string>();
   private readonly warnedNearExpiry = new Set<string>();
   private readonly retries = new Map<string, RetryState>();
+  private readonly gas: GasAssumption;
+  private readonly rules: HoldRule[];
 
-  constructor(private readonly options: KeeperOptions) {}
+  constructor(private readonly options: KeeperOptions) {
+    this.gas = gasAssumption({
+      finalizeGas: options.defaultFinalizeGas,
+      finalizeDecidedGas: options.defaultFinalizeDecidedGas,
+      ...(options.pinnedFinalizeGas === undefined ? {} : { pinned: options.pinnedFinalizeGas }),
+      ...(options.finalizeGasSamples === undefined ? {} : { samples: options.finalizeGasSamples }),
+    });
+    this.rules = options.complianceModule ? [this.noProofRule(), this.proofRule()] : [];
+  }
+
+  gasAssumed(action: SettlementAction): bigint {
+    return this.gas.assumed(action);
+  }
+
+  gasSource(action: SettlementAction): GasSource {
+    return this.gas.source(action);
+  }
+
+  private get proofGraceSeconds(): bigint {
+    return this.options.proofGraceSeconds ?? DEFAULT_PROOF_GRACE_SECONDS;
+  }
+
+  private noProofRule(): HoldRule {
+    const { client } = this.options;
+    return {
+      reason: "noProof",
+      graceSeconds: null,
+      examine: async (candidate) => {
+        const state = await client.proofState(candidate.jobId);
+        if (state === "notGated" || state === "decidable") return null;
+        return state === "missing"
+          ? "the client has bound no compliance proof, and the evaluator will not settle a job with nothing to decide"
+          : `the proof bound to this job is ${state}, and the evaluator will not settle a job with nothing to decide`;
+      },
+    };
+  }
+
+  private proofRule(): HoldRule {
+    const { client } = this.options;
+    return {
+      reason: "proofStale",
+      graceSeconds: this.proofGraceSeconds,
+      examine: async (candidate) => {
+        const owner = candidate.client;
+        if (owner === undefined || owner === null) return null;
+        const [payee, net, proof] = await Promise.all([
+          client.payeeOf(candidate.jobId),
+          client.netPayout(candidate.jobId),
+          client.complianceProofOf(candidate.jobId),
+        ]);
+        const share = candidate.providerBps ?? null;
+        const amount = share === null ? net : (net * BigInt(share)) / FULL_BPS;
+        const verdict = await client.previewRelease({ jobId: candidate.jobId, payee, amount, client: owner, proof });
+        if (verdict !== false) return null;
+        return proof === "0x"
+          ? "the client has bound no compliance proof, so this release would pay the client back and the payee nothing"
+          : "the module refuses the proof bound to this job, so this release would pay the client back and the payee nothing";
+      },
+    };
+  }
 
   private get retryPolicy(): KeeperRetryPolicy {
     return this.options.retryPolicy ?? DEFAULT_RETRY_POLICY;
@@ -166,12 +264,17 @@ export class Keeper {
     return restored;
   }
 
+  private async latestBlockTimestamp(): Promise<bigint> {
+    const block = await this.options.client.publicClient.getBlock({ blockTag: "latest" });
+    return block.timestamp;
+  }
+
   private async economics(): Promise<KeeperEconomics> {
     const gasPriceWei = await this.options.client.publicClient.getGasPrice();
     return {
       gasPriceWei,
-      finalizeGas: this.options.defaultFinalizeGas,
-      finalizeDecidedGas: this.options.defaultFinalizeDecidedGas,
+      finalizeGas: this.gas.assumed("finalize"),
+      finalizeDecidedGas: this.gas.assumed("finalizeDecided"),
       minimumMarginBps: this.options.minimumMarginBps,
     };
   }
@@ -183,10 +286,12 @@ export class Keeper {
     const disputed = await client.isDisputed(jobId);
     let decidedOutcome: number | null = null;
     let resolveBy: bigint | null = null;
+    let providerBps: number | null = 10_000;
     if (disputed) {
       const dispute = await client.disputeOf(jobId);
       decidedOutcome = dispute.outcome;
       resolveBy = BigInt(dispute.resolveBy);
+      providerBps = dispute.outcome === 0 ? null : Number(dispute.providerBps);
     }
     const challengeEnd = await client.challengeEndsAt(jobId);
     return {
@@ -199,17 +304,21 @@ export class Keeper {
       decidedOutcome,
       resolveBy,
       expiredAt: BigInt(record.expiredAt),
+      client: record.client,
+      providerBps,
     };
   }
 
-  async tick(now = BigInt(Math.floor(Date.now() / 1000))): Promise<TickReport> {
+  async tick(atTimestamp?: bigint): Promise<TickReport> {
     const { db, chainId, client, logger, metrics } = this.options;
+    const now = atTimestamp ?? (await this.latestBlockTimestamp());
     const report: TickReport = {
       finalized: [],
       applied: [],
       lapsed: [],
       bondsSettled: [],
       skipped: [],
+      held: [],
       nearExpiry: [],
       pending: 0,
       unprofitable: 0,
@@ -248,7 +357,7 @@ export class Keeper {
     metrics?.setFinalizePending(report.pending);
     metrics?.setOldestPendingAgeSeconds(report.oldestPendingAgeSeconds);
     metrics?.setDisputesOpen(await disputes.countOpen(db, chainId));
-    this.forgetJobsThatLeft([...finalizable, ...underDispute].map((row) => row.jobId));
+    await this.forgetJobsThatLeft([...finalizable, ...underDispute].map((row) => row.jobId));
 
     const sending: Array<{ candidate: KeeperCandidate; kind: "finalize" | "finalizeDecided" }> = [];
     for (const candidate of confirmed) {
@@ -277,7 +386,10 @@ export class Keeper {
           report.lapsed.push(candidate.jobId);
           logger.info("keeper.lapsed", { jobId: candidate.jobId.toString(), txHash: result.hash });
         } catch (error) {
-          await this.noteFailure(candidate.jobId, "lapse", error instanceof Error ? error.message : String(error), now);
+          const message = error instanceof Error ? error.message : String(error);
+          const behind = notYetOnChain(message);
+          if (behind === null) await this.noteFailure(candidate.jobId, "lapse", message, now);
+          else this.skipUntilTheChainCatchesUp(candidate.jobId, behind, report);
         }
         continue;
       }
@@ -333,6 +445,7 @@ export class Keeper {
           });
         }
       }
+      if (!(await this.clearedByHolds(candidate, now, report))) continue;
       try {
         const result = kind === "finalize" ? await client.finalize(candidate.jobId) : await client.finalizeDecided(candidate.jobId);
         const paid = result.events.find((e) => e.contract === "KeeperEvaluator" && (e.eventName === "Finalized" || e.eventName === "DecisionApplied"));
@@ -345,18 +458,118 @@ export class Keeper {
           kind === "finalize" ? economics.finalizeGas : economics.finalizeDecidedGas,
           result.receipt.gasUsed,
         );
+        this.gas.record(kind, result.receipt.gasUsed);
+        this.reportRefusal(candidate.jobId, result.events);
+        await keeperJobState.releaseHold(db, chainId, candidate.jobId);
         this.retries.delete(candidate.jobId.toString());
         (kind === "finalize" ? report.finalized : report.applied).push(candidate.jobId);
         logger.info("keeper.finalized", { jobId: candidate.jobId.toString(), txHash: result.hash, gasUsed: Number(result.receipt.gasUsed), fee: usdc(fee) });
       } catch (error) {
-        await this.noteFailure(candidate.jobId, kind, error instanceof Error ? error.message : String(error), now);
+        const message = error instanceof Error ? error.message : String(error);
+        const behind = notYetOnChain(message);
+        if (refusedForWantOfAProof(message)) await this.holdForWantOfAProof(candidate, now, report, message);
+        else if (behind === null) await this.noteFailure(candidate.jobId, kind, message, now);
+        else this.skipUntilTheChainCatchesUp(candidate.jobId, behind, report);
       }
     }
 
     await this.settleBondsOfExpiredJobs(now, report);
+    await this.reportHolds();
 
     metrics?.recordKeeperTick();
     return report;
+  }
+
+  private async holdForWantOfAProof(
+    candidate: KeeperCandidate,
+    now: bigint,
+    report: TickReport,
+    message: string,
+  ): Promise<void> {
+    const { db, chainId, logger } = this.options;
+    await keeperJobState.hold(db, chainId, candidate.jobId, "noProof", now);
+    this.retries.delete(candidate.jobId.toString());
+    report.held.push({ jobId: candidate.jobId, reason: "noProof" });
+    report.skipped.push({ jobId: candidate.jobId, reason: "noProof" });
+    logger.info("keeper.held", {
+      jobId: candidate.jobId.toString(),
+      reason: `noProof: the evaluator refused to settle a job with nothing to decide (${message}); this is not a failed attempt and costs no retry, and only the client can end it`,
+    });
+  }
+
+  private async clearedByHolds(candidate: KeeperCandidate, now: bigint, report: TickReport): Promise<boolean> {
+    const { db, chainId, logger } = this.options;
+    if (this.rules.length === 0) return true;
+    const key = candidate.jobId.toString();
+    let refusal: Refusal | null = null;
+    for (const rule of this.rules) {
+      let detail: string | null;
+      try {
+        detail = await rule.examine(candidate);
+      } catch (error) {
+        logger.error("keeper.hold_rule_failed", {
+          jobId: key,
+          reason: `${rule.reason} could not be examined, so nothing is held for it this tick: ${error instanceof Error ? error.message : String(error)}`,
+        });
+        continue;
+      }
+      if (detail === null) continue;
+      refusal = { reason: rule.reason, detail, graceSeconds: rule.graceSeconds };
+      break;
+    }
+    if (refusal === null) {
+      await keeperJobState.releaseHold(db, chainId, candidate.jobId);
+      return true;
+    }
+    const since = await keeperJobState.hold(db, chainId, candidate.jobId, refusal.reason, now);
+    const waited = now - since;
+    if (refusal.graceSeconds !== null && waited >= refusal.graceSeconds) {
+      logger.warn("keeper.hold_expired", {
+        jobId: key,
+        reason: `held as ${refusal.reason} for ${waited}s, past the ${refusal.graceSeconds}s grace, so it is cranked anyway: ${refusal.detail}`,
+      });
+      return true;
+    }
+    report.held.push({ jobId: candidate.jobId, reason: refusal.reason });
+    report.skipped.push({ jobId: candidate.jobId, reason: refusal.reason });
+    logger.info("keeper.held", {
+      jobId: key,
+      reason:
+        refusal.graceSeconds === null
+          ? `${refusal.reason}: ${refusal.detail}; this is not a failed attempt, the next tick looks again, and only the client can end it`
+          : `${refusal.reason}: ${refusal.detail}; this is not a failed attempt, the next tick looks again, and after ${refusal.graceSeconds}s it is cranked regardless`,
+    });
+    return false;
+  }
+
+  private reportRefusal(jobId: bigint, events: Awaited<ReturnType<SquareClient["finalize"]>>["events"]): void {
+    const { logger, metrics } = this.options;
+    const refused = events.find((event) => event.contract === "ComplianceModule" && event.eventName === "ReleaseRefused");
+    if (refused === undefined) return;
+    const checked = events.find((event) => event.contract === "SquareHook" && event.eventName === "ComplianceChecked");
+    const amount = checked !== undefined && "amount" in checked.args ? (checked.args.amount as bigint) : 0n;
+    const reason = "reason" in refused.args ? hexToString(refused.args.reason as `0x${string}`, { size: 32 }).replace(/\0+$/, "") : "unknown";
+    metrics?.recordReleaseRefused(reason, amount);
+    logger.warn("keeper.release_refused", {
+      jobId: jobId.toString(),
+      fee: usdc(amount),
+      reason: `the module refused this release (${reason}); the payee got nothing and the client was paid back`,
+    });
+  }
+
+  private async reportHolds(): Promise<void> {
+    const { db, chainId, metrics } = this.options;
+    if (metrics === undefined) return;
+    const counts = await keeperJobState.countHeld(db, chainId);
+    for (const reason of HOLD_REASONS) metrics.setHeldJobs(reason, counts[reason] ?? 0);
+  }
+
+  private skipUntilTheChainCatchesUp(jobId: bigint, reason: NotYetOnChain, report: TickReport): void {
+    report.skipped.push({ jobId, reason });
+    this.options.logger.info("keeper.not_yet", {
+      jobId: jobId.toString(),
+      reason: `the chain has not reached this job's deadline yet (${reason}), so this is not a failed attempt and costs neither a journal row nor a backoff`,
+    });
   }
 
   private async settleBondsOfExpiredJobs(now: bigint, report: TickReport): Promise<void> {
@@ -401,8 +614,9 @@ export class Keeper {
     const { db, chainId, logger, metrics } = this.options;
     const key = jobId.toString();
     if (this.journaledSkips.has(key)) return;
+    const firstEver = await keeperJobState.markUnprofitableJournaled(db, chainId, jobId);
     this.journaledSkips.add(key);
-    await keeperActions.append(db, { chainId, jobId, action: "skipped", reason: "unprofitable" });
+    if (firstEver) await keeperActions.append(db, { chainId, jobId, action: "skipped", reason: "unprofitable" });
     metrics?.recordKeeperAction("finalize", "skipped");
     logger.info("keeper.skipped", {
       jobId: key,
@@ -412,10 +626,14 @@ export class Keeper {
     });
   }
 
-  private forgetJobsThatLeft(mirrored: bigint[]): void {
+  private async forgetJobsThatLeft(mirrored: bigint[]): Promise<void> {
+    const { db, chainId } = this.options;
     const present = new Set(mirrored.map((jobId) => jobId.toString()));
     for (const key of this.warnedNearExpiry) {
       if (!present.has(key)) this.warnedNearExpiry.delete(key);
+    }
+    for (const held of await keeperJobState.listHeld(db, chainId)) {
+      if (!present.has(held.jobId.toString())) await keeperJobState.releaseHold(db, chainId, held.jobId);
     }
   }
 
@@ -430,8 +648,9 @@ export class Keeper {
     });
   }
 
-  async sweepExpiries(now = BigInt(Math.floor(Date.now() / 1000))): Promise<ExpirySweepReport> {
+  async sweepExpiries(atTimestamp?: bigint): Promise<ExpirySweepReport> {
     const { db, chainId, client, logger, metrics } = this.options;
+    const now = atTimestamp ?? (await this.latestBlockTimestamp());
     const report: ExpirySweepReport = { scanned: 0, recorded: [], alreadyRecorded: [], failed: [], gaveUp: [] };
     const rows = await jobs.listExpiredWithAgent(db, chainId, client.deployment.keeperEvaluator, this.expiryBatchSize, now);
     report.scanned = rows.length;
@@ -496,13 +715,14 @@ export class Keeper {
       } catch (error) {
         this.options.logger.error("keeper.tick_failed", { error: error instanceof Error ? error.message : String(error) });
       }
-      if (this.options.recordExpiries && Date.now() >= nextExpirySweepAt) {
+      if (signal.aborted) break;
+      if (this.options.recordExpiries && performance.now() >= nextExpirySweepAt) {
         try {
           await this.sweepExpiries();
         } catch (error) {
           this.options.logger.error("keeper.expiry_sweep_failed", { error: error instanceof Error ? error.message : String(error) });
         }
-        nextExpirySweepAt = Date.now() + this.expiryIntervalMs;
+        nextExpirySweepAt = performance.now() + this.expiryIntervalMs;
       }
       await waitUnlessAborted(pollIntervalMs, signal);
     }

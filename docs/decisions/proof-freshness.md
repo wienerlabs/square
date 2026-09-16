@@ -99,11 +99,28 @@ record is asked about at the screener the duty was given and, still without
 one, held rather than cranked into the refusal (square#369;
 [sanctions-screening.md](sanctions-screening.md) §4).
 
-**A release the policy refuses is reported, not bound.** The circuit proves
-the six checks ran, not that they passed, and a proof with `is_compliant = 0`
-is refused at release the way no proof is. The prover names the rules that
-failed, so the duty reports them and binds nothing; binding would only spend
-gas to make the module say the same thing.
+**A release the policy refuses is reported, and bound once it is the
+mandate's last word** (square#396, amended from "reported, not bound"). The
+circuit proves the six checks ran, not that they passed, and a proof with
+`is_compliant = 0` is refused at release. While a job with no proof was
+refunded, binding the refusal only spent gas to make the module say the same
+thing; since [proof-required.md](proof-required.md) a job with no proof does
+not settle, so the refusal has to reach the chain to end the escrow. The duty
+reports the rules the prover names, and binds the refusing proof when the
+rule says the same tomorrow (the category, the recipient, the token, the
+per-transaction ceiling, or a payment larger than the day's ceiling): the
+module refuses it at release and the net returns to the institution. A rule
+the day's counter or the policy's hours can clear (`daily_limit` within the
+ceiling, `time_window`) is waited out and tried again each tick, until the
+job is about to expire, when the refusal is bound too. `square policy prove
+--bind-refusal` is the same by hand.
+
+**The proof is made against the commitment pinned at funding.** The hook
+records the client's commitment when the job is funded and the module binds
+to that record ([proof-required.md](proof-required.md)); `releaseFacts`
+reads the pin (`SquareClient.commitmentAtFund`) and a policy file that
+computes the commitment committed since is refused as `policy-pinned`,
+naming the pin and the older file that proves against it.
 
 **The policy file is the secret, and the institution's tools never send it.** The
 eight leaf salts derive from `policy_salt`; whoever holds it can open the
@@ -136,14 +153,23 @@ list's root and the proof bytes are what reach the chain.
   replaces). `packages/policy/scripts/install-module-for-this-build.mjs` keys
   a local module to the prover beside it; on the shared stack the key is the
   ceremony's.
-- **The race between two releases of one day.** Two of the institution's jobs
-  whose windows close in the same tick are cranked in sequence, each rebound
-  after the other moved the counter. A keeper that cranks the second between
-  those two steps releases it without a current proof and pays the client
-  back; measured, the keeper's sequential crank refuses the second job of a
-  batch every time ([#345][i345]). Narrowing it means either a counter the
-  module tolerates a lag on, or a keeper that reads `complianceProofOf`
-  before cranking, and both are the contracts' and the keeper's to decide.
+- **The race between two releases of one day, decided.** Two of the
+  institution's jobs whose windows close in the same tick are cranked in
+  sequence, and the first release moves the counter the second job's proof
+  names. Measured, the keeper's sequential crank refused the second job of a
+  batch every time ([#345][i345]): the provider was paid nothing, the client was
+  refunded, and the job was `Completed` with no way back. The decision is on the
+  keeper's side, not the module's. Before each crank, and immediately before it
+  rather than once per batch, the keeper previews the release; a refusal holds
+  the job instead of sending it. The hold costs no retry and is looked at again
+  every tick, so the client's duty gets its chance to bind a fresh proof, which
+  is the outcome that pays both providers. After `PROOF_GRACE_SECONDS` the
+  keeper cranks anyway, because a client who never rebinds must not be able to
+  stall the keeper forever, and a refusal recorded on chain is a decision the
+  mandate is entitled to make. The module still binds signal 5 by equality: it
+  is the one signal that says the proof was made for this position in the day,
+  and loosening it to an inequality would let a proof made under a low counter
+  pay out under a high one.
 - **A client with no policy, and an escrow nobody handed over.** With a
   module in the hook, a release to a client with no commitment is refused
   for certain, so `square_hire` refuses such a wallet before any money moves

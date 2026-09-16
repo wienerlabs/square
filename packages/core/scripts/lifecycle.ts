@@ -41,9 +41,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 // without them it stops here rather than run a lifecycle whose every
 // release would pay the client back. @squaresdk/policy is loaded from its
 // build beside this package, not declared, so core carries no dependency on
-// a package that depends on it.
+// a package that depends on it. The prover is either the circuit's files,
+// proved with in this process the way the institutions' tools do (square#347,
+// LIFECYCLE_PROVER_ARTIFACTS), or a prover service (LIFECYCLE_PROVER_URL).
 const policyFile = process.env["LIFECYCLE_POLICY_FILE"];
 const proverUrl = process.env["LIFECYCLE_PROVER_URL"];
+const proverArtifacts = process.env["LIFECYCLE_PROVER_ARTIFACTS"];
 // square#368: on a hook that screens, the parties of every job are screened
 // before it is funded; this is the screener asked for whoever lacks a record.
 const screenerUrl = process.env["LIFECYCLE_SCREENER_URL"];
@@ -338,10 +341,11 @@ async function expectRevert(label: string, fn: () => Promise<unknown>, pattern: 
 }
 
 type PolicyModule = typeof import("../../policy/dist/index.js");
+type PolicyNodeModule = typeof import("../../policy/dist/node.js");
 interface Gate {
   module: Address;
   policy: import("../../policy/dist/index.js").Policy;
-  prover: import("../../policy/dist/index.js").Prover;
+  prover: import("../../policy/dist/index.js").Prover & { close?: () => Promise<void> };
   bind: PolicyModule["bindComplianceProof"];
   facts: PolicyModule["releaseFacts"];
   verdict: PolicyModule["moduleVerdict"];
@@ -351,14 +355,17 @@ interface Gate {
 async function gateFor(client: SquareClient): Promise<Gate | null> {
   const module = await client.complianceModule();
   if (module === null) {
-    if (policyFile || proverUrl) console.log("the hook holds no compliance module; LIFECYCLE_POLICY_FILE and LIFECYCLE_PROVER_URL are not used");
+    if (policyFile || proverUrl || proverArtifacts) console.log("the hook holds no compliance module; LIFECYCLE_POLICY_FILE, LIFECYCLE_PROVER_ARTIFACTS and LIFECYCLE_PROVER_URL are not used");
     stepped(1, note("0-policy", "not on this stack: the hook holds no compliance module, so no release asks for a proof and no policy is committed"));
     return null;
   }
-  if (!policyFile || !proverUrl) {
-    throw new Error(`the hook holds a compliance module (${module}); set LIFECYCLE_POLICY_FILE and LIFECYCLE_PROVER_URL so the client can prove its releases`);
+  if (!policyFile || (!proverUrl && !proverArtifacts)) {
+    throw new Error(`the hook holds a compliance module (${module}); set LIFECYCLE_POLICY_FILE and either LIFECYCLE_PROVER_ARTIFACTS (the directory holding payment.wasm, payment.zkey and payment_vk.json) or LIFECYCLE_PROVER_URL so the client can prove its releases`);
   }
   const policyPkg = (await import(join(here, "..", "..", "policy", "dist", "index.js"))) as PolicyModule;
+  const prover = proverArtifacts
+    ? ((await import(join(here, "..", "..", "policy", "dist", "node.js"))) as PolicyNodeModule).createLocalProver({ artifacts: proverArtifacts })
+    : policyPkg.createProverClient({ url: proverUrl as string });
   const policy = policyPkg.parsePolicy(JSON.parse(readFileSync(policyFile, "utf8")));
   if (policy.operator_id.toLowerCase() !== client.account.toLowerCase()) {
     throw new Error(`${policyFile} is ${policy.operator_id}'s policy; the lifecycle's client is ${client.account}`);
@@ -371,8 +378,8 @@ async function gateFor(client: SquareClient): Promise<Gate | null> {
   } else {
     stepped(1, note("0-policy", `the client's commitment ${commitment.hex} was already on the chain, from an earlier run`));
   }
-  console.log(`0-policy | module ${module} | commitment ${commitment.hex}`);
-  return { module, policy, prover: policyPkg.createProverClient({ url: proverUrl }), bind: policyPkg.bindComplianceProof, facts: policyPkg.releaseFacts, verdict: policyPkg.moduleVerdict };
+  console.log(`0-policy | module ${module} | commitment ${commitment.hex} | proving ${proverArtifacts ? `in this process from ${proverArtifacts}` : `at ${proverUrl}`}`);
+  return { module, policy, prover, bind: policyPkg.bindComplianceProof, facts: policyPkg.releaseFacts, verdict: policyPkg.moduleVerdict };
 }
 
 /** With a module installed, the release the receipt carries was verified by it; anything else fails the run. */
@@ -511,7 +518,10 @@ async function main(): Promise<void> {
   record("2c-dispute-split", "withdraw (client share)", (await client.withdraw()).receipt);
 
   const expiryPath = "3-expiry";
-  const expiring = await client.createJob({ provider: provider.account, expiredAt: (await now()) + horizon + 30n, spec: { path: expiryPath } });
+  // Two minutes past the window: since square#326 `fund` refuses a job whose
+  // window no longer fits before its expiry, and createJob, setBudget and fund
+  // are three transactions apart on a live chain.
+  const expiring = await client.createJob({ provider: provider.account, expiredAt: (await now()) + horizon + 120n, spec: { path: expiryPath } });
   record(expiryPath, "createJob (short expiry)", expiring.receipt);
   record(expiryPath, "setBudget", (await provider.setBudget(expiring.jobId, budget)).receipt);
   record(expiryPath, "fund", (await client.fund(expiring.jobId, budget)).receipt);
@@ -645,6 +655,7 @@ async function main(): Promise<void> {
   console.log(`report written to ${datedReportFile} and refreshed at ${reportFile}`);
   const counter = await publicClient.readContract({ abi: squareJobAbi, address: deployment.squareJob, functionName: "jobCounter" });
   console.log(`jobs on chain: ${counter}`);
+  await gate?.prover.close?.();
 }
 
 main().catch((error) => {

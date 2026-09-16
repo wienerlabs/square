@@ -26,8 +26,8 @@ installed, a release must first prove, in zero knowledge, that it fits the manda
 protects the provider against everything except that mandate: a payment the mandate forbids
 returns to the client with the reason on chain, and a proof that is merely missing holds the
 escrow until the institution does its duty (decided in
-[proof-required.md](docs/decisions/proof-required.md), built by
-[#382](https://github.com/wienerlabs/square/issues/382); until then the hook refunds a missing
+[proof-required.md](docs/decisions/proof-required.md), built into the contracts on `main`;
+the deployed stack carries it with the next redeploy, and until then refunds a missing
 proof as it refunds a refused one). The receivable created during the challenge window is
 discountable, and sells only to a buyer the institution's policy approved.
 

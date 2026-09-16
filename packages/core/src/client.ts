@@ -181,6 +181,10 @@ function isUnknownSelectorRevert(error: unknown): boolean {
   return reverted instanceof ContractFunctionRevertedError && reverted.data === undefined && reverted.signature === undefined;
 }
 
+export const PROOF_STATES = ["notGated", "missing", "malformed", "unverifiable", "decidable"] as const;
+
+export type ProofState = (typeof PROOF_STATES)[number];
+
 export class SquareClient {
   readonly publicClient: PublicClient;
   readonly walletClient: SquareWalletClient | undefined;
@@ -915,6 +919,38 @@ export class SquareClient {
       functionName: "previewRelease",
       args: [params.jobId, params.payee, params.amount, this.deployment.usdc, params.client, params.proof],
     });
+  }
+
+  /**
+   * The policy commitment the hook pinned when the job was funded
+   * (square#382): the one the module binds the proof to, whatever the client
+   * committed since. Null when the hook pinned nothing: a job funded before
+   * the pin existed or on a hook without a module, or a hook from before the
+   * pin, which then reads the live commitment at release.
+   */
+  async commitmentAtFund(jobId: bigint, hook: Address = this.deployment.squareHook): Promise<Hex | null> {
+    let pinned: Hex;
+    try {
+      pinned = await this.read({ abi: squareHookAbi, address: hook, functionName: "commitmentAtFund", args: [jobId] });
+    } catch (error) {
+      if (!isUnknownSelectorRevert(error)) throw error;
+      return null;
+    }
+    return pinned === ZERO_HASH ? null : pinned;
+  }
+
+  async proofState(jobId: bigint): Promise<ProofState> {
+    try {
+      const state = await this.read({
+        abi: squareHookAbi,
+        address: this.deployment.squareHook,
+        functionName: "proofState",
+        args: [jobId],
+      });
+      return PROOF_STATES[Number(state)] ?? "notGated";
+    } catch {
+      return "notGated";
+    }
   }
 
   async recordExpiry(jobId: bigint): Promise<TransactionResult> {
