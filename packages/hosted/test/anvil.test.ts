@@ -311,5 +311,47 @@ describe.skipIf(!reachable)("a hosted agent takes a job, delegates a subtask und
       const card = (await (await fetch(`http://127.0.0.1:${port}/.well-known/agent-registration.json`)).json()) as { name: string };
       expect(card.name).toBe("Acme Research");
     }, 60_000);
+
+    // square#336: a host with variables and no file to mount hands the
+    // configuration over in SQUARE_HOSTED_CONFIG and gives no path.
+    let fromEnv: ChildProcess | undefined;
+    afterAll(() => {
+      fromEnv?.kill("SIGTERM");
+    });
+    it("runs the same configuration from SQUARE_HOSTED_CONFIG when no path is given", async () => {
+      const port = await freePort();
+      fromEnv = spawn(process.execPath, [BIN], {
+        env: {
+          ...process.env,
+          SQUARE_HOSTED_CONFIG: JSON.stringify({
+            name: "Acme From Env",
+            description: "Briefs.",
+            agentId: "1",
+            url: `http://127.0.0.1:${port}`,
+            provider: { tier: "platform" },
+            capabilities: [{ id: "research.brief", description: "A brief.", price: "0.50", instructions: "Write a brief." }],
+          }),
+          SQUARE_CHAIN_ID: "31337",
+          SQUARE_RPC_URL: rpcUrl,
+          SQUARE_DEPLOYMENT_FILE: DEPLOYMENT_FILE,
+          SQUARE_PRIVATE_KEY: `0x${Buffer.from(account(2).getHdKey().privateKey!).toString("hex")}`,
+          PORT: String(port),
+          HOST: "127.0.0.1",
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      const banner = await new Promise<string>((resolve, reject) => {
+        let err = "";
+        fromEnv!.stderr!.on("data", (chunk: Buffer) => {
+          err += chunk.toString();
+          if (err.includes("listening at")) resolve(err);
+        });
+        fromEnv!.on("exit", (code) => reject(new Error(`square-hosted exited ${code}: ${err}`)));
+      });
+      expect(banner).toContain("Acme From Env (did:aip:eip155:31337:");
+      expect(banner).toContain("platform key");
+      const card = (await (await fetch(`http://127.0.0.1:${port}/.well-known/agent-registration.json`)).json()) as { name: string };
+      expect(card.name).toBe("Acme From Env");
+    }, 60_000);
   });
 });

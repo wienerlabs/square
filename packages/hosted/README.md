@@ -157,6 +157,16 @@ a host that composes its own agent; `runCapability` is the model loop alone;
 | `ANTHROPIC_API_KEY` | The platform tier's key. |
 | `PORT`, `HOST` | `3000`, `0.0.0.0`. |
 | `SQUARE_PROVER_ARTIFACTS` | For a configuration with a `compliance` block: the directory holding `payment.wasm`, `payment.zkey` and `payment_vk.json`, the key the hook's module is keyed to. |
+| `SQUARE_HOSTED_CONFIG` | The configuration itself, as JSON, for `square-hosted` run with no path: a host that has variables and no files to mount. A `compliance` block's policy and state files are then relative to the working directory. |
+
+## The image
+
+`packages/hosted/Dockerfile`, built from the repository root, is `square-hosted` with
+its configuration in `SQUARE_HOSTED_CONFIG`: `.github/workflows/services.yml` builds it
+on every push to `main` and publishes `ghcr.io/wienerlabs/square-hosted:main` and a
+`sha-` tag, and [docs/deploy/railway.md](../../docs/deploy/railway.md) runs it beside
+the indexer and the keeper. The card's `url` is the domain the host gives the
+service; the health check is the card itself.
 
 ## Tests
 

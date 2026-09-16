@@ -19,10 +19,15 @@ import { deriveSealKey, seal } from "./sealed.js";
 
 /**
  * `square-hosted <config.json>`: run the agent the configuration describes.
+ * `square-hosted` with no path: the same, from the configuration in
+ * SQUARE_HOSTED_CONFIG, for a host that has variables and no files to mount
+ * (docs/deploy/railway.md); the policy and state files of a compliance block
+ * are then relative to the working directory.
  * `square-hosted seal <agentId>`: seal an institution's API key, read from
  * stdin, for that agent's configuration.
  *
  *   SQUARE_PRIVATE_KEY       the wallet that owns the config's agentId (required to run)
+ *   SQUARE_HOSTED_CONFIG     the configuration itself, as JSON, when no path is given
  *   SQUARE_CHAIN_ID          5042002 (Arc Testnet) by default; 31337 for anvil
  *   SQUARE_RPC_URL           the chain's endpoint; defaults to the network profile's
  *   SQUARE_DEPLOYMENT_FILE   a contracts/deployments/<chainId>.json, for a local stack
@@ -85,8 +90,14 @@ async function sealCommand(agentId: string | undefined): Promise<void> {
 }
 
 async function runCommand(path: string | undefined): Promise<void> {
-  if (path === undefined) throw new Error("usage: square-hosted <config.json> | square-hosted seal <agentId>");
-  const config = parseHostedConfig(JSON.parse(readFileSync(path, "utf8")));
+  const inline = env("SQUARE_HOSTED_CONFIG");
+  if (path === undefined && inline === undefined) {
+    throw new Error("usage: square-hosted <config.json> | square-hosted seal <agentId>; or the configuration as JSON in SQUARE_HOSTED_CONFIG");
+  }
+  const config = parseHostedConfig(JSON.parse(path !== undefined ? readFileSync(path, "utf8") : (inline as string)));
+  // Where a compliance block's policy and state files are: beside the
+  // configuration file, or in the working directory for one from the environment.
+  const files = path !== undefined ? { dir: dirname(path), stateDefault: `${path}.duty.json` } : { dir: process.cwd(), stateDefault: resolve(process.cwd(), "square-hosted.duty.json") };
 
   const chainId = Number(env("SQUARE_CHAIN_ID") ?? ARC_TESTNET_CHAIN_ID);
   if (!Number.isInteger(chainId) || chainId <= 0) throw new Error(`SQUARE_CHAIN_ID must be a positive integer, got ${env("SQUARE_CHAIN_ID")}`);
@@ -107,7 +118,7 @@ async function runCommand(path: string | undefined): Promise<void> {
   const publicClient = createPublicClient({ chain, transport: http(rpcUrl), pollingInterval }) as PublicClient;
   const walletClient = createWalletClient({ account, chain, transport: http(rpcUrl), pollingInterval });
 
-  const compliance = complianceOf(config, path);
+  const compliance = complianceOf(config, files);
   const screenerUrl = config.delegation?.screenerUrl;
   const hosted = await hostAgent(config, {
     walletClient,
@@ -141,15 +152,15 @@ async function runCommand(path: string | undefined): Promise<void> {
 }
 
 /** The config's compliance block as the host's deps: the policy read from beside the config, the proof made in this process. */
-function complianceOf(config: HostedAgentConfig, configPath: string): (ComplianceDeps & { prover: LocalProver }) | undefined {
+function complianceOf(config: HostedAgentConfig, files: { dir: string; stateDefault: string }): (ComplianceDeps & { prover: LocalProver }) | undefined {
   if (!config.compliance) return undefined;
   const artifacts = env("SQUARE_PROVER_ARTIFACTS");
   if (artifacts === undefined) {
     throw new Error("a compliance block needs SQUARE_PROVER_ARTIFACTS, the directory holding payment.wasm, payment.zkey and payment_vk.json: the proof is made in this process, so the policy never leaves it");
   }
-  const file = resolve(dirname(configPath), config.compliance.policyFile);
+  const file = resolve(files.dir, config.compliance.policyFile);
   const policy = parsePolicy(JSON.parse(readFileSync(file, "utf8")));
-  const stateFile = config.compliance.stateFile === undefined ? `${configPath}.duty.json` : config.compliance.stateFile === false ? undefined : resolve(dirname(configPath), config.compliance.stateFile);
+  const stateFile = config.compliance.stateFile === undefined ? files.stateDefault : config.compliance.stateFile === false ? undefined : resolve(files.dir, config.compliance.stateFile);
   return {
     policy,
     prover: createLocalProver({ artifacts }),

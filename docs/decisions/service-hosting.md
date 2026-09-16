@@ -15,6 +15,7 @@ this repository, and nothing in any of them is specific to a hosting provider:
 | keeper | `services/keeper/Dockerfile` | 3011 | Postgres, an RPC endpoint, a deployment file, a funded key |
 | screener | `services/screener/Dockerfile` (to be added, [#370](https://github.com/wienerlabs/square/issues/370)) | 3012 | an RPC endpoint, the registry's address, a registered signing key, a canary; TRM reachable |
 | app | `app/Dockerfile` | 80 | Nothing at run time; it is static files |
+| hosted agent | `packages/hosted/Dockerfile` | 3000 | a wallet that owns an ERC-8004 agent, a model key, the configuration in `SQUARE_HOSTED_CONFIG`; the circuit's files beside it only if it delegates |
 
 Every one of them takes its whole configuration from environment variables and
 reports at `/health`, returning 503 when a check marked critical fails. That is
