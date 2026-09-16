@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   RpcEndpointCooldownError,
   createFailoverTransport,
+  isEndpointFailure,
   isPermanentRpcError,
   jitteredBackoffDelay,
   withRpcRetry,
@@ -22,6 +23,16 @@ function fakeTransports(handlers: Record<string, Handler>): (url: string) => Tra
 const PRIMARY = "https://primary.test";
 const SECONDARY = "https://secondary.test";
 const TERTIARY = "https://tertiary.test";
+const SETTLEMENT = "0x00000000000000000000000000000000000000ab";
+const WINDOW_OPEN_CALL = { method: "eth_call", params: [{ to: SETTLEMENT, data: "0x2f2a3d4b" }, "latest"] } as const;
+
+const windowOpenRevert = (): Error =>
+  Object.assign(new Error("execution reverted: WindowOpen(uint48)"), { code: 3 });
+
+const revertingChain: Handler = async ({ method }) => {
+  if (method === "eth_call") throw windowOpenRevert();
+  return "0x10";
+};
 
 describe("createFailoverTransport", () => {
   it("fails over, reports the broken endpoint in cooldown, skips it while cooling, and retries it afterwards", async () => {
@@ -231,6 +242,195 @@ describe("createFailoverTransport", () => {
     expect(transport.getHealth()[0]).toMatchObject({ consecutiveFailures: 1, cooldownUntil: clock + 1_000 });
   });
 
+  it("leaves an endpoint healthy when the chain answers a call with a revert", async () => {
+    const clock = 100_000;
+    const only = vi.fn<Handler>(revertingChain);
+    const transport = createFailoverTransport([PRIMARY], {
+      transportFactory: fakeTransports({ [PRIMARY]: only }),
+      baseCooldownMs: 1_000,
+      retryCount: 0,
+      now: () => clock,
+    });
+    const client = createPublicClient({ transport });
+
+    await expect(client.request(WINDOW_OPEN_CALL)).rejects.toThrow(/execution reverted/);
+
+    expect(only).toHaveBeenCalledTimes(1);
+    expect(transport.getHealth()[0]).toEqual({
+      url: PRIMARY,
+      healthy: true,
+      consecutiveFailures: 0,
+      cooldownUntil: undefined,
+      lastError: undefined,
+      lastFailureAt: undefined,
+      lastSuccessAt: undefined,
+    });
+  });
+
+  it("sends the request after a revert to the same endpoint and reports no failover", async () => {
+    const clock = 100_000;
+    const primary = vi.fn<Handler>(revertingChain);
+    const secondary = vi.fn<Handler>(async () => "0x20");
+    const onFailover = vi.fn<(from: string, to: string, error: Error) => void>();
+    const transport = createFailoverTransport([PRIMARY, SECONDARY], {
+      transportFactory: fakeTransports({ [PRIMARY]: primary, [SECONDARY]: secondary }),
+      onFailover,
+      baseCooldownMs: 1_000,
+      retryCount: 0,
+      now: () => clock,
+    });
+    const client = createPublicClient({ transport });
+
+    await expect(client.request(WINDOW_OPEN_CALL)).rejects.toThrow(/execution reverted/);
+    expect(await client.request({ method: "eth_blockNumber" })).toBe("0x10");
+
+    expect(primary).toHaveBeenCalledTimes(2);
+    expect(secondary).toHaveBeenCalledTimes(0);
+    expect(onFailover).not.toHaveBeenCalled();
+  });
+
+  it("keeps both endpoints healthy through the four-revert two-endpoint measurement", async () => {
+    const clock = 100_000;
+    const primary = vi.fn<Handler>(revertingChain);
+    const secondary = vi.fn<Handler>(revertingChain);
+    const onFailover = vi.fn<(from: string, to: string, error: Error) => void>();
+    const transport = createFailoverTransport([PRIMARY, SECONDARY], {
+      transportFactory: fakeTransports({ [PRIMARY]: primary, [SECONDARY]: secondary }),
+      onFailover,
+      baseCooldownMs: 1_000,
+      maxBackoffMs: 60_000,
+      retryCount: 0,
+      now: () => clock,
+    });
+    const client = createPublicClient({ transport });
+
+    expect(await client.request({ method: "eth_blockNumber" })).toBe("0x10");
+    expect(transport.getHealth().map((endpoint) => endpoint.healthy)).toEqual([true, true]);
+
+    await expect(client.request(WINDOW_OPEN_CALL)).rejects.toThrow(/execution reverted/);
+    expect(transport.getHealth()[0]).toMatchObject({
+      healthy: true,
+      consecutiveFailures: 0,
+      cooldownUntil: undefined,
+      lastError: undefined,
+    });
+
+    expect(await client.request({ method: "eth_blockNumber" })).toBe("0x10");
+    expect(secondary).toHaveBeenCalledTimes(0);
+
+    for (let i = 0; i < 3; i += 1) {
+      await expect(client.request(WINDOW_OPEN_CALL)).rejects.toThrow(/execution reverted/);
+    }
+    expect(await client.request({ method: "eth_blockNumber" })).toBe("0x10");
+
+    expect(primary).toHaveBeenCalledTimes(7);
+    expect(secondary).toHaveBeenCalledTimes(0);
+    expect(onFailover).not.toHaveBeenCalled();
+    expect(transport.getHealth()).toEqual([
+      {
+        url: PRIMARY,
+        healthy: true,
+        consecutiveFailures: 0,
+        cooldownUntil: undefined,
+        lastError: undefined,
+        lastFailureAt: undefined,
+        lastSuccessAt: clock,
+      },
+      {
+        url: SECONDARY,
+        healthy: true,
+        consecutiveFailures: 0,
+        cooldownUntil: undefined,
+        lastError: undefined,
+        lastFailureAt: undefined,
+        lastSuccessAt: undefined,
+      },
+    ]);
+  });
+
+  it("turns healthy false for a transport failure and leaves it true for an answered request", async () => {
+    const clock = 100_000;
+    const cases: Array<{ thrown: unknown; healthy: boolean }> = [
+      { thrown: new Error("socket hang up"), healthy: false },
+      { thrown: Object.assign(new Error("Internal error"), { code: -32603 }), healthy: false },
+      { thrown: Object.assign(new Error("header not found"), { code: -32000 }), healthy: false },
+      { thrown: Object.assign(new Error("execution reverted: WindowOpen(uint48)"), { code: 3 }), healthy: true },
+      { thrown: Object.assign(new Error("execution reverted"), { code: -32000 }), healthy: true },
+      { thrown: Object.assign(new Error("invalid params"), { code: -32602 }), healthy: true },
+    ];
+
+    for (const { thrown, healthy } of cases) {
+      const transport = createFailoverTransport([PRIMARY], {
+        transportFactory: fakeTransports({
+          [PRIMARY]: async () => {
+            throw thrown;
+          },
+        }),
+        baseCooldownMs: 1_000,
+        retryCount: 0,
+        now: () => clock,
+      });
+      const client = createPublicClient({ transport });
+
+      await expect(client.request(WINDOW_OPEN_CALL)).rejects.toThrow();
+
+      expect(transport.getHealth()[0]).toMatchObject({
+        healthy,
+        consecutiveFailures: healthy ? 0 : 1,
+        cooldownUntil: healthy ? undefined : clock + 1_000,
+      });
+    }
+  });
+
+  it("cools an endpoint down for a transport failure that follows a revert, counting the revert for nothing", async () => {
+    const clock = 100_000;
+    let reply: Handler = revertingChain;
+    const only = vi.fn<Handler>(async (args) => reply(args));
+    const transport = createFailoverTransport([PRIMARY], {
+      transportFactory: fakeTransports({ [PRIMARY]: only }),
+      baseCooldownMs: 1_000,
+      maxBackoffMs: 60_000,
+      retryCount: 0,
+      now: () => clock,
+    });
+    const client = createPublicClient({ transport });
+
+    await expect(client.request(WINDOW_OPEN_CALL)).rejects.toThrow(/execution reverted/);
+    reply = async () => {
+      throw new Error("socket hang up");
+    };
+    await expect(client.request({ method: "eth_blockNumber" })).rejects.toThrow(/socket hang up/);
+
+    expect(only).toHaveBeenCalledTimes(2);
+    expect(transport.getHealth()[0]).toMatchObject({
+      healthy: false,
+      consecutiveFailures: 1,
+      cooldownUntil: clock + 1_000,
+    });
+    expect(transport.getHealth()[0]?.lastError).toContain("socket hang up");
+  });
+
+  it("lets the caller replace the rule that decides which errors are the endpoint's fault", async () => {
+    const clock = 100_000;
+    const only = vi.fn<Handler>(revertingChain);
+    const transport = createFailoverTransport([PRIMARY], {
+      transportFactory: fakeTransports({ [PRIMARY]: only }),
+      isEndpointFailure: () => true,
+      baseCooldownMs: 1_000,
+      retryCount: 0,
+      now: () => clock,
+    });
+    const client = createPublicClient({ transport });
+
+    await expect(client.request(WINDOW_OPEN_CALL)).rejects.toThrow(/execution reverted/);
+
+    expect(transport.getHealth()[0]).toMatchObject({
+      healthy: false,
+      consecutiveFailures: 1,
+      cooldownUntil: clock + 1_000,
+    });
+  });
+
   it("rejects an empty url list", () => {
     expect(() => createFailoverTransport([])).toThrow(TypeError);
   });
@@ -395,5 +595,55 @@ describe("isPermanentRpcError", () => {
     const looping = new Error("looping") as Error & { cause?: unknown };
     looping.cause = looping;
     expect(isPermanentRpcError(looping)).toBe(false);
+  });
+});
+
+describe("isEndpointFailure", () => {
+  it("counts a failure to answer and spares every answer the node gave", () => {
+    expect(isEndpointFailure(new Error("socket hang up"))).toBe(true);
+    expect(isEndpointFailure(new Error("The request took too long to respond."))).toBe(true);
+    expect(isEndpointFailure(Object.assign(new Error("Internal error"), { code: -32603 }))).toBe(true);
+    expect(isEndpointFailure(Object.assign(new Error("header not found"), { code: -32000 }))).toBe(true);
+    expect(isEndpointFailure(Object.assign(new Error("limit exceeded"), { code: -32005 }))).toBe(true);
+    expect(isEndpointFailure("not an object")).toBe(true);
+
+    expect(isEndpointFailure(Object.assign(new Error("execution reverted: WindowOpen(uint48)"), { code: 3 }))).toBe(false);
+    expect(isEndpointFailure(Object.assign(new Error("execution reverted"), { code: -32000 }))).toBe(false);
+    expect(isEndpointFailure(Object.assign(new Error("gas required exceeds allowance"), { code: -32000 }))).toBe(false);
+    expect(isEndpointFailure(Object.assign(new Error("nonce too low"), { code: -32000 }))).toBe(false);
+    expect(isEndpointFailure(Object.assign(new Error("invalid params"), { code: -32602 }))).toBe(false);
+    expect(isEndpointFailure(Object.assign(new Error("the method eth_foo does not exist"), { code: -32601 }))).toBe(false);
+  });
+
+  it("reads the code and the message through a wrapped cause chain", () => {
+    const wrapped = new Error("An unknown RPC error occurred.", {
+      cause: Object.assign(new Error("execution reverted: WindowOpen(uint48)"), { code: 3 }),
+    });
+    expect(isEndpointFailure(wrapped)).toBe(false);
+
+    const internalAroundRevert = Object.assign(new Error("Internal error"), {
+      code: -32603,
+      cause: new Error("execution reverted: WindowOpen(uint48)"),
+    });
+    expect(isEndpointFailure(internalAroundRevert)).toBe(false);
+
+    const wrappedTimeout = new Error("HTTP request failed.", { cause: new Error("fetch failed") });
+    expect(isEndpointFailure(wrappedTimeout)).toBe(true);
+  });
+
+  it("survives a self-referencing cause chain", () => {
+    const looping = new Error("looping") as Error & { cause?: unknown };
+    looping.cause = looping;
+    expect(isEndpointFailure(looping)).toBe(true);
+  });
+
+  it("answers a different question than isPermanentRpcError", () => {
+    const internal = Object.assign(new Error("Internal error"), { code: -32603 });
+    expect(isPermanentRpcError(internal)).toBe(true);
+    expect(isEndpointFailure(internal)).toBe(true);
+
+    const serverError = Object.assign(new Error("server error"), { code: -32000 });
+    expect(isPermanentRpcError(serverError)).toBe(false);
+    expect(isEndpointFailure(serverError)).toBe(true);
   });
 });
