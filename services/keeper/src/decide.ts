@@ -1,3 +1,5 @@
+import type { Address } from "viem";
+
 export const FULL_BPS = 10_000n;
 export const NATIVE_TO_USDC_DIVISOR = 1_000_000_000_000n;
 
@@ -12,6 +14,8 @@ export interface KeeperCandidate {
   disputeClosed?: boolean;
   resolveBy?: bigint | null;
   expiredAt?: bigint | null;
+  client?: Address | null;
+  providerBps?: number | null;
 }
 
 export const EXPIRY_WARNING_SECONDS = 86_400n;
