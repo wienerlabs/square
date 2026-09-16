@@ -65,6 +65,7 @@ export interface KeeperOptions {
   pinnedFinalizeGas?: boolean;
   finalizeGasSamples?: number;
   complianceModule?: Address | null;
+  gated?: boolean;
   proofGraceSeconds?: bigint;
   recordExpiries: boolean;
   expiryBatchSize?: number;
@@ -139,7 +140,7 @@ export class Keeper {
       ...(options.pinnedFinalizeGas === undefined ? {} : { pinned: options.pinnedFinalizeGas }),
       ...(options.finalizeGasSamples === undefined ? {} : { samples: options.finalizeGasSamples }),
     });
-    this.rules = options.complianceModule ? [this.noProofRule(), this.proofRule()] : [];
+    this.rules = (options.gated ?? options.complianceModule != null) ? [this.noProofRule(), this.proofRule()] : [];
   }
 
   gasAssumed(action: SettlementAction): bigint {

@@ -18,7 +18,7 @@ import {
 } from "@squaresdk/observability";
 import { observabilityRoutes } from "@squaresdk/observability/hono";
 import { keeperChecks } from "./checks.js";
-import { finalizeGasDefaults } from "./gas.js";
+import { describeGate, finalizeGasDefaults, readComplianceGate } from "./gas.js";
 import { HOLD_REASONS, Keeper, KEEPER_LOG_FIELDS } from "./run.js";
 import { assertScreenerUrl, DEFAULT_SCREENER_TIMEOUT_MS, payeeScreening } from "./screening.js";
 
@@ -88,16 +88,17 @@ async function main(): Promise<void> {
   const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
   const client = createSquareClient({ publicClient, deployment, walletClient: createWalletClient({ chain, transport: http(rpcUrl), account }) });
 
-  const complianceModule = await client.complianceModule();
-  const tolerance = complianceModule === null ? null : await client.complianceTolerance();
-  const defaults = finalizeGasDefaults(complianceModule !== null);
+  const gate = await readComplianceGate(client, logger);
+  const complianceModule = gate.module;
+  const tolerance = gate.tolerance;
+  const defaults = finalizeGasDefaults(gate.gated);
   const finalizeGas = operatorFinalizeGas === undefined ? defaults.finalizeGas : BigInt(operatorFinalizeGas);
   const finalizeDecidedGas = operatorFinalizeDecidedGas === undefined ? defaults.finalizeDecidedGas : BigInt(operatorFinalizeDecidedGas);
   const pinnedFinalizeGas = operatorFinalizeGas !== undefined || operatorFinalizeDecidedGas !== undefined;
   const proofGraceSeconds = BigInt(optionalInteger("PROOF_GRACE_SECONDS") ?? Number(tolerance ?? 3_600n));
   logger.info("keeper.gas_assumption", {
     reason:
-      `${complianceModule === null ? "no compliance module is installed" : `a compliance module is installed at ${complianceModule}`}, ` +
+      `${describeGate(gate)}, ` +
       `so finalize assumes ${finalizeGas} gas and finalizeDecided ${finalizeDecidedGas}` +
       `${pinnedFinalizeGas ? ", pinned by the operator, so no receipt moves it" : ", until the first receipts move it"}`,
   });
@@ -114,6 +115,7 @@ async function main(): Promise<void> {
     pinnedFinalizeGas,
     finalizeGasSamples: integer("FINALIZE_GAS_SAMPLES", 5),
     complianceModule,
+    gated: gate.gated,
     proofGraceSeconds,
     recordExpiries: process.env["RECORD_EXPIRIES"] !== "false",
     expiryBatchSize: integer("EXPIRY_BATCH_SIZE", 25),
