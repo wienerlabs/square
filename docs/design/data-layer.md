@@ -354,6 +354,7 @@ create table keeper_job_state (              -- what the keeper has to still kno
   expiry_attempts     integer       not null default 0,
   expiry_next_at      bigint,                -- unix seconds, the earliest the sweep may try again
   expiry_gave_up      boolean       not null default false,
+  unprofitable_journaled_at timestamptz,     -- set once, by whichever keeper first journaled the job as unprofitable (0013)
   updated_at          timestamptz   not null default now(),
   primary key (chain_id, job_id)
 );
@@ -389,6 +390,14 @@ expiry is recorded on chain: it carries the transaction hash when this keeper
 sent it, and no hash when the keeper found it already recorded. Both cases also
 set `expiry_recorded_at`, and it is that mark, not the journal row, that keeps
 the job out of the next pass.
+
+`unprofitable_journaled_at` is the "journaled once" of an unprofitable job, and
+it is here rather than in memory so that "once" means once ever (#331): the
+keeper claims it with a conditional upsert (`markUnprofitableJournaled`), the
+first caller writes the `skipped` journal row and every later one, in this
+process or the next, writes nothing. `0013_keeper_unprofitable_journal` adds the
+column and backfills it from the `skipped` rows that already exist, and because
+no sweep touches this table the mark outlives the ninety day journal it guards.
 
 `gave_up` on a journal row records that the give-up happened and is shown on the
 keeper's `/actions`. Since 0012 moved the flag itself, no statement in

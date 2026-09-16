@@ -9,6 +9,7 @@ export interface KeeperJobState {
   expiryAttempts: number;
   expiryNextAt: bigint | null;
   expiryGaveUp: boolean;
+  unprofitableJournaledAt: Date | null;
   updatedAt: Date;
 }
 
@@ -20,10 +21,12 @@ interface KeeperJobStateRow {
   expiry_attempts: number;
   expiry_next_at: string | null;
   expiry_gave_up: boolean;
+  unprofitable_journaled_at: Date | null;
   updated_at: Date;
 }
 
-const COLUMNS = "chain_id, job_id, finalize_gave_up, expiry_recorded_at, expiry_attempts, expiry_next_at, expiry_gave_up, updated_at";
+const COLUMNS =
+  "chain_id, job_id, finalize_gave_up, expiry_recorded_at, expiry_attempts, expiry_next_at, expiry_gave_up, unprofitable_journaled_at, updated_at";
 
 function rowToState(row: KeeperJobStateRow): KeeperJobState {
   return {
@@ -34,6 +37,7 @@ function rowToState(row: KeeperJobStateRow): KeeperJobState {
     expiryAttempts: row.expiry_attempts,
     expiryNextAt: nullableToBigInt(row.expiry_next_at),
     expiryGaveUp: row.expiry_gave_up,
+    unprofitableJournaledAt: row.unprofitable_journaled_at,
     updatedAt: row.updated_at,
   };
 }
@@ -123,4 +127,15 @@ export async function clearExpiryGiveUp(db: Database, chainId: number, jobId: bi
     [chainId, jobId.toString()],
   );
   return rowCount;
+}
+
+export async function markUnprofitableJournaled(db: Database, chainId: number, jobId: bigint): Promise<boolean> {
+  const { rowCount } = await db.query(
+    `insert into keeper_job_state (chain_id, job_id, unprofitable_journaled_at)
+     values ($1, $2, now())
+     on conflict (chain_id, job_id) do update set unprofitable_journaled_at = now(), updated_at = now()
+     where keeper_job_state.unprofitable_journaled_at is null`,
+    [chainId, jobId.toString()],
+  );
+  return rowCount > 0;
 }

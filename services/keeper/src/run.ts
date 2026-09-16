@@ -88,6 +88,14 @@ function usdc(amount: bigint): number {
   return Number(amount) / 1_000_000;
 }
 
+type NotYetOnChain = "windowOpen" | "notLapsed";
+
+function notYetOnChain(message: string): NotYetOnChain | null {
+  if (message.includes("WindowOpen")) return "windowOpen";
+  if (message.includes("NotLapsed")) return "notLapsed";
+  return null;
+}
+
 export class Keeper {
   private readonly journaledSkips = new Set<string>();
   private readonly warnedNearExpiry = new Set<string>();
@@ -166,6 +174,11 @@ export class Keeper {
     return restored;
   }
 
+  private async latestBlockTimestamp(): Promise<bigint> {
+    const block = await this.options.client.publicClient.getBlock({ blockTag: "latest" });
+    return block.timestamp;
+  }
+
   private async economics(): Promise<KeeperEconomics> {
     const gasPriceWei = await this.options.client.publicClient.getGasPrice();
     return {
@@ -202,8 +215,9 @@ export class Keeper {
     };
   }
 
-  async tick(now = BigInt(Math.floor(Date.now() / 1000))): Promise<TickReport> {
+  async tick(atTimestamp?: bigint): Promise<TickReport> {
     const { db, chainId, client, logger, metrics } = this.options;
+    const now = atTimestamp ?? (await this.latestBlockTimestamp());
     const report: TickReport = {
       finalized: [],
       applied: [],
@@ -277,7 +291,10 @@ export class Keeper {
           report.lapsed.push(candidate.jobId);
           logger.info("keeper.lapsed", { jobId: candidate.jobId.toString(), txHash: result.hash });
         } catch (error) {
-          await this.noteFailure(candidate.jobId, "lapse", error instanceof Error ? error.message : String(error), now);
+          const message = error instanceof Error ? error.message : String(error);
+          const behind = notYetOnChain(message);
+          if (behind === null) await this.noteFailure(candidate.jobId, "lapse", message, now);
+          else this.skipUntilTheChainCatchesUp(candidate.jobId, behind, report);
         }
         continue;
       }
@@ -349,7 +366,10 @@ export class Keeper {
         (kind === "finalize" ? report.finalized : report.applied).push(candidate.jobId);
         logger.info("keeper.finalized", { jobId: candidate.jobId.toString(), txHash: result.hash, gasUsed: Number(result.receipt.gasUsed), fee: usdc(fee) });
       } catch (error) {
-        await this.noteFailure(candidate.jobId, kind, error instanceof Error ? error.message : String(error), now);
+        const message = error instanceof Error ? error.message : String(error);
+        const behind = notYetOnChain(message);
+        if (behind === null) await this.noteFailure(candidate.jobId, kind, message, now);
+        else this.skipUntilTheChainCatchesUp(candidate.jobId, behind, report);
       }
     }
 
@@ -357,6 +377,14 @@ export class Keeper {
 
     metrics?.recordKeeperTick();
     return report;
+  }
+
+  private skipUntilTheChainCatchesUp(jobId: bigint, reason: NotYetOnChain, report: TickReport): void {
+    report.skipped.push({ jobId, reason });
+    this.options.logger.info("keeper.not_yet", {
+      jobId: jobId.toString(),
+      reason: `the chain has not reached this job's deadline yet (${reason}), so this is not a failed attempt and costs neither a journal row nor a backoff`,
+    });
   }
 
   private async settleBondsOfExpiredJobs(now: bigint, report: TickReport): Promise<void> {
@@ -401,8 +429,9 @@ export class Keeper {
     const { db, chainId, logger, metrics } = this.options;
     const key = jobId.toString();
     if (this.journaledSkips.has(key)) return;
+    const firstEver = await keeperJobState.markUnprofitableJournaled(db, chainId, jobId);
     this.journaledSkips.add(key);
-    await keeperActions.append(db, { chainId, jobId, action: "skipped", reason: "unprofitable" });
+    if (firstEver) await keeperActions.append(db, { chainId, jobId, action: "skipped", reason: "unprofitable" });
     metrics?.recordKeeperAction("finalize", "skipped");
     logger.info("keeper.skipped", {
       jobId: key,
@@ -430,8 +459,9 @@ export class Keeper {
     });
   }
 
-  async sweepExpiries(now = BigInt(Math.floor(Date.now() / 1000))): Promise<ExpirySweepReport> {
+  async sweepExpiries(atTimestamp?: bigint): Promise<ExpirySweepReport> {
     const { db, chainId, client, logger, metrics } = this.options;
+    const now = atTimestamp ?? (await this.latestBlockTimestamp());
     const report: ExpirySweepReport = { scanned: 0, recorded: [], alreadyRecorded: [], failed: [], gaveUp: [] };
     const rows = await jobs.listExpiredWithAgent(db, chainId, client.deployment.keeperEvaluator, this.expiryBatchSize, now);
     report.scanned = rows.length;
@@ -496,13 +526,14 @@ export class Keeper {
       } catch (error) {
         this.options.logger.error("keeper.tick_failed", { error: error instanceof Error ? error.message : String(error) });
       }
-      if (this.options.recordExpiries && Date.now() >= nextExpirySweepAt) {
+      if (signal.aborted) break;
+      if (this.options.recordExpiries && performance.now() >= nextExpirySweepAt) {
         try {
           await this.sweepExpiries();
         } catch (error) {
           this.options.logger.error("keeper.expiry_sweep_failed", { error: error instanceof Error ? error.message : String(error) });
         }
-        nextExpirySweepAt = Date.now() + this.expiryIntervalMs;
+        nextExpirySweepAt = performance.now() + this.expiryIntervalMs;
       }
       await waitUnlessAborted(pollIntervalMs, signal);
     }

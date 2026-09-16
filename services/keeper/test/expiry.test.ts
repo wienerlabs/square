@@ -40,6 +40,7 @@ function fakeClient(chain: FakeChain): SquareClient {
     deployment,
     publicClient: {
       getGasPrice: async () => 25_000_000_000n,
+      getBlock: async () => ({ timestamp: NOW }),
       readContract: async ({ args }: { args: readonly [bigint] }) => {
         chain.reads.push(args[0]);
         return chain.recordedOnChain.has(args[0]);
