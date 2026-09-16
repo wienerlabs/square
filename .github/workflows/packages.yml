@@ -57,6 +57,11 @@ jobs:
           for dep in packages/did-resolver packages/core; do
             (cd "$dep" && npm install --install-links && npm run build)
           done
+      - name: The schema document still matches the migrations
+        if: matrix.package == 'packages/data'
+        working-directory: packages/data
+        run: npm run check:schema
+
       - name: Install, typecheck, test, build
         working-directory: ${{ matrix.package }}
         run: |
@@ -87,6 +92,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "22"
+      - name: Every variable the service reads is in its README
+        if: matrix.package == 'services/indexer' || matrix.package == 'services/keeper'
+        run: node scripts/check-env-documented.mjs ${{ matrix.package }}
+
       - name: Build contracts
         working-directory: contracts
         run: forge build
