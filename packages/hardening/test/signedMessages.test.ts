@@ -264,20 +264,19 @@ describe("memoryNonceStore", () => {
     60_000
   );
 
-  // The same fill against the Map the store is built on, awaited the same way. A
-  // runner's memory makes a larger fill dearer on its own, through collections of
-  // the whole heap and tables that outgrow the cache: 40k against 10k measured 8.2,
-  // 8.5 and 9.7 times on ubuntu-latest for this linear store. That cost lands on
-  // both fills, so dividing the store's growth by the Map's leaves what the store
-  // itself adds.
   const fillFreshMap = async (count: number): Promise<number> => {
-    const map = new Map<bigint, bigint>();
-    const set = async (nonce: bigint, expiresAt: bigint): Promise<boolean> => {
-      map.set(nonce, expiresAt);
+    const used = new Map<string, Map<bigint, bigint>>();
+    const set = async (actor: string, nonce: bigint, expiresAt: bigint): Promise<boolean> => {
+      const actorKey = actor.toLowerCase();
+      const nonces = used.get(actorKey) ?? new Map<bigint, bigint>();
+      const seen = nonces.get(nonce);
+      if (seen !== undefined && seen > NOW) return false;
+      nonces.set(nonce, expiresAt);
+      used.set(actorKey, nonces);
       return true;
     };
     const startedAt = performance.now();
-    for (let nonce = 0; nonce < count; nonce += 1) await set(BigInt(nonce), NOW + 300n);
+    for (let nonce = 0; nonce < count; nonce += 1) await set(alice.address, BigInt(nonce), NOW + 300n);
     return performance.now() - startedAt;
   };
 
@@ -294,17 +293,14 @@ describe("memoryNonceStore", () => {
   it(
     "fills in linear time, so an actor cannot make its own verification quadratic",
     async () => {
-      await fillFreshStore(40_000);
-      await fillFreshMap(40_000);
+      await fillFreshStore(80_000);
+      await fillFreshMap(80_000);
       const fiveThousand = await fastestFillsOf(5, 5_000);
-      const fortyThousand = await fastestFillsOf(5, 40_000);
+      const eightyThousand = await fastestFillsOf(5, 80_000);
 
-      // Eight times the nonces: a linear store grows as the Map does, a ratio of 1,
-      // and one that scans the actor's nonces on each consume grows eight times
-      // faster. The bound is the geometric middle of the two.
-      const storeGrowth = fortyThousand.store / fiveThousand.store;
-      const mapGrowth = fortyThousand.map / fiveThousand.map;
-      expect(storeGrowth / mapGrowth).toBeLessThan(Math.sqrt(8));
+      const storeGrowth = eightyThousand.store / fiveThousand.store;
+      const mapGrowth = eightyThousand.map / fiveThousand.map;
+      expect(storeGrowth / mapGrowth).toBeLessThan(3);
     },
     60_000
   );
