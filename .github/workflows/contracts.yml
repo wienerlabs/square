@@ -188,8 +188,27 @@ jobs:
         run: npm install --install-links --no-audit --no-fund
 
       - name: Every selector the SDK calls is in the deployed bytecode
+        id: selectors
         working-directory: packages/core
         run: npm run check:selectors
+
+      - name: Say what a red run here means
+        if: failure() && steps.selectors.outcome == 'failure'
+        run: |
+          {
+            echo "### This is the known gap, not a regression in this branch"
+            echo
+            echo "The Arc Testnet stack was deployed on 2026-09-09 and \`main\` has moved"
+            echo "since. Until the redeploy in \`docs/deploy/README.md\` happens, this job is"
+            echo "red for every pull request and the gap grows with every contract change."
+            echo "That is the state square#324 tracks, and it is why this job is not in the"
+            echo "required contexts."
+            echo
+            echo "Read it as a regression only if the selectors listed above belong to a"
+            echo "contract your branch did not touch, or if the count shrinks when you revert"
+            echo "your change. After the redeploy this job goes green and joins the required"
+            echo "list."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Arc's precompiles, not revm's. "It verifies in Foundry" and "it verifies on
   # Arc" are different claims; this job is the second one. An eth_call with a
