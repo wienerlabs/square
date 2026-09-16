@@ -83,10 +83,71 @@ contract SquareJobTest is BaseTest {
         kernel.createJob(provider, address(keeper), block.timestamp + horizon, "", address(0));
     }
 
-    function test_createJob_eoaEvaluatorHasNoHorizon() public {
+    function test_createJob_eoaEvaluatorCarriesNoHorizonButStillOwesTheWindow() public {
+        uint48 floor = kernel.MIN_SETTLEMENT_WINDOW();
+
+        vm.expectRevert(abi.encodeWithSelector(ISquareJob.ExpiryTooShort.selector, block.timestamp + floor));
         vm.prank(client);
-        uint256 jobId = kernel.createJob(provider, client, block.timestamp + 1, "", address(0));
+        kernel.createJob(provider, client, block.timestamp + 1, "", address(0));
+
+        vm.prank(client);
+        uint256 jobId = kernel.createJob(provider, client, block.timestamp + floor, "", address(0));
         assertEq(record(jobId).evaluator, client);
+        assertEq(record(jobId).settlementHorizon, 0, "an EOA evaluator declares no horizon");
+    }
+
+    function test_createJob_everyExpiryItAcceptsCanBeSubmittedThatSecond() public {
+        uint48 horizon = keeper.settlementHorizon();
+        vm.prank(client);
+        uint256 jobId = kernel.createJob(provider, address(keeper), block.timestamp + horizon, "", address(0));
+        vm.prank(provider);
+        kernel.setBudget(jobId, BUDGET, "");
+        vm.prank(client);
+        kernel.fund(jobId, BUDGET, "");
+
+        vm.prank(provider);
+        kernel.submit(jobId, keccak256("deliverable"), "");
+
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Submitted), "the earliest expiry createJob takes is submittable");
+    }
+
+    function test_fund_refusesAJobWhoseWindowClosedWhileItWaited() public {
+        uint48 horizon = keeper.settlementHorizon();
+        vm.prank(client);
+        uint256 jobId = kernel.createJob(provider, address(keeper), block.timestamp + horizon + 2 days, "", address(0));
+        vm.prank(provider);
+        kernel.setBudget(jobId, BUDGET, "");
+
+        vm.warp(block.timestamp + 2 days + 1);
+        uint256 earliest = block.timestamp + horizon;
+        vm.expectRevert(abi.encodeWithSelector(ISquareJob.ExpiryTooShort.selector, earliest));
+        vm.prank(client);
+        kernel.fund(jobId, BUDGET, "");
+
+        assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Open), "the escrow never entered a job that cannot be delivered");
+        assertEq(usdc.balanceOf(address(kernel)), 0);
+    }
+
+    function test_netPayout_readsTheFeeAFundWouldPin() public {
+        vm.prank(client);
+        uint256 jobId = kernel.createJob(provider, address(keeper), expiry(), "", address(0));
+        vm.prank(provider);
+        kernel.setBudget(jobId, BUDGET, "");
+
+        vm.prank(owner);
+        kernel.setFees(500, 100, treasury);
+        vm.warp(block.timestamp + kernel.FEE_NOTICE() + 1);
+
+        uint256 previewed = kernel.netPayout(jobId);
+        assertEq(kernel.platformFeeBP(), 500);
+        assertEq(kernel.evaluatorFeeBP(), 100);
+
+        vm.prank(client);
+        kernel.fund(jobId, BUDGET, "");
+
+        assertEq(kernel.netPayout(jobId), previewed, "the preview and the pinned fee are the same number");
+        assertEq(record(jobId).platformFeeBP, 500);
+        assertEq(previewed, BUDGET - (BUDGET * 500) / FULL_BPS - (BUDGET * 100) / FULL_BPS);
     }
 
     function test_createJob_providerMayBeZeroThenSet() public {
