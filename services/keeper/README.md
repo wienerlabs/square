@@ -214,7 +214,7 @@ without one it found it already recorded.
 |---|---|
 | `square_finalize_pending_total` | jobs whose window closed and are not finalized |
 | `square_finalize_oldest_pending_age_seconds` | how long the oldest of them has waited: the one number that says the keeper stopped |
-| `square_keeper_actions_total{action,result}` | finalize / finalizeDecided / lapse / recordExpiry outcomes |
+| `square_keeper_actions_total{action,result}` | finalize / finalizeDecided / lapse / settleBond / recordExpiry outcomes, each as success, failure or skipped |
 | `square_keeper_fee_earned_usdc` | fees collected |
 | `square_disputes_open_total` | open disputes |
 | `square_keeper_last_tick_timestamp_seconds` | when the last tick completed: the dead man's switch |

@@ -47,8 +47,8 @@ proves it by comparing the rebuilt state with the chain field by field.
   resuming would skip every log it emitted before the checkpoint.
 - `ON_DEPLOYMENT_CHANGE=restart` is destructive on purpose: before it reindexes
   it deletes every derived row of that chain (`jobs`, `disputes`,
-  `claim_listings`, `ledger_balances`, `arbiter_sets` and the `job_events`
-  journal) in one transaction, and drops the in-memory state with them. Without
+  `claim_listings`, `ledger_balances`, `arbiter_sets`, `quarantined_events` and
+  the `job_events` journal) in one transaction, and drops the in-memory state with them. Without
   that deletion the earlier deployment's jobs stayed in the mirror and
   `/jobs/open`, `/jobs/:id`, `/listings` and `/disputes/open` served them as
   current while `/status` counted only the rebuilt state, so one service
