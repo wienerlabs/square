@@ -113,7 +113,7 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
             resolvesPayout = hook.supportsInterface(type(IPayoutResolver).interfaceId);
         }
         uint48 horizon = _settlementHorizon(evaluator);
-        uint256 earliest = block.timestamp + horizon;
+        uint256 earliest = block.timestamp + _settlementWindow(horizon);
         if (expiredAt < earliest) revert ExpiryTooShort(earliest);
 
         jobId = ++_jobCounter;
@@ -169,6 +169,8 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         if (amount == 0) revert ZeroBudget();
         if (amount != expectedBudget) revert BudgetMismatch();
         if (block.timestamp >= job.expiredAt) revert PastExpiry();
+        uint256 earliest = block.timestamp + _settlementWindow(job.settlementHorizon);
+        if (job.expiredAt < earliest) revert ExpiryTooShort(earliest);
 
         (uint16 platformFeeBP_, uint16 evaluatorFeeBP_) = _effectiveFees();
         _beforeHook(job.hook, jobId, optParams);
@@ -323,9 +325,8 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
     function netPayout(uint256 jobId) public view returns (uint256) {
         JobRecord storage job = _existing(jobId);
         uint256 amount = job.budget;
-        (uint16 platformBP, uint16 evaluatorBP) = job.status == JobStatus.Open
-            ? (_platformFeeBP, _evaluatorFeeBP)
-            : (job.platformFeeBP, job.evaluatorFeeBP);
+        (uint16 platformBP, uint16 evaluatorBP) =
+            job.status == JobStatus.Open ? _effectiveFees() : (job.platformFeeBP, job.evaluatorFeeBP);
         return amount - (amount * platformBP) / BPS - (amount * evaluatorBP) / BPS;
     }
 

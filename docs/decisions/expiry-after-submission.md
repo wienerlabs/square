@@ -48,6 +48,20 @@ refusing an expiry inside it. The grace is the room a keeper needs after
 `resolveBy` to send `lapse` and `finalizeDecided`; it is owner-configurable,
 never zero, and reported by `finalizeGrace()`.
 
+## The window is owed from the first block, not from the submission
+
+`submit` demands that `expiredAt` be at least `MIN_SETTLEMENT_WINDOW` away, and for a
+while `createJob` and `fund` demanded less: the kernel accepted, and funded, a job whose
+provider could never deliver. The escrow went in and stayed there until the expiry, and
+the revert the provider got named an `earliest` above the job's own `expiredAt`, which is
+a bound nobody can satisfy.
+
+All three now derive the bound from the same `_settlementWindow`. `createJob` refuses an
+expiry it could not accept a submission against in that same block, and `fund` refuses a
+job whose window closed while the client was deciding, which is the reachable case: the
+job is created with room and funded two days later without it. A job that cannot be
+delivered now never holds money.
+
 ## What moves with it
 
 - `Arbitration.settleBond` is permissionless. When the job is `Expired` it
