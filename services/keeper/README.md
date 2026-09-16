@@ -191,6 +191,9 @@ export CHAIN_ID=5042002
 export RPC_URL=https://rpc.testnet.arc.io
 export KEEPER_PRIVATE_KEY=0x...      # holds native USDC for gas
 export DATABASE_URL=postgres://...   # shared with an indexer, or empty for in-memory
+export SQUARE_DEPLOYMENT_FILE=       # empty takes the addresses from @squaresdk/core for a known chain
+export SQUARE_VERSION=0.1.0          # what /health and /version report, and what every log line carries
+export PORT=3011                     # where the endpoints below are served
 export POLL_INTERVAL_MS=15000
 export MINIMUM_MARGIN_BPS=2000
 export FINALIZE_GAS=450000
@@ -206,6 +209,7 @@ export RETRY_MAX_JOURNAL_ROWS=3
 export MAX_PENDING_AGE_SECONDS=600
 export MAX_TICK_AGE_SECONDS=300
 export ALERT_WEBHOOK_URL=https://...  # optional
+export ALERT_INTERVAL_MS=30000        # how often the rules below are evaluated, in process
 export SCREENER_URL=http://screener:3012  # optional, square#35: screen payees before finalizing (services/screener/README.md)
 export SCREENER_ALLOW_PRIVATE=true    # the screener above is on a private network; link-local is refused regardless
 export SCREENER_TIMEOUT_MS=30000      # per request to the screener, not per job
@@ -218,8 +222,25 @@ mode only: the keeper then opens a PGlite database that lives inside its own
 process, nothing writes `jobs` into it, and it will never finalize anything. It
 says so at boot (`keeper.ephemeral_mirror`), on every empty tick
 (`keeper.empty_mirror`) and on `/health`, where the `mirror` check reports it as
-degraded. Contract addresses come from `@squaresdk/core` for known chains or
-from `SQUARE_DEPLOYMENT_FILE`.
+degraded.
+
+Contract addresses come from `@squaresdk/core` for known chains, or from the
+deployment record `SQUARE_DEPLOYMENT_FILE` names, which wins whenever it is set.
+That is what makes the variable the way through a redeploy:
+`packages/core/src/deployments.ts` is updated by hand afterwards, and until it
+is, pointing this at `contracts/deployments/<chainId>.json` is what runs the
+keeper against the current stack.
+[docs/deploy/README.md](../../docs/deploy/README.md) counts the services as
+readers of that file for exactly this reason.
+
+`SQUARE_VERSION` is the version `/health` and `/version` report and the logger
+stamps on every line. It falls back to `0.1.0` whatever is deployed, so an
+operator who wants those to name the image tag has to pass the tag in. `PORT`
+defaults to 3011, the port the Dockerfile exposes and `compose.yaml` publishes,
+so moving the keeper off it means moving the variable and the port mapping
+together. `ALERT_INTERVAL_MS` defaults to 30000: that is how often the alerting
+below evaluates its rules in process, so it bounds how late either arm of
+`keeperStalled` can fire.
 
 Endpoints: `/health`, `/metrics` (Prometheus), `/version`, `/actions` (last
 50 journal rows). In `/actions`, a `recordExpiry` row with no `reason` means the
@@ -232,7 +253,7 @@ without one it found it already recorded.
 |---|---|
 | `square_finalize_pending_total` | jobs whose window closed and are not finalized |
 | `square_finalize_oldest_pending_age_seconds` | how long the oldest of them has waited: the one number that says the keeper stopped |
-| `square_keeper_actions_total{action,result}` | finalize / finalizeDecided / lapse / recordExpiry outcomes |
+| `square_keeper_actions_total{action,result}` | finalize / finalizeDecided / lapse / settleBond / recordExpiry outcomes, each as success, failure or skipped |
 | `square_keeper_fee_earned_usdc` | fees collected |
 | `square_disputes_open_total` | open disputes |
 | `square_keeper_last_tick_timestamp_seconds` | when the last tick completed: the dead man's switch |

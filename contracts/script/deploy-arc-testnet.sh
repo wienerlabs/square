@@ -33,5 +33,19 @@ if [ "$actual_chain_id" != "$EXPECTED_CHAIN_ID" ]; then
   exit 1
 fi
 
-echo "deployer=$DEPLOYER_ADDRESS chain=$actual_chain_id arbiters=$ARBITERS windows=$CHALLENGE_WINDOW/$DISPUTE_WINDOW/$FINALIZE_GRACE minReputationBudget=$MIN_REPUTATION_BUDGET"
-forge script script/DeploySettlement.s.sol --rpc-url "$ARC_TESTNET_RPC_URL" --chain "$EXPECTED_CHAIN_ID" --broadcast --slow -vv "$@"
+# VERIFY=0 turns it off when the explorer is down.
+VERIFY="${VERIFY:-1}"
+verify_args=""
+if [ "$VERIFY" = "1" ]; then
+  verify_args="--verify --verifier blockscout --verifier-url ${ARCSCAN_API_URL:-https://testnet.arcscan.app/api/}"
+fi
+
+# The record keeps the commit it was compiled from, because that plus
+# foundry.toml is what a later verification needs and the explorer cannot
+# answer for us.
+GIT_COMMIT="$(git -C "$(dirname "$0")/.." rev-parse --short HEAD 2>/dev/null || echo unknown)"
+export GIT_COMMIT
+
+echo "deployer=$DEPLOYER_ADDRESS chain=$actual_chain_id arbiters=$ARBITERS windows=$CHALLENGE_WINDOW/$DISPUTE_WINDOW/$FINALIZE_GRACE minReputationBudget=$MIN_REPUTATION_BUDGET commit=$GIT_COMMIT verify=$VERIFY"
+# shellcheck disable=SC2086
+forge script script/DeploySettlement.s.sol --rpc-url "$ARC_TESTNET_RPC_URL" --chain "$EXPECTED_CHAIN_ID" --broadcast --slow $verify_args -vv "$@"
