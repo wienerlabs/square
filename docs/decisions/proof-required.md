@@ -1,9 +1,14 @@
 # A missing proof holds the escrow; only the mandate refunds
 
-**Status**: decided for [#346][i346] on 2026-09-15; not yet built. The
-contract and keeper work is [#382][i382], on the critical path before the
-redeploy ([#372][i372]), so the change rides with it. Until it lands, the
-hook refunds a missing proof the way it refunds a refused one.
+**Status**: decided for [#346][i346] on 2026-09-15. The contract half is
+built ([#382][i382], PR #395): `KeeperEvaluator.finalize` and
+`finalizeDecided` refuse a job with no decidable proof (`ProofRequired`), the
+hook pins the client's commitment at funding (`commitmentAtFund`) and refuses
+to fund a client with no mandate (`NoPolicy`). The keeper's half, journaling
+the held job with no retry and reporting it on `/status`, is what remains of
+[#382][i382], on top of the hold mechanism #344 and #345 are building. The
+shared stack carries the change with the redeploy ([#372][i372]); until then
+the deployed hook refunds a missing proof the way it refunds a refused one.
 
 [i100]: https://github.com/wienerlabs/square/issues/100
 [i346]: https://github.com/wienerlabs/square/issues/346

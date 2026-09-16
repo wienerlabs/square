@@ -63,8 +63,10 @@ describe.skipIf(notReady !== null)("square policy, on the compliance stack", () 
     const pending = await publicClient.getBlock({ blockTag: "pending" });
     ({ jobId } = await institution.createJob({ provider: account(2).address, expiredAt: pending.timestamp + 30n * 86_400n, spec: { task: "summarise" } }));
     await provider.setBudget(jobId, parseUnits("5", 6));
-    await institution.fund(jobId, parseUnits("5", 6));
-    await provider.submit({ jobId, deliverable: hashDeliverable(`cli ${jobId}`), agentId: 1n });
+    // Funded in the prove test, once the policy is committed: the hook pins the
+    // client's commitment at funding and the release is proved under that one
+    // (square#382), so a job funded before `commit` could only be proved under
+    // whatever the client had committed before.
   }, 60_000);
 
   afterAll(() => {
@@ -114,6 +116,8 @@ describe.skipIf(notReady !== null)("square policy, on the compliance stack", () 
   }, 60_000);
 
   it("prove binds a proof for the job's release, status reads it back, and release cranks once the window closes", async () => {
+    await institution.fund(jobId, parseUnits("5", 6));
+    await provider.submit({ jobId, deliverable: hashDeliverable(`cli ${jobId}`), agentId: 1n });
     const bound = parse<{ bound: boolean; transaction: string; facts: { payee: string } }>(await run("policy", "prove", jobId.toString(), "--file", policyFile, "--artifacts", artifacts, "--category", "text.summarize", ...network, "--json"));
     expect(bound).toMatchObject({ bound: true, facts: { payee: account(2).address } });
     expect(await institution.complianceProofOf(jobId)).not.toBe("0x");
