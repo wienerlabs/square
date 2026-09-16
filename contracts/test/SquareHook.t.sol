@@ -400,6 +400,26 @@ contract SquareHookTest is BaseTest {
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));
     }
 
+    function test_gasLimit_aRunawayProofStateCannotStopTheEvaluatorFromSettling() public {
+        vm.prank(owner);
+        hook.setComplianceModule(address(compliance));
+        compliance.setProofStateGasToBurn(type(uint256).max);
+        uint256 jobId = submittedHookedJob(BUDGET);
+        bindProof(jobId);
+        pastWindow(jobId);
+
+        uint256 gasBefore = gasleft();
+        keeper.finalize{gas: 5_000_000}(jobId);
+
+        assertLt(gasBefore - gasleft(), 3_000_000, "the runaway proofState is cut at the kernel's hook cap");
+        assertEq(
+            uint8(status(jobId)),
+            uint8(ISquareJob.JobStatus.Completed),
+            "a hook that will not answer whether a proof is decidable cannot hold the escrow"
+        );
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET));
+    }
+
     function test_gasLimit_aRunawayComplianceCheckCannotBlockSettlement() public {
         vm.prank(owner);
         hook.setComplianceModule(address(compliance));
