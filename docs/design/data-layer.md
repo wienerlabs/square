@@ -355,11 +355,15 @@ create table keeper_job_state (              -- what the keeper has to still kno
   expiry_next_at      bigint,                -- unix seconds, the earliest the sweep may try again
   expiry_gave_up      boolean       not null default false,
   unprofitable_journaled_at timestamptz,     -- set once, by whichever keeper first journaled the job as unprofitable (0013)
+  held_reason         text,                  -- why the keeper is waiting rather than cranking: noProof or proofStale (0014)
+  held_since          bigint,                -- unix seconds, when this reason started, for the grace
   updated_at          timestamptz   not null default now(),
   primary key (chain_id, job_id)
 );
 create index keeper_job_state_expiry_open on keeper_job_state (chain_id, expiry_next_at)
   where expiry_recorded_at is null and not expiry_gave_up;
+create index keeper_job_state_held on keeper_job_state (chain_id, held_reason)
+  where held_reason is not null;
 ```
 
 The `action` list is the `KeeperAction` union in
@@ -390,6 +394,21 @@ expiry is recorded on chain: it carries the transaction hash when this keeper
 sent it, and no hash when the keeper found it already recorded. Both cases also
 set `expiry_recorded_at`, and it is that mark, not the journal row, that keeps
 the job out of the next pass.
+
+`held_reason` and `held_since` are a hold rather than a failure (0014). A held
+job is one the keeper found a reason not to crank this tick, and the difference
+from a failed attempt is that it costs no retry, burns no backoff and writes no
+journal row: the next tick looks again. There are two reasons and they end
+differently. `proofStale` means the module would refuse a proof it can read,
+which is the mandate's own decision, so after `PROOF_GRACE_SECONDS` the job is
+cranked anyway and the refusal is recorded on chain. `noProof` means there is
+nothing to read at all, and since #382 the evaluator reverts `ProofRequired`
+rather than settle such a job, so it has no grace: only the client, who alone
+can bind a proof, ends that hold. `held_since` is when the current reason
+started, not when the job was first held, so a job that moves from one reason to
+the other starts its grace again. The partial index is what `/status` and
+`/health` count, and a hold is released the moment the job leaves the mirror so
+those counts cannot drift.
 
 `unprofitable_journaled_at` is the "journaled once" of an unprofitable job, and
 it is here rather than in memory so that "once" means once ever (#331): the

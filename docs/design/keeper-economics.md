@@ -78,6 +78,29 @@ the gas cost to use is the measured optimistic `finalize`: 449 893 gas at
 | **50 (0.5 %, default)** | **1.89 USDC** | **5.7 USDC** |
 | 100 (1 %) | 0.94 USDC | 2.8 USDC |
 
+With a compliance module installed on the hook the same call is 2.3 times more
+expensive, because the release runs the pairing twice, once for the preview the
+payout split reads and once for the check that writes the bookkeeping. Measured
+on anvil against a real module and a real prover: a verified release is
+1 052 107 gas, a refused one 981 795, and a job whose proof is malformed 490 600.
+At the same 22 gwei that is 0.0227 USDC for the verified case, and the table
+moves with it.
+
+| `evaluatorFeeBP` | break-even budget, module installed (0.0227 USDC) | with a 3× margin |
+|---|---|---|
+| 25 (0.25 %) | 9.08 USDC | 27.2 USDC |
+| **50 (0.5 %, default)** | **4.53 USDC** | **13.6 USDC** |
+| 100 (1 %) | 2.27 USDC | 6.8 USDC |
+
+Which row applies is not a guess the operator makes. The keeper reads
+`SquareHook.complianceModule()` at startup and picks the gated default when a
+module is installed, and from the first receipt onward it uses a moving average
+of the last `FINALIZE_GAS_SAMPLES` receipts rather than either constant. An
+explicit `FINALIZE_GAS` wins over both, for an operator who knows something the
+receipts do not. Until that change, a keeper on a gated stack believed every
+finalize cost 450 000 gas and took every job between 2.38 and 5.44 USDC at a
+loss, while its balance check funded 1.3 finalizes and claimed three (#344).
+
 This table has now been wrong in both directions, which is why it is derived
 from receipts rather than estimated. It first quoted 1.68 USDC at the default
 fee, from the pre-measurement Foundry figure of 417 852 gas at 20 gwei, and that

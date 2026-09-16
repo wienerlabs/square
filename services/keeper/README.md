@@ -208,6 +208,9 @@ export RETRY_GIVE_UP_AFTER=6
 export RETRY_MAX_JOURNAL_ROWS=3
 export MAX_PENDING_AGE_SECONDS=600
 export MAX_TICK_AGE_SECONDS=300
+export FINALIZE_GAS_SAMPLES=5         # receipts averaged into the gas assumption; the constants above are only the estimate before the first one
+export MAX_GAS_OVERSHOOT_PERCENT=25   # a receipt over the assumption by more than this raises a warning
+export PROOF_GRACE_SECONDS=3600       # how long a job whose proof the module refuses waits before it is cranked anyway; defaults to the module's timestamp tolerance
 export ALERT_WEBHOOK_URL=https://...  # optional
 export ALERT_INTERVAL_MS=30000        # how often the rules below are evaluated, in process
 export SCREENER_URL=http://screener:3012  # optional, square#35: screen payees before finalizing (services/screener/README.md)
@@ -215,6 +218,30 @@ export SCREENER_ALLOW_PRIVATE=true    # the screener above is on a private netwo
 export SCREENER_TIMEOUT_MS=30000      # per request to the screener, not per job
 npm install --install-links && npm run build && npm start
 ```
+
+### A held job is not a failed one
+
+On a stack with a compliance module the keeper asks two questions before it
+cranks, and either one can make it wait instead. A wait is written to
+`keeper_job_state.held_reason`, costs no retry attempt, burns no backoff, writes
+no journal row, and is counted on `/status` and `/health`. The next tick looks
+again.
+
+`noProof` means the job carries no compliance proof, or bytes that are the wrong
+length, or bytes that do not verify. Since #382 the evaluator refuses to settle
+such a job at all and reverts `ProofRequired`, so cranking it would only burn
+gas. This hold has no grace: the client is the only party who can bind a proof,
+so the client is the only party who can end it. A `ProofRequired` revert that
+does reach the keeper, because the job changed between the read and the send, is
+recorded as this same hold rather than as a failed attempt.
+
+`proofStale` means the module can read the proof and would refuse it. That is
+the mandate's own decision and it is allowed to go against the provider, so
+after `PROOF_GRACE_SECONDS` the keeper cranks anyway and the refusal is recorded
+on chain. The common cause is one client with two jobs closing on the same day:
+the first release moves `PolicyRegistry.spentToday` and the second job's proof
+names the old figure (#345). Holding gives the client's duty a tick to bind a
+fresh proof, which is the outcome that pays both providers.
 
 The keeper reads the same tables the indexer writes, so `DATABASE_URL` has to
 point at the database an indexer writes to. Leaving it empty is a development

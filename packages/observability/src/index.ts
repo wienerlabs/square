@@ -58,6 +58,8 @@ export {
   proofFailureRate,
   disputesPilingUp,
   hookWriteFailures,
+  finalizeGasUnderestimated,
+  releaseRefused,
   webhookNotifier,
   webhookPayload,
   logNotifier,
@@ -69,6 +71,7 @@ export {
   DEFAULT_MIN_ATTEMPTS,
   DEFAULT_MAX_OPEN_DISPUTES,
   DEFAULT_MAX_TICK_AGE_SECONDS,
+  DEFAULT_MAX_GAS_OVERSHOOT_RATIO,
 } from "./alerts.js";
 export type {
   Alert,
@@ -89,6 +92,8 @@ export type {
   ProofFailureRateOptions,
   DisputesPilingUpOptions,
   HookWriteFailuresOptions,
+  FinalizeGasUnderestimatedOptions,
+  ReleaseRefusedOptions,
   Notifier,
   WebhookNotifierOptions,
 } from "./alerts.js";
