@@ -4,11 +4,22 @@ import { Hono } from "hono";
 import { createPublicClient, createWalletClient, defineChain, http, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { ARC_TESTNET_CHAIN_ID, createSquareClient, deploymentFor, deploymentFromJson, networks } from "@squaresdk/core";
-import { keeperActions, migrate, MIGRATIONS_DIR, pgDatabase, pgliteDatabase } from "@squaresdk/data";
-import { createAlerting, createHealth, createLogger, createMetrics, keeperStalled, logNotifier, webhookNotifier } from "@squaresdk/observability";
+import { keeperActions, keeperJobState, migrate, MIGRATIONS_DIR, pgDatabase, pgliteDatabase } from "@squaresdk/data";
+import {
+  createAlerting,
+  createHealth,
+  createLogger,
+  createMetrics,
+  finalizeGasUnderestimated,
+  keeperStalled,
+  logNotifier,
+  releaseRefused,
+  webhookNotifier,
+} from "@squaresdk/observability";
 import { observabilityRoutes } from "@squaresdk/observability/hono";
 import { keeperChecks } from "./checks.js";
-import { Keeper, KEEPER_LOG_FIELDS } from "./run.js";
+import { finalizeGasDefaults } from "./gas.js";
+import { HOLD_REASONS, Keeper, KEEPER_LOG_FIELDS } from "./run.js";
 import { assertScreenerUrl, DEFAULT_SCREENER_TIMEOUT_MS, payeeScreening } from "./screening.js";
 
 function required(name: string): string {
@@ -25,6 +36,12 @@ function integer(name: string, fallback: number): number {
   return value;
 }
 
+function optionalInteger(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return undefined;
+  return integer(name, 0);
+}
+
 async function main(): Promise<void> {
   const chainId = integer("CHAIN_ID", ARC_TESTNET_CHAIN_ID);
   const rpcUrl = required("RPC_URL");
@@ -32,7 +49,8 @@ async function main(): Promise<void> {
   const deploymentFile = process.env["SQUARE_DEPLOYMENT_FILE"];
   const deployment = deploymentFile ? deploymentFromJson(JSON.parse(readFileSync(deploymentFile, "utf8"))) : deploymentFor(chainId);
   const account = privateKeyToAccount(required("KEEPER_PRIVATE_KEY") as Hex);
-  const finalizeGas = BigInt(integer("FINALIZE_GAS", 450_000));
+  const operatorFinalizeGas = optionalInteger("FINALIZE_GAS");
+  const operatorFinalizeDecidedGas = optionalInteger("FINALIZE_DECIDED_GAS");
   // Known chains carry their own name and unit; an unknown chain id is still
   // allowed here, because SQUARE_DEPLOYMENT_FILE can point the keeper at one.
   const profile = networks[chainId];
@@ -69,6 +87,21 @@ async function main(): Promise<void> {
 
   const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
   const client = createSquareClient({ publicClient, deployment, walletClient: createWalletClient({ chain, transport: http(rpcUrl), account }) });
+
+  const complianceModule = await client.complianceModule();
+  const tolerance = complianceModule === null ? null : await client.complianceTolerance();
+  const defaults = finalizeGasDefaults(complianceModule !== null);
+  const finalizeGas = operatorFinalizeGas === undefined ? defaults.finalizeGas : BigInt(operatorFinalizeGas);
+  const finalizeDecidedGas = operatorFinalizeDecidedGas === undefined ? defaults.finalizeDecidedGas : BigInt(operatorFinalizeDecidedGas);
+  const pinnedFinalizeGas = operatorFinalizeGas !== undefined || operatorFinalizeDecidedGas !== undefined;
+  const proofGraceSeconds = BigInt(optionalInteger("PROOF_GRACE_SECONDS") ?? Number(tolerance ?? 3_600n));
+  logger.info("keeper.gas_assumption", {
+    reason:
+      `${complianceModule === null ? "no compliance module is installed" : `a compliance module is installed at ${complianceModule}`}, ` +
+      `so finalize assumes ${finalizeGas} gas and finalizeDecided ${finalizeDecidedGas}` +
+      `${pinnedFinalizeGas ? ", pinned by the operator, so no receipt moves it" : ", until the first receipts move it"}`,
+  });
+
   const keeper = new Keeper({
     db,
     chainId,
@@ -77,7 +110,11 @@ async function main(): Promise<void> {
     metrics,
     minimumMarginBps: integer("MINIMUM_MARGIN_BPS", 2000),
     defaultFinalizeGas: finalizeGas,
-    defaultFinalizeDecidedGas: BigInt(integer("FINALIZE_DECIDED_GAS", 500_000)),
+    defaultFinalizeDecidedGas: finalizeDecidedGas,
+    pinnedFinalizeGas,
+    finalizeGasSamples: integer("FINALIZE_GAS_SAMPLES", 5),
+    complianceModule,
+    proofGraceSeconds,
     recordExpiries: process.env["RECORD_EXPIRIES"] !== "false",
     expiryBatchSize: integer("EXPIRY_BATCH_SIZE", 25),
     expiryIntervalMs: integer("EXPIRY_INTERVAL_MS", 60_000),
@@ -100,6 +137,8 @@ async function main(): Promise<void> {
         maxPendingAgeSeconds: integer("MAX_PENDING_AGE_SECONDS", 600),
         maxTickAgeSeconds: integer("MAX_TICK_AGE_SECONDS", 300),
       }),
+      finalizeGasUnderestimated({ maxOvershootRatio: integer("MAX_GAS_OVERSHOOT_PERCENT", 25) / 100 }),
+      releaseRefused(),
     ],
     notify: process.env["ALERT_WEBHOOK_URL"] ? webhookNotifier(process.env["ALERT_WEBHOOK_URL"]) : logNotifier(logger),
   });
@@ -111,7 +150,7 @@ async function main(): Promise<void> {
       publicClient,
       chainId,
       account: account.address,
-      finalizeGas,
+      finalizeGas: () => keeper.gasAssumed("finalize"),
       minActionsFunded: integer("MIN_ACTIONS_FUNDED", 3),
       ephemeralMirror,
       ...(screener ? { screener } : {}),
@@ -123,6 +162,25 @@ async function main(): Promise<void> {
   app.get("/actions", async (c) =>
     c.json((await keeperActions.recent(db, chainId, 50)).map((a) => ({ ...a, id: a.id.toString(), jobId: a.jobId.toString(), gasUsed: a.gasUsed?.toString() ?? null, feeEarned: a.feeEarned?.toString() ?? null }))),
   );
+  app.get("/status", async (c) => {
+    const counts = await keeperJobState.countHeld(db, chainId);
+    return c.json({
+      chainId,
+      keeper: account.address,
+      complianceModule,
+      finalizeGas: {
+        finalize: keeper.gasAssumed("finalize").toString(),
+        finalizeDecided: keeper.gasAssumed("finalizeDecided").toString(),
+        source: keeper.gasSource("finalize"),
+      },
+      held: {
+        total: Object.values(counts).reduce((sum, count) => sum + count, 0),
+        byReason: Object.fromEntries(HOLD_REASONS.map((reason) => [reason, counts[reason] ?? 0])),
+        graceSeconds: { proofStale: Number(proofGraceSeconds) },
+        jobs: (await keeperJobState.listHeld(db, chainId)).map((row) => ({ jobId: row.jobId.toString(), reason: row.reason, since: row.since.toString() })),
+      },
+    });
+  });
   const server = serve({ fetch: app.fetch, port: integer("PORT", 3011) }, (info) => {
     logger.info("keeper.listening", { endpoint: `http://localhost:${info.port}`, keeper: account.address });
   });

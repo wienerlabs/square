@@ -14,7 +14,8 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "measure:gas": "node scripts/measure-gated-gas.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
