@@ -8,6 +8,8 @@ import {Arbitration} from "../src/Arbitration.sol";
 import {ClaimMarket} from "../src/ClaimMarket.sol";
 import {SquareHook} from "../src/SquareHook.sol";
 import {PolicyRegistry} from "../src/PolicyRegistry.sol";
+import {ComplianceModule} from "../src/ComplianceModule.sol";
+import {Groth16Verifier} from "../src/Groth16Verifier.sol";
 
 contract DeploySettlement is Script {
     struct Params {
@@ -29,6 +31,8 @@ contract DeploySettlement is Script {
         uint64 minBond;
         uint8 threshold;
         uint64 minReputationBudget;
+        uint64 timestampTolerance;
+        bool installComplianceModule;
         address[] arbiters;
     }
 
@@ -39,6 +43,8 @@ contract DeploySettlement is Script {
         address claimMarket;
         address squareHook;
         address policyRegistry;
+        address groth16Verifier;
+        address complianceModule;
     }
 
     function run() external returns (Deployment memory d) {
@@ -68,6 +74,8 @@ contract DeploySettlement is Script {
         p.minBond = uint64(vm.envOr("MIN_BOND", uint256(1_000_000)));
         p.threshold = uint8(vm.envOr("ARBITER_THRESHOLD", uint256(2)));
         p.minReputationBudget = uint64(vm.envOr("MIN_REPUTATION_BUDGET", uint256(1_000_000)));
+        p.timestampTolerance = uint64(vm.envOr("TIMESTAMP_TOLERANCE", uint256(1 hours)));
+        p.installComplianceModule = vm.envOr("INSTALL_COMPLIANCE_MODULE", false);
         p.arbiters = vm.envOr("ARBITERS", ",", new address[](0));
     }
 
@@ -92,22 +100,43 @@ contract DeploySettlement is Script {
             p.minReputationBudget
         );
 
+        Groth16Verifier verifier = new Groth16Verifier();
+        ComplianceModule compliance =
+            new ComplianceModule(address(verifier), address(registry), address(kernel), p.deployer, p.timestampTolerance);
+        compliance.setHook(address(hook));
+        registry.setSpender(address(compliance), true);
+
         keeper.setArbitration(address(arbitration));
         kernel.setHookWhitelist(address(hook), true);
         if (p.arbiters.length > 0) arbitration.setArbiters(p.arbiters, p.threshold);
+        if (p.installComplianceModule) {
+            hook.setComplianceModule(address(compliance));
+            console2.log("compliance module installed on the hook: every release now needs a proof bound to the job");
+        } else {
+            console2.log("compliance module deployed and registered as a spender, not installed on the hook");
+            console2.log("INSTALL_COMPLIANCE_MODULE=true installs it");
+        }
         if (p.owner != p.deployer) {
             kernel.transferOwnership(p.owner);
             keeper.transferOwnership(p.owner);
             arbitration.transferOwnership(p.owner);
             hook.transferOwnership(p.owner);
             registry.transferOwnership(p.owner);
+            compliance.transferOwnership(p.owner);
             console2.log("ownership offered to", p.owner);
             console2.log("it passes only when that account calls acceptOwnership() on each of");
-            console2.log("SquareJob, KeeperEvaluator, Arbitration, SquareHook and PolicyRegistry;");
+            console2.log("SquareJob, KeeperEvaluator, Arbitration, SquareHook, PolicyRegistry and ComplianceModule;");
             console2.log("until then the deployer owns them");
         }
         d = Deployment(
-            address(kernel), address(keeper), address(arbitration), address(market), address(hook), address(registry)
+            address(kernel),
+            address(keeper),
+            address(arbitration),
+            address(market),
+            address(hook),
+            address(registry),
+            address(verifier),
+            address(compliance)
         );
     }
 
@@ -115,12 +144,16 @@ contract DeploySettlement is Script {
         string memory json = "deployment";
         vm.serializeUint(json, "chainId", block.chainid);
         vm.serializeUint(json, "block", block.number);
+        vm.serializeString(json, "commit", vm.envOr("GIT_COMMIT", string("unknown")));
+        vm.serializeString(json, "compiler", "0.8.28+cancun");
         vm.serializeAddress(json, "SquareJob", d.squareJob);
         vm.serializeAddress(json, "KeeperEvaluator", d.keeperEvaluator);
         vm.serializeAddress(json, "Arbitration", d.arbitration);
         vm.serializeAddress(json, "ClaimMarket", d.claimMarket);
         vm.serializeAddress(json, "SquareHook", d.squareHook);
         vm.serializeAddress(json, "PolicyRegistry", d.policyRegistry);
+        vm.serializeAddress(json, "Groth16Verifier", d.groth16Verifier);
+        vm.serializeAddress(json, "ComplianceModule", d.complianceModule);
         vm.serializeAddress(json, "USDC", p.usdc);
         vm.serializeAddress(json, "IdentityRegistry", p.identity);
         vm.serializeAddress(json, "ReputationRegistry", p.reputation);
