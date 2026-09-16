@@ -6,6 +6,8 @@ import {
   GATED_FINALIZE_GAS,
   MODULELESS_FINALIZE_DECIDED_GAS,
   MODULELESS_FINALIZE_GAS,
+  readComplianceGate,
+  describeGate,
 } from "../src/gas.js";
 import { minimumProfitableBudget } from "../src/decide.js";
 
@@ -78,5 +80,84 @@ describe("the moving average of the receipts", () => {
     noWindow.record("finalize", 1_052_107n);
     expect(noWindow.assumed("finalize")).toBe(450_000n);
     expect(noWindow.source("finalize")).toBe("default");
+  });
+});
+
+describe("reading the gate when the chain will not answer", () => {
+  const noteTaking = () => {
+    const notes: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    return {
+      notes,
+      logger: { warn: (event: string, fields: Record<string, unknown>) => notes.push({ event, fields }) },
+    };
+  };
+
+  it("does not throw, so the process reaches the port it serves health on", async () => {
+    const { logger, notes } = noteTaking();
+    const dead = {
+      complianceModule: async () => {
+        throw new Error("HTTP request failed. URL: http://127.0.0.1:9/");
+      },
+      complianceTolerance: async () => 3_600n,
+    };
+
+    const gate = await readComplianceGate(dead as never, logger as never);
+
+    expect(gate).toEqual({ module: null, tolerance: null, gated: true, known: false });
+    expect(notes.map((note) => note.event)).toEqual(["keeper.gate_unknown"]);
+  });
+
+  it("assumes the gated figure when it cannot tell, because that is the assumption that costs nothing", async () => {
+    const { logger } = noteTaking();
+    const dead = {
+      complianceModule: async () => {
+        throw new Error("fetch failed");
+      },
+      complianceTolerance: async () => 3_600n,
+    };
+
+    const gate = await readComplianceGate(dead as never, logger as never);
+
+    expect(finalizeGasDefaults(gate.gated)).toEqual({
+      finalizeGas: GATED_FINALIZE_GAS,
+      finalizeDecidedGas: GATED_FINALIZE_DECIDED_GAS,
+    });
+    expect(describeGate(gate)).toBe("the hook could not be read, so a compliance module is assumed");
+  });
+
+  it("reads a live chain exactly as before", async () => {
+    const { logger, notes } = noteTaking();
+    const live = {
+      complianceModule: async () => "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e" as const,
+      complianceTolerance: async () => 7_200n,
+    };
+
+    const gate = await readComplianceGate(live as never, logger as never);
+
+    expect(gate).toEqual({
+      module: "0xB7f8BC63BbcaD18155201308C8f3540b07f84F5e",
+      tolerance: 7_200n,
+      gated: true,
+      known: true,
+    });
+    expect(notes).toEqual([]);
+  });
+
+  it("reads a moduleless chain as moduleless, and asks it for no tolerance", async () => {
+    const { logger } = noteTaking();
+    let toleranceAsked = 0;
+    const live = {
+      complianceModule: async () => null,
+      complianceTolerance: async () => {
+        toleranceAsked += 1;
+        return 3_600n;
+      },
+    };
+
+    const gate = await readComplianceGate(live as never, logger as never);
+
+    expect(gate).toEqual({ module: null, tolerance: null, gated: false, known: true });
+    expect(toleranceAsked).toBe(0);
+    expect(finalizeGasDefaults(gate.gated).finalizeGas).toBe(MODULELESS_FINALIZE_GAS);
   });
 });

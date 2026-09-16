@@ -1,3 +1,7 @@
+import type { Address } from "viem";
+import type { Logger } from "@squaresdk/observability";
+import type { SquareClient } from "@squaresdk/core";
+
 export type SettlementAction = "finalize" | "finalizeDecided";
 
 export const MODULELESS_FINALIZE_GAS = 450_000n;
@@ -17,6 +21,41 @@ export function finalizeGasDefaults(gated: boolean): FinalizeGasDefaults {
   return gated
     ? { finalizeGas: GATED_FINALIZE_GAS, finalizeDecidedGas: GATED_FINALIZE_DECIDED_GAS }
     : { finalizeGas: MODULELESS_FINALIZE_GAS, finalizeDecidedGas: MODULELESS_FINALIZE_DECIDED_GAS };
+}
+
+export interface ComplianceGate {
+  module: Address | null;
+  tolerance: bigint | null;
+  gated: boolean;
+  known: boolean;
+}
+
+export async function readComplianceGate(
+  client: Pick<SquareClient, "complianceModule" | "complianceTolerance">,
+  logger: Pick<Logger, "warn">,
+): Promise<ComplianceGate> {
+  try {
+    const module = await client.complianceModule();
+    const tolerance = module === null ? null : await client.complianceTolerance();
+    return { module, tolerance, gated: module !== null, known: true };
+  } catch (error) {
+    logger.warn("keeper.gate_unknown", {
+      reason:
+        `the hook could not be read at startup (${error instanceof Error ? error.message : String(error)}), ` +
+        "so the keeper assumes a compliance module is installed and starts anyway. That assumption is the safe " +
+        "one of the two: the gated figure skips work the keeper could have taken, the moduleless figure takes " +
+        "work at a loss, and the first receipt corrects either. The keeper answers /health as unhealthy while " +
+        "the chain is unreachable rather than refusing to start, because an operator needs it to say why.",
+    });
+    return { module: null, tolerance: null, gated: true, known: false };
+  }
+}
+
+export function describeGate(gate: ComplianceGate): string {
+  if (!gate.known) return "the hook could not be read, so a compliance module is assumed";
+  return gate.module === null
+    ? "no compliance module is installed"
+    : `a compliance module is installed at ${gate.module}`;
 }
 
 export interface GasAssumptionOptions {
