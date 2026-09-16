@@ -37,7 +37,7 @@ jobs:
           # --verbose birlikte --redact ile: bulgunun kural adini, dosyasini ve satirini
           # basar, degerini basmaz. Onsuz cikti yalnizca "leaks found: N" oluyor ve
           # zorunlu bir kapi neyi reddettigini soylemeden merge'i durduruyor (square#174).
-          ./gitleaks detect --source . --redact --no-banner --exit-code 1 --verbose
+          ./gitleaks detect --source . --redact --no-banner --exit-code 1 --verbose --log-opts=HEAD
 
   grep:
     name: forbidden strings
