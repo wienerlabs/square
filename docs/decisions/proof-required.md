@@ -17,6 +17,7 @@ the deployed hook refunds a missing proof the way it refunds a refused one.
 [i353]: https://github.com/wienerlabs/square/issues/353
 [i372]: https://github.com/wienerlabs/square/issues/372
 [i382]: https://github.com/wienerlabs/square/issues/382
+[i396]: https://github.com/wienerlabs/square/issues/396
 
 ## The question
 
@@ -106,9 +107,16 @@ its duty.**
   client has abandoned is visible on chain as such.
 - **Old policies have to be kept until their jobs settle.** With the
   commitment pinned, a job funded under policy P proves against P even after
-  the institution moved to P'. The duty has to say so when the pinned
-  commitment is not the policy file's (`square policy prove --file` with
-  the older file is the answer), which is a follow-up in `@squaresdk/policy`.
+  the institution moved to P'. The duty says so when the pinned commitment is
+  not the policy file's (`policy-pinned`, naming the pin; `square policy
+  prove --file` with the older file is the answer), since [#396][i396].
+- **The mandate's refusal has to be put on the chain.** A job the policy
+  refuses no longer refunds by itself: with nothing bound it waits. So the
+  institution's duty binds the refusing proof once the refusal is the
+  mandate's last word (a rule that says the same tomorrow, or a job about to
+  expire), and the release refuses it back to the institution; a refusal the
+  day's counter or the policy's hours can clear is waited out ([#396][i396],
+  [proof-freshness.md](proof-freshness.md)).
 - **`claimRefund` stays closed on a submitted job the evaluator can settle.**
   It is today (`SquareJob.claimRefund` refuses with `SettledByEvaluator`
   while the hook resolves a payout), and the probe it makes has to keep

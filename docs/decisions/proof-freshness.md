@@ -99,11 +99,28 @@ record is asked about at the screener the duty was given and, still without
 one, held rather than cranked into the refusal (square#369;
 [sanctions-screening.md](sanctions-screening.md) §4).
 
-**A release the policy refuses is reported, not bound.** The circuit proves
-the six checks ran, not that they passed, and a proof with `is_compliant = 0`
-is refused at release the way no proof is. The prover names the rules that
-failed, so the duty reports them and binds nothing; binding would only spend
-gas to make the module say the same thing.
+**A release the policy refuses is reported, and bound once it is the
+mandate's last word** (square#396, amended from "reported, not bound"). The
+circuit proves the six checks ran, not that they passed, and a proof with
+`is_compliant = 0` is refused at release. While a job with no proof was
+refunded, binding the refusal only spent gas to make the module say the same
+thing; since [proof-required.md](proof-required.md) a job with no proof does
+not settle, so the refusal has to reach the chain to end the escrow. The duty
+reports the rules the prover names, and binds the refusing proof when the
+rule says the same tomorrow (the category, the recipient, the token, the
+per-transaction ceiling, or a payment larger than the day's ceiling): the
+module refuses it at release and the net returns to the institution. A rule
+the day's counter or the policy's hours can clear (`daily_limit` within the
+ceiling, `time_window`) is waited out and tried again each tick, until the
+job is about to expire, when the refusal is bound too. `square policy prove
+--bind-refusal` is the same by hand.
+
+**The proof is made against the commitment pinned at funding.** The hook
+records the client's commitment when the job is funded and the module binds
+to that record ([proof-required.md](proof-required.md)); `releaseFacts`
+reads the pin (`SquareClient.commitmentAtFund`) and a policy file that
+computes the commitment committed since is refused as `policy-pinned`,
+naming the pin and the older file that proves against it.
 
 **The policy file is the secret, and the institution's tools never send it.** The
 eight leaf salts derive from `policy_salt`; whoever holds it can open the

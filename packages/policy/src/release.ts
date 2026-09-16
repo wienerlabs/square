@@ -31,20 +31,31 @@ export interface ReleaseFacts {
   dailySpentBefore: bigint;
   /** The chain's clock: the latest block's timestamp. */
   now: bigint;
-  /** `PolicyRegistry.commitmentOf(client)`, zero when the client committed no policy. */
+  /**
+   * The commitment the module binds the proof to: the one the hook pinned
+   * when the job was funded (square#382), else `PolicyRegistry.commitmentOf(client)`,
+   * zero when the client committed no policy.
+   */
   commitment: Hex;
+  /** `PolicyRegistry.commitmentOf(client)` as it stands now, which is `commitment` unless the client committed another policy since funding. */
+  liveCommitment: Hex;
+  /** The commitment pinned at funding, null when the hook pinned nothing for this job. */
+  pinnedCommitment: Hex | null;
   challengeEnd: bigint | null;
   disputed: boolean;
+  /** The job's `expiredAt`: after it the job can only expire, so a refusal still waiting is bound before it. */
+  expiredAt: bigint;
 }
 
 export async function releaseFacts(client: SquareClient, jobId: bigint): Promise<ReleaseFacts> {
   const record = await client.getJobRecord(jobId);
-  const [payee, amount, spent, block, policy] = await Promise.all([
+  const [payee, amount, spent, block, policy, pinned] = await Promise.all([
     client.payeeOf(jobId),
     client.netPayout(jobId),
     client.spentToday(record.client),
     client.publicClient.getBlock({ blockTag: "latest" }),
     client.policyOf(record.client),
+    client.commitmentAtFund(jobId, record.hook),
   ]);
   const submitted = record.status === JobStatus.Submitted;
   const [challengeEnd, disputed] = submitted ? await Promise.all([client.challengeEndsAt(jobId), client.isDisputed(jobId)]) : [null, false];
@@ -68,10 +79,26 @@ export async function releaseFacts(client: SquareClient, jobId: bigint): Promise
     token: client.deployment.usdc,
     dailySpentBefore: spent,
     now: block.timestamp,
-    commitment: policy.commitment,
+    commitment: pinned ?? policy.commitment,
+    liveCommitment: policy.commitment,
+    pinnedCommitment: pinned,
     challengeEnd: challengeEnd === null ? null : BigInt(challengeEnd),
     disputed,
+    expiredAt: BigInt(record.expiredAt),
   };
+}
+
+/**
+ * The rules a refusal can be waited out of. `daily_limit` clears when the
+ * day's counter resets, as long as the amount alone fits under the ceiling;
+ * `time_window` clears when the policy's hours come round. Every other rule,
+ * the category, the recipient, the token, the per-transaction ceiling, says
+ * the same tomorrow, and a refusal on one of those is the mandate's answer
+ * for the job.
+ */
+export function refusalIsTransient(violated: ViolatedRule[] | null, facts: Pick<ReleaseFacts, "amount">, policy: Pick<Policy, "max_daily_spend">): boolean {
+  if (violated === null || violated.length === 0) return false;
+  return violated.every((rule) => rule === "time_window" || (rule === "daily_limit" && facts.amount <= BigInt(policy.max_daily_spend)));
 }
 
 export type ProofState =
@@ -121,12 +148,22 @@ export interface BindOptions {
   category: string | undefined;
   facts?: ReleaseFacts | undefined;
   signal?: AbortSignal | undefined;
+  /**
+   * Bind the proof even when the circuit marks the release non-compliant
+   * (square#396). Since square#382 a job with no proof does not settle, so the
+   * mandate's refusal has to reach the chain to end the escrow: the module
+   * refuses the bound proof at release and the net returns to the client.
+   * Off by default; the duty sets it once a refusal is the mandate's last
+   * word on the job.
+   */
+  bindRefusal?: boolean | undefined;
 }
 
 export type BindOutcome =
-  | { bound: true; proof: Hex; transaction: Hex; facts: ReleaseFacts; category: string }
+  | { bound: true; proof: Hex; transaction: Hex; facts: ReleaseFacts; category: string; verdict: "compliant" }
+  | { bound: true; proof: Hex; transaction: Hex; facts: ReleaseFacts; category: string; verdict: "refusal"; violated: ViolatedRule[] | null }
   | { bound: false; reason: "not-compliant"; violated: ViolatedRule[] | null; facts: ReleaseFacts; category: string }
-  | { bound: false; reason: "policy-not-committed" | "policy-differs" | "not-this-client" | "module-refuses" | "terminal"; detail: string; facts: ReleaseFacts };
+  | { bound: false; reason: "policy-not-committed" | "policy-differs" | "policy-pinned" | "not-this-client" | "module-refuses" | "terminal"; detail: string; facts: ReleaseFacts };
 
 /**
  * Build the proof for this job's release as it stands now, and bind it.
@@ -134,11 +171,15 @@ export type BindOutcome =
  * Refuses before proving when the chain holds no commitment for the client
  * or a different one from this policy's (a proof under the wrong commitment
  * is refused at release, so it is refused here, before the prover's seconds
- * and the transaction's gas). A proof the circuit marks non-compliant is
- * reported and not bound: binding it would only make the module say the
- * same thing, and the rules it names are the answer the institution needs.
- * The module's own `previewRelease` is asked last, so a proof the module
- * would refuse for a reason this code did not foresee never reaches the job.
+ * and the transaction's gas); when the job was funded under a commitment the
+ * client has since replaced, the refusal names the pin and the older file
+ * that proves against it. A proof the circuit marks non-compliant is
+ * reported and not bound unless `bindRefusal` says so: since square#382 a job
+ * with no proof holds its escrow, and binding the refusal is how the mandate's
+ * answer settles it (the module refuses it at release and the net returns to
+ * the client). The module's own `previewRelease` is asked last for a
+ * compliant proof, so one the module would refuse for a reason this code did
+ * not foresee never reaches the job.
  */
 export async function bindComplianceProof(options: BindOptions): Promise<BindOutcome> {
   const { client, policy, prover, jobId } = options;
@@ -154,6 +195,14 @@ export async function bindComplianceProof(options: BindOptions): Promise<BindOut
   }
   const commitment = await policyCommitment(policy);
   if (commitment.hex.toLowerCase() !== facts.commitment.toLowerCase()) {
+    if (facts.pinnedCommitment !== null && commitment.hex.toLowerCase() === facts.liveCommitment.toLowerCase()) {
+      return {
+        bound: false,
+        reason: "policy-pinned",
+        detail: `job ${jobId} was funded under commitment ${facts.pinnedCommitment} and is proved against it; this policy is the one committed since (${commitment.hex}). Prove with the policy file that computes the pinned commitment (square policy prove --file <older file>)`,
+        facts,
+      };
+    }
     return { bound: false, reason: "policy-differs", detail: `the chain holds commitment ${facts.commitment}, this policy computes ${commitment.hex}`, facts };
   }
   const payment = { recipient: facts.payee, amount: facts.amount, token: facts.token, dailySpentBefore: facts.dailySpentBefore, timestamp: facts.now };
@@ -168,14 +217,21 @@ export async function bindComplianceProof(options: BindOptions): Promise<BindOut
     category = candidates[i]!;
     response = await prover.prove(proveRequest(policy, { ...payment, category }), { signal: options.signal });
   }
-  if (!response.is_compliant) return { bound: false, reason: "not-compliant", violated: response.violated_rules, facts, category };
+  if (!response.is_compliant) {
+    if (options.bindRefusal !== true) return { bound: false, reason: "not-compliant", violated: response.violated_rules, facts, category };
+    // The mandate's no, put on the chain so the module can pronounce it: no
+    // preview, since the preview would say what is being bound on purpose.
+    const refusal = encodeComplianceProof(response.solidity);
+    const bound = await client.setComplianceProof(jobId, refusal);
+    return { bound: true, proof: refusal, transaction: bound.hash, facts, category, verdict: "refusal", violated: response.violated_rules };
+  }
   const proof = encodeComplianceProof(response.solidity);
   const preview = await client.previewRelease({ jobId, payee: facts.payee, amount: facts.amount, client: facts.client, proof });
   if (preview === false) {
-    return { bound: false, reason: "module-refuses", detail: "the installed module refuses the proof it was built for; the verifier and the prover's key may differ", facts };
+    return { bound: false, reason: "module-refuses", detail: "the installed module refuses a proof the circuit accepted: the module's verifier is keyed to another proving key than these artifacts, or the release moved between the read and the preview", facts };
   }
   const result = await client.setComplianceProof(jobId, proof);
-  return { bound: true, proof, transaction: result.hash, facts, category };
+  return { bound: true, proof, transaction: result.hash, facts, category, verdict: "compliant" };
 }
 
 function onlyTheCategoryFailed(response: { is_compliant: boolean; violated_rules: ViolatedRule[] | null }): boolean {

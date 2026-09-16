@@ -139,4 +139,31 @@ describe.skipIf(notReady !== null)("square policy, on the compliance stack", () 
     expect((await institution.getJobRecord(jobId)).status).toBe(JobStatus.Completed);
     expect((await provider.withdrawable(account(2).address)) - owed).toBe(net);
   }, 180_000);
+
+  // square#396: a job with no proof does not settle, so the mandate's refusal
+  // is bound on purpose and the release returns the net to the institution.
+  it("prove --bind-refusal binds the policy's refusal, and the release returns the net to the institution", async () => {
+    const pending = await publicClient.getBlock({ blockTag: "pending" });
+    const { jobId: refused } = await institution.createJob({ provider: account(2).address, expiredAt: pending.timestamp + 30n * 86_400n, spec: { task: "translate" } });
+    await provider.setBudget(refused, parseUnits("5", 6));
+    await institution.fund(refused, parseUnits("5", 6));
+    await provider.submit({ jobId: refused, deliverable: hashDeliverable(`cli ${refused}`), agentId: 1n });
+    const bound = parse<{ bound: boolean; verdict: string; violated: string[] }>(
+      await run("policy", "prove", refused.toString(), "--file", policyFile, "--artifacts", artifacts, "--category", "not.allowed", "--bind-refusal", ...network, "--json"),
+    );
+    expect(bound).toMatchObject({ bound: true, verdict: "refusal", violated: ["endpoint_category"] });
+    const status = parse<{ state: { kind: string; reasons?: string[] }; facts: { pinnedCommitment: string | null } }>(await run("policy", "status", refused.toString(), ...network, "--json"));
+    expect(status.state.kind).toBe("stale");
+    expect(status.state.reasons?.join(" ")).toMatch(/not compliant/);
+    expect(status.facts.pinnedCommitment).not.toBeNull();
+
+    await testClient.increaseTime({ seconds: 86_400 + 1 });
+    await testClient.mine({ blocks: 1 });
+    const owedToProvider = await provider.withdrawable(account(2).address);
+    const owedToClient = await institution.withdrawable(account(1).address);
+    await institution.finalize(refused);
+    expect((await institution.getJobRecord(refused)).status).toBe(JobStatus.Completed);
+    expect(await provider.withdrawable(account(2).address)).toBe(owedToProvider);
+    expect((await institution.withdrawable(account(1).address)) - owedToClient).toBe(await institution.netPayout(refused));
+  }, 180_000);
 });
