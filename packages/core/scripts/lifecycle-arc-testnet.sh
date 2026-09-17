@@ -9,12 +9,14 @@ export CHAIN_ID=5042002
 export LIFECYCLE_ACTORS_FILE="${LIFECYCLE_ACTORS_FILE:-$HOME/.square/arc-testnet-actors.env}"
 export GAS_PRICE_WEI="${GAS_PRICE_WEI:-21200000000}"
 export FUND_PER_ACTOR="${FUND_PER_ACTOR:-1}"
-# A keeper cranks nothing under its profitability bar (about 2.3 USDC a job at Arc's
-# gas price and the deployed fee, docs/design/mandate-to-payment.md), so keeper mode
-# funds bigger jobs: six of them, their bonds and the gas.
+# A keeper cranks nothing under its profitability bar: about 5.6 USDC a job at Arc's
+# gas price and the deployed fee since square#399 made it assume a gated finalize's
+# real gas and average its receipts (docs/design/mandate-to-payment.md). Keeper mode
+# funds bigger jobs, with room for the receipts and the gas price to move: six of
+# them, their bonds and the gas.
 if [ "${LIFECYCLE_FINALIZER:-self}" = "keeper" ]; then
-  export FUND_CLIENT="${FUND_CLIENT:-45}"
-  export BUDGET_USDC="${BUDGET_USDC:-6}"
+  export FUND_CLIENT="${FUND_CLIENT:-70}"
+  export BUDGET_USDC="${BUDGET_USDC:-10}"
 else
   export FUND_CLIENT="${FUND_CLIENT:-3.2}"
   export BUDGET_USDC="${BUDGET_USDC:-0.25}"
