@@ -10,6 +10,7 @@ import {SquareHook} from "../src/SquareHook.sol";
 import {PolicyRegistry} from "../src/PolicyRegistry.sol";
 import {ComplianceModule} from "../src/ComplianceModule.sol";
 import {Groth16Verifier} from "../src/Groth16Verifier.sol";
+import {ScreeningRegistry} from "../src/ScreeningRegistry.sol";
 
 contract DeploySettlement is Script {
     struct Params {
@@ -32,7 +33,10 @@ contract DeploySettlement is Script {
         uint8 threshold;
         uint64 minReputationBudget;
         uint64 timestampTolerance;
+        uint64 screeningMaxAge;
+        address screenerAddress;
         bool installComplianceModule;
+        bool installScreening;
         address[] arbiters;
     }
 
@@ -45,6 +49,7 @@ contract DeploySettlement is Script {
         address policyRegistry;
         address groth16Verifier;
         address complianceModule;
+        address screeningRegistry;
     }
 
     function run() external returns (Deployment memory d) {
@@ -75,7 +80,10 @@ contract DeploySettlement is Script {
         p.threshold = uint8(vm.envOr("ARBITER_THRESHOLD", uint256(2)));
         p.minReputationBudget = uint64(vm.envOr("MIN_REPUTATION_BUDGET", uint256(1_000_000)));
         p.timestampTolerance = uint64(vm.envOr("TIMESTAMP_TOLERANCE", uint256(1 hours)));
+        p.screeningMaxAge = uint64(vm.envOr("SCREENING_MAX_AGE", uint256(1 hours)));
+        p.screenerAddress = vm.envOr("SCREENER_ADDRESS", address(0));
         p.installComplianceModule = vm.envOr("INSTALL_COMPLIANCE_MODULE", false);
+        p.installScreening = vm.envOr("INSTALL_SCREENING", false);
         p.arbiters = vm.envOr("ARBITERS", ",", new address[](0));
     }
 
@@ -106,6 +114,14 @@ contract DeploySettlement is Script {
         compliance.setHook(address(hook));
         registry.setSpender(address(compliance), true);
 
+        ScreeningRegistry screening = new ScreeningRegistry(p.deployer, p.screeningMaxAge);
+        if (p.screenerAddress != address(0)) {
+            screening.setScreener(p.screenerAddress, true);
+            console2.log("screener registered on the screening registry:", p.screenerAddress);
+        } else {
+            console2.log("no SCREENER_ADDRESS: the registry recognises no screener, so it clears nobody");
+        }
+
         keeper.setArbitration(address(arbitration));
         kernel.setHookWhitelist(address(hook), true);
         if (p.arbiters.length > 0) arbitration.setArbiters(p.arbiters, p.threshold);
@@ -116,6 +132,13 @@ contract DeploySettlement is Script {
             console2.log("compliance module deployed and registered as a spender, not installed on the hook");
             console2.log("INSTALL_COMPLIANCE_MODULE=true installs it");
         }
+        if (p.installScreening) {
+            hook.setScreening(address(screening));
+            console2.log("screening installed on the hook: funding and release now need a fresh screening");
+        } else {
+            console2.log("screening registry deployed, not installed on the hook");
+            console2.log("INSTALL_SCREENING=true installs it");
+        }
         if (p.owner != p.deployer) {
             kernel.transferOwnership(p.owner);
             keeper.transferOwnership(p.owner);
@@ -123,10 +146,11 @@ contract DeploySettlement is Script {
             hook.transferOwnership(p.owner);
             registry.transferOwnership(p.owner);
             compliance.transferOwnership(p.owner);
+            screening.transferOwnership(p.owner);
             console2.log("ownership offered to", p.owner);
             console2.log("it passes only when that account calls acceptOwnership() on each of");
-            console2.log("SquareJob, KeeperEvaluator, Arbitration, SquareHook, PolicyRegistry and ComplianceModule;");
-            console2.log("until then the deployer owns them");
+            console2.log("SquareJob, KeeperEvaluator, Arbitration, SquareHook, PolicyRegistry, ComplianceModule");
+            console2.log("and ScreeningRegistry; until then the deployer owns them");
         }
         d = Deployment(
             address(kernel),
@@ -136,7 +160,8 @@ contract DeploySettlement is Script {
             address(hook),
             address(registry),
             address(verifier),
-            address(compliance)
+            address(compliance),
+            address(screening)
         );
     }
 
@@ -154,6 +179,7 @@ contract DeploySettlement is Script {
         vm.serializeAddress(json, "PolicyRegistry", d.policyRegistry);
         vm.serializeAddress(json, "Groth16Verifier", d.groth16Verifier);
         vm.serializeAddress(json, "ComplianceModule", d.complianceModule);
+        vm.serializeAddress(json, "ScreeningRegistry", d.screeningRegistry);
         vm.serializeAddress(json, "USDC", p.usdc);
         vm.serializeAddress(json, "IdentityRegistry", p.identity);
         vm.serializeAddress(json, "ReputationRegistry", p.reputation);

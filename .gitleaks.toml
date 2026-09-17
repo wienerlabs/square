@@ -67,3 +67,13 @@ regexes = [
   '''0xb43db544E2c27092c107639Ad201b3dEfAbcF192''',
   '''0x1c7[dD]4[bB]196[cC][bB]0[cC]7[bB]01[dD]743[fF][bB][cC]6116[aA]902379[cC]7238''',
 ]
+
+[[allowlists]]
+description = """Anvil's published test account 7 private key. The local stack's
+screener (compose.yaml) signs with it and DeployLocal registers the same account
+on the ScreeningRegistry it deploys; the key is in Foundry's documentation and in
+anvil's startup output, and it controls nothing outside chain 31337. The
+exception is by VALUE, not by path: any other key added to .env.example is still
+reported."""
+regexTarget = "line"
+regexes = ['''0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356''']

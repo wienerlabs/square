@@ -1,10 +1,11 @@
 # The services on Railway
 
 **Status:** the setup, written before the project exists ([#336][i336]);
-what it needs from the repository is in place (the images, the pipeline that
-builds and publishes them, the redeploy hook). The account, the project, the
-keeper's key and where the alerts go are named when the services are brought
-up, and the record of that is `docs/deploy/services-5042002-<date>.md`. The
+what it needs from the repository is in place (the images, including the
+screener's since [#370][i370], the pipeline that builds and publishes them, the
+redeploy hook). The account, the project, the keeper's key and where the alerts
+go are named when the services are brought up, and the record of that is
+`docs/deploy/services-5042002-<date>.md`. The
 provider and the shape are [service-hosting.md](../decisions/service-hosting.md).
 
 [i324]: https://github.com/wienerlabs/square/issues/324
@@ -20,7 +21,7 @@ provider and the shape are [service-hosting.md](../decisions/service-hosting.md)
 | `postgres` | Railway's managed Postgres | | the mirror the indexer writes and the keeper reads ([data-layer.md](../design/data-layer.md)) |
 | `square-indexer` | `ghcr.io/wienerlabs/square-indexer:main` | 3010 | `/status`, `/jobs/finalizable`, `/actions`, the app's inbox; feeds the keeper |
 | `square-keeper` | `ghcr.io/wienerlabs/square-keeper:main` | 3011 | finalizes every job whose window closed; `/actions` is its journal |
-| `square-screener` | `ghcr.io/wienerlabs/square-screener:main`, once [#370][i370] gives it a Dockerfile and a row in `services.yml` | 3012 | screens funding and release parties against TRM; the keeper asks it before a release |
+| `square-screener` | `ghcr.io/wienerlabs/square-screener:main` | 3012 | screens funding and release parties against TRM; the keeper asks it before a release ([#370][i370]) |
 | `square-prover` | `ghcr.io/wienerlabs/square-prover:main` | 3003 | the app's job page only ([#347][i347]); its artifacts are [#353][i353]'s, below |
 | `square-hosted` | `ghcr.io/wienerlabs/square-hosted:main` | 3000 | the hosted agent of [#336][i336]'s addendum: an agent registered on Arc, its card resolvable, taking work through `square_hire` and delivering it |
 
@@ -46,6 +47,11 @@ step needs a **project token** (Railway: project settings, Tokens, scoped to
 the environment) stored as the repository secret `RAILWAY_TOKEN`; without it
 the workflow says so in its summary and the image is still published, and the
 operator redeploys by hand (the service's Redeploy, or the same CLI command).
+With the token in place the step lists the project's services first
+(`railway status --json`) and redeploys only a service that exists, so an image
+whose service has not been created yet (the hosted agent before its wallet, the
+screener before the Arc redeploy) is published and named in the summary rather
+than failing its job.
 There is no `:latest`, and `sha-` tags are never moved, so
 `docs/deploy/services-5042002-<date>.md` can name the exact build that ran.
 
@@ -58,8 +64,8 @@ service.
 
 ## Setting a service up
 
-For each of the two services the keeper's job needs (the indexer and the
-keeper), and later the screener:
+For each of the three services the keeper's job needs (the indexer, the
+screener and the keeper):
 
 1. New service, **Docker image**, `ghcr.io/wienerlabs/square-<name>:main`.
 2. Variables, below. `PORT` is set explicitly to the port in the table, and
@@ -132,7 +138,7 @@ again, which is where `KEEPER_PRIVATE_KEY` goes.
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` | required; the keeper reads the mirror the indexer writes |
 | `KEEPER_PRIVATE_KEY` | sealed | required; a key of its own, never a published test key, funded with native USDC for gas ([#336][i336] names who holds and funds it) |
 | `PORT` | `3011` | |
-| `SCREENER_URL` | `https://<square-screener's domain>` | once the screener runs ([#370][i370]); on a hook that screens, a keeper without it finalizes into refusals |
+| `SCREENER_URL` | `https://<square-screener's domain>` | required whenever `SquareHook.screening()` is set: without it the keeper refuses to start, because it would otherwise finalize stale payees into refusals ([#370][i370]) |
 | `ALERT_WEBHOOK_URL` | where alerts go | `keeperStalled` fires when a finalizable job waits longer than `MAX_PENDING_AGE_SECONDS` |
 | `SQUARE_VERSION` | the `sha-` tag deployed | optional |
 | `FINALIZE_GAS`, `FINALIZE_DECIDED_GAS`, `MINIMUM_MARGIN_BPS`, `MIN_ACTIONS_FUNDED`, `POLL_INTERVAL_MS`, `RECORD_EXPIRIES`, `EXPIRY_*`, `RETRY_*`, `MAX_PENDING_AGE_SECONDS`, `MAX_TICK_AGE_SECONDS`, `SCREENER_TIMEOUT_MS` | defaults | `services/keeper/src/main.ts`; `FINALIZE_GAS` is what the profitability decision assumes and is [#344](https://github.com/wienerlabs/square/issues/344)'s |
@@ -140,6 +146,31 @@ again, which is where `KEEPER_PRIVATE_KEY` goes.
 `/health` on the keeper is 503 while the key cannot pay for `MIN_ACTIONS_FUNDED`
 finalizes at the current gas price, so an unfunded key fails the deploy's
 health gate rather than starting a keeper that skips every job.
+
+**square-screener**
+
+| Variable | Value | |
+|---|---|---|
+| `CHAIN_ID` | `5042002` | part of the EIP-712 domain the registry verifies |
+| `RPC_URL` | `https://rpc.testnet.arc.io` | required |
+| `SCREENING_REGISTRY` | the `ScreeningRegistry` of `contracts/deployments/5042002.json` | required here; the compose stack reads it from the record instead, through `SQUARE_DEPLOYMENT_FILE` |
+| `SCREENER_PRIVATE_KEY` | sealed | required; a key of its own, funded with native USDC, and the registry's owner has to `setScreener` its address or every screening it signs is refused |
+| `SCREENING_CANARY` | an address with a published designation | required, no default: if TRM stops flagging it the screener signs nothing and answers 503, which is the guard against a source that has quietly lost its list |
+| `PORT` | `3012` | |
+| `CORS_ORIGINS` | the app's origin | only if a browser is to call `/screen` |
+| `SQUARE_VERSION` | the `sha-` tag deployed | optional |
+| `SUBMIT_GAS`, `MIN_SUBMITS_FUNDED`, `RECEIPT_POLL_MS`, `TRM_BASE_URL` | defaults | `services/screener/README.md` |
+
+**TRM's free tier is a hundred requests a day**, and no key is sent because
+TRM's public documentation does not say how one is presented. A hire spends one
+request and a release spends one, so the allowance is about fifty jobs a day
+*if nothing is held*; a release the keeper cannot clear costs one request per
+tick, which at the default fifteen-second poll exhausts the day in about
+twenty-five minutes. Raise `POLL_INTERVAL_MS` on the keeper, or get a key. The
+key path, when TRM's onboarding gives one, is `TRM_API_KEY` read in
+`services/screener/src/source.ts` and added here as a sealed variable;
+`services/screener/README.md` carries both in full. This is the capacity number
+the shared testnet has to be planned against.
 
 **square-prover**
 
@@ -205,10 +236,6 @@ transaction on Arcscan. That file supersedes
 
 ## Not in this document
 
-- The screener's image and service ([#370][i370]); it joins `services.yml`'s
-  matrix with its Dockerfile, and this document's table gets its variables
-  (`RPC_URL`, `CHAIN_ID`, `SCREENING_REGISTRY`, `SCREENER_PRIVATE_KEY`,
-  `SCREENING_CANARY`, `PORT`, `TRM_BASE_URL`, `CORS_ORIGINS`).
 - A hosted agent that delegates: it proves in its own process and needs the
   circuit's files beside it, [#353][i353]'s question; the first hosted agent
   takes work and does not delegate.

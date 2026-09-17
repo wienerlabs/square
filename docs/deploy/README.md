@@ -54,7 +54,7 @@ each address is verified. The job is `deployed selectors (Arc Testnet)` and it i
 deliberately not in the required contexts while the shared stack is behind: add
 it to the required list once a redeploy has made it green.
 
-The other two are one line each:
+The other four are one line each:
 
 - `PolicyRegistry.isSpender(ComplianceModule)` is true. `recordSpend` is
   `onlySpender`, so a registry with no spender can never move its daily counter,
@@ -63,6 +63,16 @@ The other two are one line each:
 - `SquareHook.complianceModule()` is what you meant it to be. The script installs
   a module on the hook only when `INSTALL_COMPLIANCE_MODULE=true`, because once
   installed every release needs a proof bound to the job.
+- `SquareHook.screening()` is what you meant it to be. The script deploys a
+  `ScreeningRegistry` always and installs it on the hook when
+  `INSTALL_SCREENING=true`, which is what `deploy-arc-testnet.sh` defaults to
+  since #372 decided the shared stack screens; once installed nobody can fund
+  and no payee can be paid without a fresh clean screening (#370).
+- `ScreeningRegistry.isScreener(<the screener's address>)` is true whenever
+  screening is installed. The script registers `SCREENER_ADDRESS` when one is
+  given, and `deploy-arc-testnet.sh` refuses to broadcast an installed registry
+  with no screener: a registry that recognises no screener clears nobody, so it
+  would stop every hire and every release on that hook.
 
 ### The balance a redeploy has to reach zero
 
@@ -114,8 +124,9 @@ day of catching up from genesis with the lag check red throughout.
 1. Read the parameters back from the chain and record them
    (`settlementHorizon`, `finalizeGrace`, `currentWindow`, `MAX_DESCRIPTION`,
    `hookGasLimit`, the fees, `whitelistedHooks(hook)`, `payoutMarket`,
-   `trustedEvaluator`, `minReputationBudget`, `complianceModule`,
-   `bondParameters`, `arbiterSet`).
+   `trustedEvaluator`, `minReputationBudget`, `complianceModule`, `screening`,
+   `bondParameters`, `arbiterSet`), and for the screening registry the record
+   names, `maxAge()` and `isScreener()` of the screener's address.
 2. Sweep the superseded stack: finalize or reject every job still `Submitted`
    on the old `KeeperEvaluator`, have every account with a balance call
    `withdraw()` on the old `SquareJob` and `Arbitration`, and record the
