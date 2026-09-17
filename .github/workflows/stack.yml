@@ -12,7 +12,7 @@ name: stack
 # started on every pull request.
 #
 # What this proves: the images build, the contracts reach a chain, the schema
-# applies, the circuit artifacts are produced from source, and all four services
+# applies, the circuit artifacts are produced from source, and all five services
 # answer /health with a passing status over their published ports.
 
 on:

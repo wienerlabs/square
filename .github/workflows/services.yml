@@ -31,6 +31,7 @@ on:
       - "services/indexer/**"
       - "services/keeper/**"
       - "services/prover/**"
+      - "services/screener/**"
       - "packages/a2a/**"
       - "packages/agent/**"
       - "packages/core/**"
@@ -77,6 +78,8 @@ jobs:
             dockerfile: services/keeper/Dockerfile
           - service: prover
             dockerfile: services/prover/Dockerfile
+          - service: screener
+            dockerfile: services/screener/Dockerfile
           - service: hosted
             dockerfile: packages/hosted/Dockerfile
     env:
@@ -125,6 +128,7 @@ jobs:
             indexer) port=3010; args=(-e CHAIN_ID=31337 -e RPC_URL=http://127.0.0.1:9 -e START_BLOCK=0) ;;
             keeper)  port=3011; args=(-e CHAIN_ID=31337 -e RPC_URL=http://127.0.0.1:9 -e KEEPER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80) ;;
             prover)  port=3003; args=() ;;
+            screener) port=3012; args=(-e CHAIN_ID=31337 -e RPC_URL=http://127.0.0.1:9 -e SCREENING_REGISTRY=0x9A676e781A523b5d0C0e43731313A708CB607508 -e SCREENING_CANARY=0x098B716B8Aaf21512996dC57EB0615e2383E2f96 -e SCREENER_PRIVATE_KEY=0x4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356) ;;
           esac
           docker run -d --name "$SERVICE" -p "$port:$port" "${args[@]}" "${IMAGE}:candidate"
           code=000
@@ -164,6 +168,15 @@ jobs:
       # and said so, until the project token is in the repository's secrets
       # (docs/deploy/railway.md); a build that is not redeployed is still
       # published above, so the operator can pull it by hand.
+      #
+      # The matrix builds every image, and the project holds only the services
+      # that have been created so far (docs/deploy/railway.md brings them up one
+      # at a time, and some of them wait on the Arc redeploy). So the step first
+      # lists the project's services and redeploys only a service that exists;
+      # asking Railway to redeploy a service it does not have fails the job of an
+      # image that was built and published correctly. A token that cannot list
+      # the project still fails the step, which is the right answer for a token
+      # that has expired or was scoped to the wrong environment.
       - name: Redeploy on Railway
         if: github.event_name != 'pull_request'
         env:
@@ -174,6 +187,11 @@ jobs:
           set -euo pipefail
           if [ "$HAS_TOKEN" != "true" ]; then
             echo "RAILWAY_TOKEN is not set; ${IMAGE}:main was published but no hosted service was told to pull it." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          services=$(npx -y @railway/cli@5 status --json | jq -r '.services.edges[].node.name')
+          if ! grep -qx "square-$SERVICE" <<< "$services"; then
+            echo "square-$SERVICE is not a service of the Railway project yet; ${IMAGE}:main was published but nothing was told to pull it (docs/deploy/railway.md, Setting a service up)." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           npx -y @railway/cli@5 redeploy --service "square-$SERVICE" --from-source --yes

@@ -20,7 +20,7 @@ import { observabilityRoutes } from "@squaresdk/observability/hono";
 import { keeperChecks } from "./checks.js";
 import { describeGate, finalizeGasDefaults, readComplianceGate } from "./gas.js";
 import { HOLD_REASONS, Keeper, KEEPER_LOG_FIELDS } from "./run.js";
-import { assertScreenerUrl, DEFAULT_SCREENER_TIMEOUT_MS, payeeScreening } from "./screening.js";
+import { assertScreenerForHook, assertScreenerUrl, DEFAULT_SCREENER_TIMEOUT_MS, payeeScreening } from "./screening.js";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -83,9 +83,21 @@ async function main(): Promise<void> {
   const screener = screenerUrl
     ? { url: screenerUrl, allowPrivate: process.env["SCREENER_ALLOW_PRIVATE"] === "true", timeoutMs: screenerTimeoutMs }
     : undefined;
-  if (screener) await assertScreenerUrl(`${screener.url}/screen`, screener.allowPrivate);
-
   const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+  let screeningUnknown = false;
+  if (screener) await assertScreenerUrl(`${screener.url}/screen`, screener.allowPrivate);
+  else {
+    const unreadable = await assertScreenerForHook(publicClient, deployment.squareHook);
+    screeningUnknown = unreadable !== undefined;
+    if (unreadable) {
+      logger.warn("keeper.screening_unknown", {
+        reason:
+          `${deployment.squareHook} could not be read at boot (${unreadable.message}), so whether it screens is unknown; ` +
+          "with no SCREENER_URL every payee the registry does not already clear is held rather than finalized",
+      });
+    }
+  }
+
   const client = createSquareClient({ publicClient, deployment, walletClient: createWalletClient({ chain, transport: http(rpcUrl), account }) });
 
   const gate = await readComplianceGate(client, logger);
@@ -123,7 +135,9 @@ async function main(): Promise<void> {
     ephemeralMirror,
     // square#35: with a screener to ask, a release on a hook that screens is
     // finalized only once its payee is freshly screened.
-    ...(screener ? { screenPayees: payeeScreening({ client, publicClient, screener }) } : {}),
+    ...(screener || screeningUnknown
+      ? { screenPayees: payeeScreening({ client, publicClient, ...(screener ? { screener } : {}) }) }
+      : {}),
     retryPolicy: {
       baseDelaySeconds: BigInt(integer("RETRY_BASE_SECONDS", 60)),
       maxDelaySeconds: BigInt(integer("RETRY_MAX_SECONDS", 3_600)),
@@ -152,6 +166,7 @@ async function main(): Promise<void> {
       publicClient,
       chainId,
       account: account.address,
+      hook: deployment.squareHook,
       finalizeGas: () => keeper.gasAssumed("finalize"),
       minActionsFunded: integer("MIN_ACTIONS_FUNDED", 3),
       ephemeralMirror,

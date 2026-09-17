@@ -13,7 +13,7 @@ this repository, and nothing in any of them is specific to a hosting provider:
 | prover | `services/prover/Dockerfile` | 3003 | `payment.wasm` and `payment.zkey` on a mounted path; serves the app's job page and development, not the institutions' own tools |
 | indexer | `services/indexer/Dockerfile` | 3010 | Postgres, an RPC endpoint, a deployment file |
 | keeper | `services/keeper/Dockerfile` | 3011 | Postgres, an RPC endpoint, a deployment file, a funded key |
-| screener | `services/screener/Dockerfile` (to be added, [#370](https://github.com/wienerlabs/square/issues/370)) | 3012 | an RPC endpoint, the registry's address, a registered signing key, a canary; TRM reachable |
+| screener | `services/screener/Dockerfile` | 3012 | an RPC endpoint, the registry's address, a registered signing key, a canary; TRM reachable |
 | app | `app/Dockerfile` | 80 | Nothing at run time; it is static files |
 | hosted agent | `packages/hosted/Dockerfile` | 3000 | a wallet that owns an ERC-8004 agent, a model key, the configuration in `SQUARE_HOSTED_CONFIG`; the circuit's files beside it only if it delegates |
 
@@ -25,7 +25,7 @@ interface and on nothing else.
 
 `compose.yaml` is the reference deployment. It is what runs locally, and a
 provider that reads a compose file can run it directly; one that does not can
-be handed the same four images and the same environment.
+be handed the same five images and the same environment.
 
 **The prover is not where an institution proves** ([#347](https://github.com/wienerlabs/square/issues/347),
 [prover-trust-boundary.md](prover-trust-boundary.md)). A proof takes the whole
@@ -61,9 +61,10 @@ check path per service, and outbound network. A VPS would have run
 `compose.yaml` as it is, with Postgres, backups and updates ours to run; the
 difference is operations, not code, and the smaller operations won.
 
-The screener joins the four images the moment the shared stack installs
-screening ([#372](https://github.com/wienerlabs/square/issues/372), decided
-yes), and it needs TRM reachable from the provider's network. The prover
+The screener is the fourth service image and the fifth process in
+`compose.yaml` ([#370](https://github.com/wienerlabs/square/issues/370)); the
+shared stack installs screening ([#372](https://github.com/wienerlabs/square/issues/372),
+decided yes), and the screener needs TRM reachable from the provider's network. The prover
 serves the app's job page only (above).
 
 The setup itself is [docs/deploy/railway.md](../deploy/railway.md): every

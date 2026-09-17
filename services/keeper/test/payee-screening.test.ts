@@ -8,7 +8,7 @@ import { deploymentFor, type SquareClient } from "@squaresdk/core";
 import { jobs, keeperActions, migrate, MIGRATIONS_DIR, pgliteDatabase, type Database } from "@squaresdk/data";
 import { createLogger } from "@squaresdk/observability";
 import { Keeper } from "../src/run.js";
-import { assertScreenerUrl, payeeScreening, SCREENER_MAX_ADDRESSES } from "../src/screening.js";
+import { assertScreenerForHook, assertScreenerUrl, payeeScreening, SCREENER_MAX_ADDRESSES } from "../src/screening.js";
 
 type ScreeningOptions = Parameters<typeof payeeScreening>[0];
 
@@ -34,6 +34,56 @@ describe("an RPC failure is not a hook that screens nobody", () => {
     const outcome = (await screen([7n])).get(7n);
     expect(outcome).toBeInstanceOf(Error);
     expect((outcome as Error).message).toMatch(/HTTP request failed/);
+  });
+});
+
+describe("a keeper with no screener", () => {
+  const registryReading = (cleared: boolean, registry: Address, market: Address, payee: Address): ScreeningOptions["publicClient"] =>
+    ({
+      readContract: async ({ functionName }: { functionName: string }) => {
+        if (functionName === "screening") return registry;
+        if (functionName === "claimMarket") return market;
+        if (functionName === "payeeOf") return payee;
+        if (functionName === "isCleared") return cleared;
+        if (functionName === "screeningOf") return { subject: payee, sanctioned: false, screenedAt: 0n, source: zeroAddress, evidence: zeroAddress, screener: zeroAddress };
+        if (functionName === "maxAge") return 3_600n;
+        throw new Error(`the registry was asked ${functionName}, which this reading does not answer`);
+      },
+      getBlock: async () => ({ timestamp: now }),
+    }) as unknown as ScreeningOptions["publicClient"];
+
+  it("refuses to start against a hook that screens, naming the registry", async () => {
+    const registry = fresh();
+    const publicClient = { readContract: async () => registry } as unknown as ScreeningOptions["publicClient"];
+
+    await expect(assertScreenerForHook(publicClient, fresh())).rejects.toThrow(new RegExp(registry, "i"));
+  });
+
+  it("starts against a hook it cannot read at all, and says the chain is what it could not read", async () => {
+    const unreadable = await assertScreenerForHook(unreachableRpc, fresh());
+
+    expect(unreadable).toBeInstanceOf(Error);
+    expect((unreadable as Error).message).toMatch(/HTTP request failed/);
+  });
+
+  it("holds a payee the registry does not clear, having asked nobody to screen it", async () => {
+    const payee = fresh();
+    const screen = payeeScreening({
+      client: { getJobRecord: async () => ({ hook: fresh() }) } as unknown as ScreeningOptions["client"],
+      publicClient: registryReading(false, fresh(), fresh(), payee),
+    });
+
+    expect((await screen([9n])).get(9n)).toEqual({ proceed: false, state: "unscreened", payee });
+  });
+
+  it("finalizes a payee the registry already clears", async () => {
+    const payee = fresh();
+    const screen = payeeScreening({
+      client: { getJobRecord: async () => ({ hook: fresh() }) } as unknown as ScreeningOptions["client"],
+      publicClient: registryReading(true, fresh(), fresh(), payee),
+    });
+
+    expect((await screen([9n])).get(9n)).toEqual({ proceed: true, state: "cleared", payee });
   });
 });
 

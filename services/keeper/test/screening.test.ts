@@ -11,7 +11,7 @@ import { createLogger } from "@squaresdk/observability";
 import { Indexer } from "@squaresdk/indexer";
 import { anvilAccount } from "./anvil.js";
 import { Keeper } from "../src/run.js";
-import { payeeScreening } from "../src/screening.js";
+import { assertScreenerForHook, payeeScreening } from "../src/screening.js";
 
 const rpcUrl = process.env["ANVIL_RPC_URL"] ?? "http://127.0.0.1:8545";
 const here = dirname(fileURLToPath(import.meta.url));
@@ -78,6 +78,7 @@ describe.skipIf(!reachable)("keeper and sanctions screening against anvil", () =
   // A second provider, so the two jobs have different payees: clearing one must
   // not release the other.
   const otherProvider = actor();
+  const staleProvider = actor();
   const cranker = actor();
   const screener = privateKeyToAccount(generatePrivateKey());
   // Nothing listens here: the screener is down for the whole test.
@@ -161,7 +162,7 @@ describe.skipIf(!reachable)("keeper and sanctions screening against anvil", () =
     await mined(await owner.writeContract({ address: hook, abi: squareHookAbi, functionName: "setScreening", args: [registry] }));
     await mined(await owner.writeContract({ address: registry, abi: screeningRegistryAbi, functionName: "setScreener", args: [screener.address, true] }));
     const usdc = artifact("MockUSDC");
-    for (const account of [client.account, provider.account, otherProvider.account, cranker.account]) {
+    for (const account of [client.account, provider.account, otherProvider.account, staleProvider.account, cranker.account]) {
       await mined(await owner.sendTransaction({ to: account, value: 10n ** 18n }));
     }
     await mined(await owner.writeContract({ address: deployment.usdc, abi: usdc.abi, functionName: "mint", args: [client.account, parseUnits("1000", 6)] }));
@@ -222,6 +223,42 @@ describe.skipIf(!reachable)("keeper and sanctions screening against anvil", () =
     expect(refused.finalized).toContain(second);
     expect(await otherProvider.withdrawable(otherProvider.account)).toBe(0n);
     expect((await client.withdrawable(client.account)) - clientBefore).toBe(await cranker.netPayout(second));
+  }, 120_000);
+
+  it("refuses to start against a hook that screens while SCREENER_URL is unset, and the stale payee stays unfinalized", async () => {
+    await screen(client.account, false);
+    await screen(staleProvider.account, false);
+    const job = await submittedOnOurHook(parseUnits("50", 6), staleProvider);
+    const end = BigInt(await client.challengeEndsAt(job));
+    const latest = await publicClient.getBlock();
+    await testClient.increaseTime({ seconds: Number(end - latest.timestamp + 1n) });
+    await testClient.mine({ blocks: 1 });
+    await syncAll();
+
+    const cleared = await publicClient.readContract({ address: registry, abi: screeningRegistryAbi, functionName: "isCleared", args: [staleProvider.account] });
+    expect(cleared).toBe(false);
+
+    await expect(assertScreenerForHook(publicClient, hook)).rejects.toThrow(/SCREENER_URL is not set/);
+    await expect(assertScreenerForHook(publicClient, hook)).rejects.toThrow(new RegExp(registry, "i"));
+
+    const held = await keeperWith(deadScreener).tick((await publicClient.getBlock()).timestamp);
+    expect(held.finalized).not.toContain(job);
+    expect(held.skipped.filter((s) => s.reason === "unscreened").map((s) => s.jobId)).toContain(job);
+    expect((await client.getJobRecord(job)).status).toBe(JobStatus.Submitted);
+    expect(await staleProvider.withdrawable(staleProvider.account)).toBe(0n);
+  }, 120_000);
+
+  it("starts without a screener against a hook that screens nobody", async () => {
+    const plainHook = (await publicClient.waitForTransactionReceipt({
+      hash: await owner.deployContract({
+        ...artifact("SquareHook"),
+        args: [
+          deployment.squareJob, deployment.claimMarket, deployment.identityRegistry, deployment.reputationRegistry,
+          deployment.validationRegistry, anvilAccount(0).address, deployment.keeperEvaluator, 1_000_000n,
+        ],
+      }),
+    })).contractAddress as Address;
+    await expect(assertScreenerForHook(publicClient, plainHook)).resolves.toBeUndefined();
   }, 120_000);
 
   // Only a hook that has no screening() is read as screening nobody. Both ways
