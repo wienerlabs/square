@@ -253,7 +253,7 @@ contract ComplianceModuleTest is Test, BuyerLists {
     function test_validProofWritesAPassingValidation() public {
         uint256 jobId = submittedJob();
         completeWith(jobId, compliantProof());
-        (address responder, uint8 response,) = validation.responses(REQUEST_HASH);
+        (address responder, uint8 response,,) = validation.responses(REQUEST_HASH);
         assertEq(responder, address(hook));
         assertEq(response, 100);
     }

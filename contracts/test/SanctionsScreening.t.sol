@@ -58,6 +58,14 @@ contract SanctionsScreeningTest is BaseTest {
     }
 
     /// A job cleared at funding, submitted, and past its window.
+    function _evidence(uint256 jobId, address payee, uint256 amount, bytes32 screening, uint8 screeningOutcome)
+        internal
+        view
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(jobId, payee, amount, address(usdc), screening, uint8(0), screeningOutcome));
+    }
+
     function _submittedAndDue() internal returns (uint256 jobId) {
         _clear(client);
         _clear(provider);
@@ -214,16 +222,18 @@ contract SanctionsScreeningTest is BaseTest {
     function test_validation_aClearedReleaseIsAttestedWithItsScreening() public {
         uint256 jobId = _submittedAndDue();
         _clear(provider);
-        bytes32 commitment = keccak256(abi.encode(provider, screeningRegistry.screeningOf(provider)));
+        bytes32 screening = keccak256(abi.encode(provider, screeningRegistry.screeningOf(provider)));
+        bytes32 commitment = _evidence(jobId, provider, netOf(BUDGET), screening, 1);
         vm.expectCall(
             address(validation),
-            abi.encodeCall(IValidationRegistry.validationResponse, (REQUEST_HASH, uint8(100), "", commitment, "square.compliance"))
+            abi.encodeCall(IValidationRegistry.validationResponse, (REQUEST_HASH, uint8(100), "", commitment, "square.settlement"))
         );
         vm.prank(cranker);
         keeper.finalize(jobId);
         (,, uint8 response,, string memory tag,) = validation.getValidationStatus(REQUEST_HASH);
-        assertEq(response, 100, "the release is attested as passed");
-        assertEq(tag, "square.compliance");
+        assertEq(response, 100, "a payee who was paid is attested as paid");
+        assertEq(tag, "square.settlement");
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET), "and the commitment names what they received");
     }
 
     /// A designated payee: the release is refused, and the attestation says so,
@@ -231,11 +241,12 @@ contract SanctionsScreeningTest is BaseTest {
     function test_validation_aRefusedPayeeIsAttestedAsFailed() public {
         uint256 jobId = _submittedAndDue();
         _designate(provider);
-        bytes32 commitment = keccak256(abi.encode(provider, screeningRegistry.screeningOf(provider)));
+        bytes32 screening = keccak256(abi.encode(provider, screeningRegistry.screeningOf(provider)));
+        bytes32 commitment = _evidence(jobId, provider, 0, screening, 2);
         assertTrue(screeningRegistry.screeningOf(provider).sanctioned);
         vm.expectCall(
             address(validation),
-            abi.encodeCall(IValidationRegistry.validationResponse, (REQUEST_HASH, uint8(0), "", commitment, "square.compliance"))
+            abi.encodeCall(IValidationRegistry.validationResponse, (REQUEST_HASH, uint8(0), "", commitment, "square.settlement"))
         );
         vm.prank(cranker);
         keeper.finalize(jobId);
@@ -245,7 +256,7 @@ contract SanctionsScreeningTest is BaseTest {
     }
 
     /// With nothing installed, nothing is written: the record stays as it was.
-    function test_validation_nothingInstalledWritesNothing() public {
+    function test_validation_aSettlementWithNothingInstalledIsStillAttested() public {
         vm.prank(owner);
         hook.setScreening(address(0));
         uint256 jobId = createJob(BUDGET, address(hook));
@@ -253,12 +264,19 @@ contract SanctionsScreeningTest is BaseTest {
         vm.prank(provider);
         kernel.submit(jobId, DELIVERABLE, abi.encode(AGENT_ID, REQUEST_HASH));
         pastWindow(jobId);
-        vm.recordLogs();
+
         vm.prank(cranker);
         keeper.finalize(jobId);
-        (,, uint8 response,,,) = validation.getValidationStatus(REQUEST_HASH);
-        assertEq(response, 0, "no response was ever written");
-        assertEq(bytes(_tagOf(REQUEST_HASH)).length, 0);
+
+        (,, uint8 response,, string memory tag,) = validation.getValidationStatus(REQUEST_HASH);
+        assertEq(response, 100, "the record says what settlement did, not what a check said");
+        assertEq(tag, "square.settlement");
+        (,,, bytes32 responseHash,,) = validation.getValidationStatus(REQUEST_HASH);
+        assertEq(
+            responseHash,
+            _evidence(jobId, provider, netOf(BUDGET), bytes32(0), 0),
+            "and it commits to the payee and the amount with no check installed"
+        );
     }
 
     function _tagOf(bytes32 requestHash) internal view returns (string memory tag) {

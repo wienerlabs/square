@@ -130,14 +130,72 @@ contract SquareHookTest is BaseTest {
         assertTrue(hook.recorded(jobId));
     }
 
-    function test_complete_withoutModuleWritesNoValidation() public {
+    function evidenceOf(uint256 jobId, uint8 complianceOutcome, uint8 screeningOutcome, bytes32 screening)
+        internal
+        view
+        returns (bytes32)
+    {
+        (address payee, uint256 amount, address token) = hook.settlementFacts(jobId);
+        return keccak256(abi.encode(jobId, payee, amount, token, screening, complianceOutcome, screeningOutcome));
+    }
+
+    function test_evidence_theCommitmentNamesMoneyThatActuallyMoved() public {
+        uint256 jobId = submittedHookedJob(BUDGET);
+        pastWindow(jobId);
+        keeper.finalize(jobId);
+
+        uint256 credited = kernel.withdrawable(provider);
+        assertGt(credited, 0, "the provider was paid");
+        (,, bytes32 responseHash,) = validation.responses(REQUEST_HASH);
+        assertEq(
+            responseHash,
+            keccak256(abi.encode(jobId, provider, credited, address(usdc), bytes32(0), uint8(0), uint8(0))),
+            "the record commits to the payee and the exact amount the kernel credited"
+        );
+        assertTrue(
+            responseHash != keccak256(abi.encode(jobId, provider, credited - 1, address(usdc), bytes32(0), uint8(0), uint8(0))),
+            "one unit less is a different record, so the amount is not decoration"
+        );
+    }
+
+    function test_evidence_twoJobsOfDifferentSizeCarryDifferentRecords() public {
+        uint256 small = submittedHookedJob(BUDGET);
+        pastWindow(small);
+        keeper.finalize(small);
+        (,, bytes32 smallHash,) = validation.responses(REQUEST_HASH);
+
+        bytes32 secondRequest = keccak256("a second request");
+        vm.prank(provider);
+        validation.validationRequest(address(hook), AGENT_ID, "", secondRequest);
+        uint256 large = submittedJob(BUDGET * 3, address(hook));
+        assertEq(uint8(status(large)), uint8(ISquareJob.JobStatus.Submitted));
+
+        assertTrue(smallHash != bytes32(0), "the first job is on the record");
+        assertEq(
+            smallHash,
+            keccak256(
+                abi.encode(small, provider, netOf(BUDGET), address(usdc), bytes32(0), uint8(0), uint8(0))
+            ),
+            "and a bigger job could not reuse it, because the amount is inside the commitment"
+        );
+        assertTrue(
+            smallHash != keccak256(abi.encode(small, provider, netOf(BUDGET * 3), address(usdc), bytes32(0), uint8(0), uint8(0))),
+            "the cost of forging this record is the difference in the job it names"
+        );
+    }
+
+    function test_complete_withoutModuleStillAttestsWhatSettlementPaid() public {
         uint256 jobId = submittedHookedJob(BUDGET);
         pastWindow(jobId);
         vm.expectEmit(true, true, false, true);
         emit SquareHook.ComplianceChecked(jobId, provider, netOf(BUDGET), false);
         keeper.finalize(jobId);
-        (address responder,,) = validation.responses(REQUEST_HASH);
-        assertEq(responder, address(0), "nothing was verified, nothing is claimed");
+
+        (address responder, uint8 response, bytes32 responseHash,) = validation.responses(REQUEST_HASH);
+        assertEq(responder, address(hook), "a settled job is attested whether or not a check ran");
+        assertEq(response, 100, "the payee was paid, and that is what the record says");
+        assertEq(responseHash, evidenceOf(jobId, 0, 0, bytes32(0)), "the commitment names the payee and the amount");
+        assertEq(kernel.withdrawable(provider), netOf(BUDGET));
     }
 
     function test_complete_aStrangerCrankingFinalizeCannotRefuseTheRelease() public {
@@ -254,7 +312,7 @@ contract SquareHookTest is BaseTest {
             validation.getValidationStatus(REQUEST_HASH);
         assertEq(validator, address(hook));
         assertEq(response, 100);
-        assertEq(tag, "square.compliance");
+        assertEq(tag, "square.settlement");
     }
 
     /// A refused check settles the job and pays the provider nothing.
@@ -292,7 +350,7 @@ contract SquareHookTest is BaseTest {
         );
         assertEq(kernel.withdrawable(provider), 0, "a refused release pays the provider nothing");
         assertEq(kernel.withdrawable(client), netOf(BUDGET), "and returns the whole net to the client");
-        (address responder, uint8 response,) = validation.responses(REQUEST_HASH);
+        (address responder, uint8 response,,) = validation.responses(REQUEST_HASH);
         assertEq(responder, address(hook));
         assertEq(response, 0, "the failed check is on the record");
     }
@@ -547,7 +605,7 @@ contract SquareHookTest is BaseTest {
         keeper.finalize(jobId);
         vm.clearMockedCalls();
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed), "settlement is untouched");
-        (address responder,,) = validation.responses(REQUEST_HASH);
+        (address responder,,,) = validation.responses(REQUEST_HASH);
         assertEq(responder, address(0), "a check that never ran writes no verdict, failed or passed");
         assertEq(compliance.checkCount(), 0, "the module was never reached");
         assertTrue(hook.recorded(jobId), "reputation is written as before");
@@ -569,13 +627,23 @@ contract SquareHookTest is BaseTest {
         KernelBatcher batched = KernelBatcher(payable(address(kernel)));
 
         batched.completeHooksOf(hook, first, second, data);
-        (address responder,,) = validation.responses(secondRequest);
-        assertEq(responder, address(0), "the first job's outcome does not leak into the second");
+        (address responder,, bytes32 secondHash,) = validation.responses(secondRequest);
+        assertEq(responder, address(hook), "the second job is attested for its own settlement");
+        assertEq(
+            secondHash,
+            evidenceOf(second, 0, 0, bytes32(0)),
+            "and it carries no check outcome, so the first job's verdict did not leak into it"
+        );
+        assertTrue(secondHash != evidenceOf(second, 1, 0, bytes32(0)), "a passed check would be a different record");
 
         batched.completeHooksOf(hook, first, first, data);
-        (address firstResponder, uint8 response,) = validation.responses(REQUEST_HASH);
+        (address firstResponder,, bytes32 firstHash,) = validation.responses(REQUEST_HASH);
         assertEq(firstResponder, address(hook));
-        assertEq(response, 100, "and the job the check ran for gets its verdict");
+        assertEq(
+            firstHash,
+            evidenceOf(first, 1, 0, bytes32(0)),
+            "and the job the check ran for carries that check in its record"
+        );
     }
 
     function test_complete_aModuleThatRefusesWithoutRevertingRecordsAFailedValidation() public {
@@ -588,7 +656,7 @@ contract SquareHookTest is BaseTest {
         keeper.finalize(jobId);
         assertEq(uint8(status(jobId)), uint8(ISquareJob.JobStatus.Completed));
         assertEq(compliance.checkCount(), 1, "the module ran and kept its state");
-        (address responder, uint8 response,) = validation.responses(REQUEST_HASH);
+        (address responder, uint8 response,,) = validation.responses(REQUEST_HASH);
         assertEq(responder, address(hook));
         assertEq(response, 0, "refusal by return value is the shape the decision record asks for");
     }

@@ -100,6 +100,7 @@ contract MockValidationRegistry is IValidationRegistry {
     struct Response {
         address validator;
         uint8 response;
+        bytes32 responseHash;
         string tag;
     }
 
@@ -119,12 +120,16 @@ contract MockValidationRegistry is IValidationRegistry {
         requestAgent[requestHash] = agentId;
     }
 
-    function validationResponse(bytes32 requestHash, uint8 response, string calldata, bytes32, string calldata tag)
-        external
-    {
+    function validationResponse(
+        bytes32 requestHash,
+        uint8 response,
+        string calldata,
+        bytes32 responseHash,
+        string calldata tag
+    ) external {
         require(!shouldRevert, "registry down");
         require(requestValidator[requestHash] == msg.sender, "not the validator");
-        responses[requestHash] = Response(msg.sender, response, tag);
+        responses[requestHash] = Response(msg.sender, response, responseHash, tag);
     }
 
     function getValidationStatus(bytes32 requestHash)
@@ -133,6 +138,6 @@ contract MockValidationRegistry is IValidationRegistry {
         returns (address, uint256, uint8, bytes32, string memory, uint256)
     {
         Response storage r = responses[requestHash];
-        return (requestValidator[requestHash], requestAgent[requestHash], r.response, bytes32(0), r.tag, 0);
+        return (requestValidator[requestHash], requestAgent[requestHash], r.response, r.responseHash, r.tag, 0);
     }
 }

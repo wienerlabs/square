@@ -16,7 +16,7 @@ import {IIdentityRegistry, IReputationRegistry, IValidationRegistry} from "./int
 contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     uint16 private constant FULL_BPS = 10_000;
     string private constant TAG1 = "square";
-    string private constant VALIDATION_TAG = "square.compliance";
+    string private constant VALIDATION_TAG = "square.settlement";
 
     bytes4 private constant SUBMIT_SELECTOR = ISquareJob.submit.selector;
     bytes4 private constant COMPLETE_SELECTOR = ISquareJob.complete.selector;
@@ -66,6 +66,18 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     event ReputationSkipped(uint256 indexed jobId, uint256 indexed agentId, bytes32 reason);
     event ReleaseUnconfirmed(uint256 indexed jobId, address indexed payee, uint256 amount);
     event PolicyPinned(uint256 indexed jobId, address indexed client, bytes32 commitment);
+    event EvidenceUnreadable(uint256 indexed jobId, bytes reason);
+
+    event EvidenceRecorded(
+        uint256 indexed jobId,
+        address indexed payee,
+        uint256 amount,
+        address token,
+        bytes32 screening,
+        uint8 complianceOutcome,
+        uint8 screeningOutcome,
+        bytes32 commitment
+    );
 
     bytes32 private constant SKIP_UNTRUSTED_EVALUATOR = "untrusted evaluator";
     bytes32 private constant SKIP_BUDGET_BELOW_MINIMUM = "budget below minimum";
@@ -337,22 +349,16 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
             // the `HookFailed` the kernel emits from its own frame.
             if (outcome != CHECK_PASSED && address(_complianceModule) != address(0)) _reportUnconfirmed(jobId);
             _writeReputation(jobId, 1, "completed", reason);
-            // The ERC-8004 validation response is the gate's verdict on this
-            // release, the same verdict `resolvePayout` turned into the split: 100
-            // when every installed check passed and the payee was paid, 0 when the
-            // proof or the payee's screening refused it. With screening installed,
-            // `responseHash` commits to the screening record the verdict read,
-            // which is how square#35's result reaches the ValidationRegistry
-            // (docs/decisions/sanctions-screening.md). Nothing installed, nothing
-            // written, as before.
-            if (outcome == CHECK_NOT_RUN && screened == CHECK_NOT_RUN) return;
-            bool passed = outcome != CHECK_FAILED && screened != CHECK_FAILED;
-            _writeValidation(jobId, passed ? 100 : 0, screening_);
+            (bytes32 evidence, bool paid) = _settlementEvidence(jobId, screening_, outcome, screened);
+            if (evidence == bytes32(0)) return;
+            _writeValidation(jobId, paid ? 100 : 0, evidence);
         } else if (selector == REJECT_SELECTOR) {
             if (_squareJob.getJobRecord(jobId).submittedAt == 0) return;
             (bytes32 reason,) = abi.decode(data, (bytes32, bytes));
             _writeReputation(jobId, -1, "rejected", reason);
-            _writeValidation(jobId, 0, bytes32(0));
+            (bytes32 evidence,) = _settlementEvidence(jobId, bytes32(0), CHECK_NOT_RUN, CHECK_NOT_RUN);
+            if (evidence == bytes32(0)) return;
+            _writeValidation(jobId, 0, evidence);
         }
     }
 
@@ -490,6 +496,29 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
             emit ReputationRecorded(jobId, agentId, outcome, value);
         } catch (bytes memory reason) {
             emit ReputationWriteFailed(jobId, agentId, reason);
+        }
+    }
+
+    function settlementFacts(uint256 jobId) external view returns (address payee, uint256 amount, address token) {
+        ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
+        payee = job.payee == address(0) ? job.provider : job.payee;
+        amount = (_squareJob.netPayout(jobId) * job.providerBps) / FULL_BPS;
+        token = _squareJob.paymentToken();
+    }
+
+    function _settlementEvidence(uint256 jobId, bytes32 screening, uint8 complianceOutcome, uint8 screeningOutcome)
+        private
+        returns (bytes32 commitment, bool paid)
+    {
+        try this.settlementFacts(jobId) returns (address payee, uint256 amount, address token) {
+            commitment =
+                keccak256(abi.encode(jobId, payee, amount, token, screening, complianceOutcome, screeningOutcome));
+            paid = amount > 0;
+            emit EvidenceRecorded(
+                jobId, payee, amount, token, screening, complianceOutcome, screeningOutcome, commitment
+            );
+        } catch (bytes memory reason) {
+            emit EvidenceUnreadable(jobId, reason);
         }
     }
 

@@ -34,7 +34,8 @@
     "test:anvil": "ANVIL=1 vitest run",
     "typecheck": "tsc --noEmit",
     "lifecycle": "node --experimental-strip-types scripts/lifecycle.ts",
-    "bridge": "node --experimental-strip-types scripts/bridge.ts"
+    "bridge": "node --experimental-strip-types scripts/bridge.ts",
+    "check:evidence": "node scripts/check-evidence.mjs"
   },
   "dependencies": {
     "@squaresdk/did-resolver": "file:../did-resolver",
