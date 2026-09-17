@@ -600,6 +600,9 @@ contract SquareHookTest is BaseTest {
         vm.mockCallRevert(
             address(kernel), abi.encodeWithSelector(ISquareJob.netPayout.selector, jobId), "read failed"
         );
+        vm.mockCallRevert(
+            address(kernel), abi.encodeWithSelector(ISquareJob.payoutOf.selector, jobId), "read failed"
+        );
         vm.expectEmit(true, true, false, false);
         emit ISquareJob.HookFailed(jobId, address(hook), ISquareJob.complete.selector, "");
         keeper.finalize(jobId);

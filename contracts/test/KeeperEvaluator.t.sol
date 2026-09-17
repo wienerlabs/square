@@ -227,8 +227,9 @@ contract KeeperEvaluatorTest is BaseTest {
         uint256 before = gasleft();
         keeper.finalize(jobId);
         uint256 used = before - gasleft();
-        emit log_named_uint("finalize gas (hooked, reputation + validation written)", used);
-        assertLt(used, 600_000);
+        emit log_named_uint("finalize gas (hooked, reputation and evidence record written)", used);
+        uint256 ceiling = vm.envOr("UNOPTIMIZED_BUILD", false) ? 750_000 : 520_000;
+        assertLt(used, ceiling, "a finalize that writes reputation and an evidence record outgrew its budget");
     }
 
     function test_challengeEndsAt_isZeroForAJobItDoesNotEvaluate() public {

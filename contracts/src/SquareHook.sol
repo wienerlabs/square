@@ -24,6 +24,7 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     bytes4 private constant FUND_SELECTOR = ISquareJob.fund.selector;
 
     ISquareJob private immutable _squareJob;
+    address private immutable _paymentToken;
     IClaimMarket private immutable _claimMarket;
     IIdentityRegistry private immutable _identityRegistry;
     IReputationRegistry private immutable _reputationRegistry;
@@ -107,6 +108,7 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
         uint64 minReputationBudget_
     ) Ownable(initialOwner) {
         _squareJob = ISquareJob(squareJob_);
+        _paymentToken = ISquareJob(squareJob_).paymentToken();
         _claimMarket = IClaimMarket(claimMarket_);
         _identityRegistry = IIdentityRegistry(identityRegistry_);
         _reputationRegistry = IReputationRegistry(reputationRegistry_);
@@ -500,10 +502,8 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     }
 
     function settlementFacts(uint256 jobId) external view returns (address payee, uint256 amount, address token) {
-        uint16 providerBps;
-        (payee, providerBps) = _squareJob.payoutOf(jobId);
-        amount = (_squareJob.netPayout(jobId) * providerBps) / FULL_BPS;
-        token = _squareJob.paymentToken();
+        (payee, amount) = _squareJob.payoutOf(jobId);
+        token = _paymentToken;
     }
 
     function _settlementEvidence(uint256 jobId, bytes32 screening, uint8 complianceOutcome, uint8 screeningOutcome)

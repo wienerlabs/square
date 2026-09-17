@@ -515,9 +515,9 @@ export const squareJobAbi = [
         "internalType": "address"
       },
       {
-        "name": "providerBps",
-        "type": "uint16",
-        "internalType": "uint16"
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
