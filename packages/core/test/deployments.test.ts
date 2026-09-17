@@ -26,6 +26,8 @@ const FIELDS = [
   "validationRegistry",
 ] as const satisfies ReadonlyArray<keyof SquareDeployment>;
 
+const OPTIONAL_FIELDS = ["complianceModule", "screeningRegistry"] as const satisfies ReadonlyArray<keyof SquareDeployment>;
+
 const constant = deploymentFor(ARC_TESTNET_CHAIN_ID);
 const fromFile = deploymentFromJson(JSON.parse(readFileSync(deploymentPath, "utf8")));
 
@@ -38,10 +40,17 @@ describe(`the Arc Testnet constant and contracts/deployments/${ARC_TESTNET_CHAIN
     expect(constant).toEqual(fromFile);
   });
 
+  it.each(OPTIONAL_FIELDS)("agree on %s, present in both sources or in neither", (field) => {
+    expect(field in constant).toBe(field in fromFile);
+    expect(constant[field]).toBe(fromFile[field]);
+  });
+
   it("are compared field by field over the whole of SquareDeployment", () => {
-    const covered = [...FIELDS].sort();
-    expect(Object.keys(constant).sort()).toEqual(covered);
-    expect(Object.keys(fromFile).sort()).toEqual(covered);
+    const required = [...FIELDS].sort();
+    const optional: readonly string[] = OPTIONAL_FIELDS;
+    for (const source of [constant, fromFile]) {
+      expect(Object.keys(source).sort().filter((key) => !optional.includes(key))).toEqual(required);
+    }
   });
 });
 

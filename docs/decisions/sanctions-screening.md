@@ -233,6 +233,20 @@ once a tick and each payee once, and then reads the registry for each job:
   missing. The keeper holds the job and asks again on the next tick. The job
   waits; it is not refused.
 
+All three of those need a screener to ask. A keeper started without
+`SCREENER_URL` wired no screening at all, so on a hook that screens it read no
+records, held nothing, and finalized every stale payee into the refusal while
+its journal said "finalized": one forgotten environment variable turning
+provider payouts into client refunds. Since [#370][i370] such a keeper **refuses
+to start**, naming the hook and the registry, and a hook that gains a registry
+while a keeper is already running turns that keeper unhealthy through a critical
+`screening` check. Refusing to start was chosen over holding every job silently:
+both stop the money, only one of them says so at the moment an operator is
+watching. A hook that cannot be read at all is not one of those cases: an RPC
+down at boot would stop a keeper that has done nothing wrong, so the keeper
+starts, records what it could not read, and screens from the registry alone,
+holding every payee the registry does not already clear.
+
 A job whose screening cannot be read at all, because the RPC failed, is not
 read as a hook that screens nobody, which would finalize it into the refusal.
 It is a failed attempt at that job, backed off like a failed send.
@@ -313,10 +327,10 @@ design here addresses both:
 |---|---|---|
 | The registry's rules: empty clears nobody, only a registered screener counts, revoking it revokes its records, the domain binds chain and registry, an older record cannot overwrite a newer one, a batch skips a repeat from the same second and records the rest, records age out at `maxAge` | `contracts/test/ScreeningRegistry.t.sol` | 18 tests |
 | The hook on both points, through the real kernel and keeper: an empty registry stops funding; a designated client or provider stops funding; a payee designated during the job is not paid, and the job settles; a sold receivable screens its buyer; refunds are not screened; a registry that reverts is a refusal, not a lock | `contracts/test/SanctionsScreening.t.sol` | 16 tests, three of them asserting the exact ERC-8004 `validationResponse` call: 100 or 0, and the commitment to the screening record |
-| The screener: malformed requests are refused before the source is asked, an answer past the byte cap is refused, a base URL that is not public is never sent a request, its EIP-712 digest equals the contract's `digestOf`, the registry records what it signs, refuses a key it does not know, and records the rest of a batch that repeats an address from the same second | `services/screener/test` | 17 tests (13 hermetic, 4 on anvil) |
+| The screener: malformed requests are refused before the source is asked, an answer past the byte cap is refused, a base URL that is not public is never sent a request, its EIP-712 digest equals the contract's `digestOf`, the registry records what it signs, refuses a key it does not know, and records the rest of a batch that repeats an address from the same second | `services/screener/test` | 23 tests (19 hermetic, 4 on anvil) |
 | TRM itself: an SDN-listed address is flagged, an unused one is not; with a canary TRM does not flag, nothing is signed | `services/screener/test/live.test.ts` | 2 tests, real requests |
-| The keeper holds an unscreened payee, finalizes a cleared one, and lets a designated one be refused; only a hook without `screening()` is read as screening nobody | `services/keeper/test/screening.test.ts` | 2 tests, on anvil |
-| The keeper: an RPC failure is not read as "no screening"; one job's failed screening is journaled and the next job is still finalized; a tick's payees go to the screener once each, 16 to a request; a screener URL is never link-local; `/health` fails when the screener's does | `services/keeper/test/payee-screening.test.ts`, `screener-check.test.ts` | 10 tests, hermetic |
+| The keeper holds an unscreened payee, finalizes a cleared one, and lets a designated one be refused; only a hook without `screening()` is read as screening nobody; and with no `SCREENER_URL` against a hook that screens it refuses to start, so the stale payee is never finalized | `services/keeper/test/screening.test.ts` | 4 tests, on anvil |
+| The keeper: an RPC failure is not read as "no screening"; one job's failed screening is journaled and the next job is still finalized; a tick's payees go to the screener once each, 16 to a request; a screener URL is never link-local; `/health` fails when the screener's does, and without a screener a critical `screening` check fails instead once the hook screens; with no screener at all the registry alone holds an unscreened payee and clears a cleared one, and a hook that cannot be read does not stop the boot | `services/keeper/test/payee-screening.test.ts`, `screener-check.test.ts` | 17 tests, hermetic |
 | End to end: the real screener process, TRM's answers and the real hook. An SDN-listed provider cannot be funded (`NotCleared` naming it), an SDN-listed buyer is not paid (its record reads sanctioned), the honest release is paid, and a screener with a canary TRM does not flag records nothing | `contracts/script/screening-on-anvil.mjs` | 26 checks, including the ERC-8004 record reading 0 for the refused release and 100 for the paid one |
 | What a release-time screening costs in time, with the real screener against a real chain; every answer read back from the chain | `contracts/script/screening-latency.mjs` | 3 rounds on Arc Testnet, 3 on anvil (§ Latency) |
 
@@ -374,3 +388,5 @@ TRM's keyless tier allows one request a second; with a key it allows 1,000.
 - **It does not yet screen before funding from the SDK, or hold
   `ComplianceDuty`'s crank on a stale screening.** §2 decides the first and §4
   the second; neither is built in this change.
+
+[i370]: https://github.com/wienerlabs/square/issues/370

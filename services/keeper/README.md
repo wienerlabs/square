@@ -213,11 +213,31 @@ export MAX_GAS_OVERSHOOT_PERCENT=25   # a receipt over the assumption by more th
 export PROOF_GRACE_SECONDS=3600       # how long a job whose proof the module refuses waits before it is cranked anyway; defaults to the module's timestamp tolerance
 export ALERT_WEBHOOK_URL=https://...  # optional
 export ALERT_INTERVAL_MS=30000        # how often the rules below are evaluated, in process
-export SCREENER_URL=http://screener:3012  # optional, square#35: screen payees before finalizing (services/screener/README.md)
+export SCREENER_URL=http://screener:3012  # square#35: screen payees before finalizing (services/screener/README.md); required when the hook screens
 export SCREENER_ALLOW_PRIVATE=true    # the screener above is on a private network; link-local is refused regardless
 export SCREENER_TIMEOUT_MS=30000      # per request to the screener, not per job
 npm install --install-links && npm run build && npm start
 ```
+
+`SCREENER_URL` is optional only while `SquareHook.screening()` is the zero
+address. If the hook screens and the variable is unset the keeper **refuses to
+start** and says which hook screens with which registry (square#370): with no
+screener it would ask nobody to screen, every payee would go stale within the
+registry's `maxAge`, and it would finalize releases the hook then refuses,
+paying the client instead of the provider while `/actions` says "finalized".
+Holding every job forever instead would be just as broken and much quieter, so
+it stops at the one moment an operator is watching. A hook that gains a registry
+while the keeper is already running is past that check, so `/health` carries a
+critical `screening` check that fails for exactly that state; with
+`SCREENER_URL` set, the critical `screener` check takes its place.
+
+A hook the keeper cannot read at all is not read as a hook that screens. An RPC
+that is down at boot would otherwise stop a keeper that has done nothing wrong,
+and the container has to start and answer 503 rather than refuse to exist. The
+keeper starts, says what it could not read (`keeper.screening_unknown`), and
+screens from the registry alone until the read succeeds: it asks nobody, holds
+every payee the registry does not already clear, and finalizes the rest. The
+`screening` check on `/health` is failing for as long as the read is.
 
 ### A held job is not a failed one
 

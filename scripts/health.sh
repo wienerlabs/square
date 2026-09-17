@@ -28,6 +28,7 @@ check_json() {
 
 check_json prover "${PROVER_PORT:-3003}"
 check_json indexer "${INDEXER_PORT:-3010}"
+check_json screener "${SCREENER_PORT:-3012}"
 check_json keeper "${KEEPER_PORT:-3011}"
 
 # The application is a static bundle behind a file server; it has no /health to

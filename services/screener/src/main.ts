@@ -1,7 +1,8 @@
+import { readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { createPublicClient, createWalletClient, defineChain, getAddress, http, isAddress, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { ARC_TESTNET_CHAIN_ID, networks } from "@squaresdk/core";
+import { ARC_TESTNET_CHAIN_ID, deploymentFromJson, networks } from "@squaresdk/core";
 import { assertPublicUrl } from "@squaresdk/hardening";
 import { createHealth, createLogger, createMetrics } from "@squaresdk/observability";
 import { corsOriginsFrom, screenerApp } from "./app.js";
@@ -22,6 +23,15 @@ function address(name: string): Address {
   return getAddress(value);
 }
 
+function screeningRegistry(): Address {
+  if (process.env["SCREENING_REGISTRY"]) return address("SCREENING_REGISTRY");
+  const file = process.env["SQUARE_DEPLOYMENT_FILE"];
+  if (!file) throw new Error("SCREENING_REGISTRY is required, or SQUARE_DEPLOYMENT_FILE naming a record that carries a ScreeningRegistry");
+  const found = deploymentFromJson(JSON.parse(readFileSync(file, "utf8")) as unknown).screeningRegistry;
+  if (!found) throw new Error(`${file} carries no ScreeningRegistry: the stack was deployed without one, so set SCREENING_REGISTRY or redeploy`);
+  return found;
+}
+
 function integer(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
@@ -33,7 +43,7 @@ function integer(name: string, fallback: number): number {
 async function main(): Promise<void> {
   const chainId = integer("CHAIN_ID", ARC_TESTNET_CHAIN_ID);
   const rpcUrl = required("RPC_URL");
-  const registry = address("SCREENING_REGISTRY");
+  const registry = screeningRegistry();
   // No default: which address proves the source is live is a choice the
   // operator makes and can defend, not one buried in the code.
   const canary = address("SCREENING_CANARY");
