@@ -168,6 +168,15 @@ jobs:
       # and said so, until the project token is in the repository's secrets
       # (docs/deploy/railway.md); a build that is not redeployed is still
       # published above, so the operator can pull it by hand.
+      #
+      # The matrix builds every image, and the project holds only the services
+      # that have been created so far (docs/deploy/railway.md brings them up one
+      # at a time, and some of them wait on the Arc redeploy). So the step first
+      # lists the project's services and redeploys only a service that exists;
+      # asking Railway to redeploy a service it does not have fails the job of an
+      # image that was built and published correctly. A token that cannot list
+      # the project still fails the step, which is the right answer for a token
+      # that has expired or was scoped to the wrong environment.
       - name: Redeploy on Railway
         if: github.event_name != 'pull_request'
         env:
@@ -178,6 +187,11 @@ jobs:
           set -euo pipefail
           if [ "$HAS_TOKEN" != "true" ]; then
             echo "RAILWAY_TOKEN is not set; ${IMAGE}:main was published but no hosted service was told to pull it." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          services=$(npx -y @railway/cli@5 status --json | jq -r '.services.edges[].node.name')
+          if ! grep -qx "square-$SERVICE" <<< "$services"; then
+            echo "square-$SERVICE is not a service of the Railway project yet; ${IMAGE}:main was published but nothing was told to pull it (docs/deploy/railway.md, Setting a service up)." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           npx -y @railway/cli@5 redeploy --service "square-$SERVICE" --from-source --yes

@@ -47,6 +47,11 @@ step needs a **project token** (Railway: project settings, Tokens, scoped to
 the environment) stored as the repository secret `RAILWAY_TOKEN`; without it
 the workflow says so in its summary and the image is still published, and the
 operator redeploys by hand (the service's Redeploy, or the same CLI command).
+With the token in place the step lists the project's services first
+(`railway status --json`) and redeploys only a service that exists, so an image
+whose service has not been created yet (the hosted agent before its wallet, the
+screener before the Arc redeploy) is published and named in the summary rather
+than failing its job.
 There is no `:latest`, and `sha-` tags are never moved, so
 `docs/deploy/services-5042002-<date>.md` can name the exact build that ran.
 
