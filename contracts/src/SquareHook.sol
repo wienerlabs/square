@@ -500,9 +500,9 @@ contract SquareHook is IACPHook, IPayoutResolver, ERC165, Ownable2Step {
     }
 
     function settlementFacts(uint256 jobId) external view returns (address payee, uint256 amount, address token) {
-        ISquareJob.JobRecord memory job = _squareJob.getJobRecord(jobId);
-        payee = job.payee == address(0) ? job.provider : job.payee;
-        amount = (_squareJob.netPayout(jobId) * job.providerBps) / FULL_BPS;
+        uint16 providerBps;
+        (payee, providerBps) = _squareJob.payoutOf(jobId);
+        amount = (_squareJob.netPayout(jobId) * providerBps) / FULL_BPS;
         token = _squareJob.paymentToken();
     }
 
