@@ -28,5 +28,6 @@ contracts/src/generated/
 contracts/broadcast/
 broadcast/
 contracts/deployments/31337.json
+contracts/deployments/*.dry-run.json
 contracts/deployments/5042002.local.json
 .vercel
