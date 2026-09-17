@@ -129,7 +129,7 @@ institutions' tools do ([#347](https://github.com/wienerlabs/square/issues/347))
 the files have to be the ones the shared stack's verifier is keyed to
 ([#353](https://github.com/wienerlabs/square/issues/353)). `LIFECYCLE_PROVER_URL`
 names a prover service instead, which is what CI's gated run uses. In keeper
-mode the Arc script funds `BUDGET_USDC=6` and `FUND_CLIENT=45` unless told
+mode the Arc script funds `BUDGET_USDC=10` and `FUND_CLIENT=70` unless told
 otherwise, for the reason below.
 
 Two things the run needs on a shared chain that the local stack does not:
@@ -138,13 +138,20 @@ Two things the run needs on a shared chain that the local stack does not:
   gas: `minimumProfitableBudget` with the deployed `EVALUATOR_FEE_BP` of 50,
   its `FINALIZE_GAS` and `MINIMUM_MARGIN_BPS` ([keeper-economics.md](keeper-economics.md)).
   A job under the bar is journaled as unprofitable and never finalized, and the
-  runner times out on it (`LIFECYCLE_SETTLEMENT_TIMEOUT_MS`, 10 minutes). At
-  Arc's 21 gwei and the keeper's defaults the bar is about 2.3 USDC a job. A
-  gated finalize costs 1.0 to 1.2 M gas on the fork rather than the 450 000 the
-  keeper assumes ([#344](https://github.com/wienerlabs/square/issues/344)), so
-  `BUDGET_USDC=6` keeps the crank paid at its real cost too, and `FUND_CLIENT`
-  has to cover six funded jobs, their bonds and the gas: the Arc script's
-  keeper-mode defaults.
+  runner times out on it (`LIFECYCLE_SETTLEMENT_TIMEOUT_MS`, 10 minutes). Since
+  [#399](https://github.com/wienerlabs/square/pull/399) closed
+  [#344](https://github.com/wienerlabs/square/issues/344) the keeper assumes a
+  gated finalize's real gas, 1.06 M and 1.11 M for a decided one, and from its
+  first receipt on averages what it measured. At Arc's 21 gwei with the
+  deployed fee and the default 20 % margin that is a bar of about 5.6 USDC a
+  job, and a receipt of 1.25 M gas, which the fork rehearsal came close to,
+  would move it past 6. `BUDGET_USDC=10` clears it with room for the receipts
+  and for gas up to about 39 gwei, and `FUND_CLIENT=70` covers six funded jobs,
+  their bonds and the gas: the Arc script's keeper-mode defaults. The buyer is
+  funded for the receivable's asking price, nine tenths of the budget, on top
+  of `FUND_PER_ACTOR`, because on Arc that price is native USDC and not the
+  500 the local chain mints. A keeper-mode run therefore needs about 85 USDC
+  on the deployer before it starts.
 - **Fresh actors.** Arc Testnet refuses anvil's published accounts:
   `register()` from them reverts, and the RPC answers `Blocked address` for
   some. `lifecycle-arc-testnet.sh` already draws fresh keys into

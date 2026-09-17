@@ -263,7 +263,7 @@ async function settle(path: string, label: string, jobId: bigint, own: () => Pro
   return { row, receipt, events: decodeSquareLogs(receipt.logs, deployment) };
 }
 
-async function fundActors(deployment: SquareDeployment, actors: Actors): Promise<void> {
+async function fundActors(deployment: SquareDeployment, actors: Actors, budget: bigint): Promise<void> {
   const addresses = Object.values(actors).map((key) => privateKeyToAccount(key).address);
   if (isAnvil) {
     const funder = createWalletClient({ chain, transport: http(rpcUrl), account: privateKeyToAccount(anvilKey(0)) });
@@ -279,9 +279,15 @@ async function fundActors(deployment: SquareDeployment, actors: Actors): Promise
   const funder = createWalletClient({ chain, transport: http(rpcUrl), account: privateKeyToAccount(funderKey) });
   const perActor = parseEther(process.env["FUND_PER_ACTOR"] ?? "1");
   const clientFund = parseEther(process.env["FUND_CLIENT"] ?? "7");
+  // The buyer pays the receivable's asking price, nine tenths of the budget, and
+  // on a live chain that is the native USDC the funder sends here: the kernel
+  // counts it through the ERC-20 mirror in 6 decimals, the balance holds it in
+  // 18. Anvil above mints 500 to everyone, which hid this from the fork run.
+  const buyerFund = ((budget * 9n) / 10n) * 10n ** 12n + perActor;
   const clientAddress = privateKeyToAccount(actors.client).address;
+  const buyerAddress = privateKeyToAccount(actors.buyer).address;
   for (const address of addresses) {
-    const target = address === clientAddress ? clientFund : perActor;
+    const target = address === clientAddress ? clientFund : address === buyerAddress ? buyerFund : perActor;
     const balance = await publicClient.getBalance({ address });
     if (balance >= target) continue;
     const hash = await funder.sendTransaction({ to: address, value: target - balance });
@@ -462,7 +468,8 @@ async function resolveAgent(deployment: SquareDeployment, providerKey: Hex): Pro
 async function main(): Promise<void> {
   const deployment = deploymentFromJson(JSON.parse(readFileSync(deploymentFile, "utf8")));
   const actors = loadActors();
-  await fundActors(deployment, actors);
+  const budget = parseUnits(process.env["BUDGET_USDC"] ?? "5", 6);
+  await fundActors(deployment, actors, budget);
   const client = actor(deployment, actors.client);
   const gate = await gateFor(client);
   const provider = actor(deployment, actors.provider);
@@ -470,7 +477,6 @@ async function main(): Promise<void> {
   const arbiterA = actor(deployment, actors.arbiterA);
   const arbiterB = actor(deployment, actors.arbiterB);
   const cranker = actor(deployment, actors.cranker);
-  const budget = parseUnits(process.env["BUDGET_USDC"] ?? "5", 6);
   const horizon = BigInt(await client.settlementHorizon());
   agentId = await registerAgent(deployment, actors.provider);
   await resolveAgent(deployment, actors.provider);
