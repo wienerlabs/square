@@ -1,7 +1,7 @@
 # The local stack
 
 One command brings up a chain, the contracts on it, a database, the circuit
-artifacts and the four processes:
+artifacts and the five processes:
 
 ```
 make up
@@ -23,8 +23,8 @@ to compile.
 | `make logs` | Follow all of them |
 
 `make up` writes `.env` from `.env.example` on first run. Nothing in either
-file is a production value; the one key is anvil's first published test
-account, which controls nothing outside a local chain.
+file is a production value; the two keys are anvil's published test accounts 0
+and 7, which control nothing outside a local chain.
 
 ## What comes up
 
@@ -37,7 +37,8 @@ account, which controls nothing outside a local chain.
 | circuits | — | One shot: copies `payment.wasm` and `payment.zkey` into a volume |
 | prover | 3003 | Groth16 proofs |
 | indexer | 3010 | State rebuilt from events |
-| keeper | 3011 | Finalizes jobs whose window has closed |
+| screener | 3012 | Screens addresses against TRM and signs what `ScreeningRegistry` accepts |
+| keeper | 3011 | Finalizes jobs whose window has closed; asks the screener first on a hook that screens |
 | app | 3000 | The static bundle behind a file server |
 
 The three one shots are dependencies, not services. Compose runs them, waits
@@ -55,7 +56,18 @@ deployer writes `contracts/deployments/31337.json` and both services read it
 through `SQUARE_DEPLOYMENT_FILE`. Everything else is an environment variable
 with a default in `.env.example`. The keeper's key has no default at all --
 compose refuses to start without `KEEPER_PRIVATE_KEY`, because a signer that
-silently falls back to something is worse than one that will not start.
+silently falls back to something is worse than one that will not start. The
+screener's `SCREENER_PRIVATE_KEY` and `SCREENING_CANARY` are the same: no
+default in compose, values in `.env.example`. An `.env` written before the
+screener existed carries neither, and `make up` then stops on the missing
+variable by name; delete `.env` and let `make up` write it again.
+
+The screener finds its registry through the same record: `SCREENING_REGISTRY`
+is unset in compose and the address comes from `ScreeningRegistry` in
+`contracts/deployments/31337.json`, which `DeployLocal` writes and which also
+registers `.env.example`'s screener account with `setScreener`. A screener the
+registry does not recognise fails its own `/health`, and the keeper's critical
+`screener` check fails with it.
 
 ## A measured run
 

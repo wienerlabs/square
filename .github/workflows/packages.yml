@@ -93,7 +93,7 @@ jobs:
         with:
           node-version: "22"
       - name: Every variable the service reads is in its README
-        if: matrix.package == 'services/indexer' || matrix.package == 'services/keeper'
+        if: matrix.package == 'services/indexer' || matrix.package == 'services/keeper' || matrix.package == 'services/screener'
         run: node scripts/check-env-documented.mjs ${{ matrix.package }}
 
       - name: Build contracts
