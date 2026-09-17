@@ -184,8 +184,11 @@ contract DeploySettlement is Script {
         vm.serializeAddress(json, "IdentityRegistry", p.identity);
         vm.serializeAddress(json, "ReputationRegistry", p.reputation);
         string memory out = vm.serializeAddress(json, "ValidationRegistry", p.validation);
+        string memory chain = vm.toString(block.chainid);
+        bytes32 broadcast = keccak256(bytes(vm.envOr("BROADCAST", string("1"))));
+        string memory rehearsal = broadcast == keccak256(bytes("1")) ? "" : ".dry-run";
         string memory path =
-            vm.envOr("DEPLOYMENT_FILE", string.concat("deployments/", vm.toString(block.chainid), ".json"));
+            vm.envOr("DEPLOYMENT_FILE", string.concat("deployments/", chain, rehearsal, ".json"));
         vm.writeJson(out, path);
         console2.log("SquareJob        ", d.squareJob);
         console2.log("KeeperEvaluator  ", d.keeperEvaluator);
