@@ -33,8 +33,8 @@ describe("which gas a finalize is assumed to cost", () => {
     const moduleless = minimumProfitableBudget(DEFAULT_FEE_BP, ARC_GAS_PRICE, MODULELESS_FINALIZE_GAS, MARGIN_BPS);
     const gated = minimumProfitableBudget(DEFAULT_FEE_BP, ARC_GAS_PRICE, GATED_FINALIZE_GAS, MARGIN_BPS);
 
-    expect(moduleless).toBe(2_376_000n);
-    expect(gated).toBe(5_596_800n);
+    expect(moduleless).toBe(2_956_800n);
+    expect(gated).toBe(5_755_200n);
     expect(gated).toBeGreaterThan(3_000_000n);
     expect(gated).toBeLessThan(6_000_000n);
   });

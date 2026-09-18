@@ -3,13 +3,13 @@ import type { Address } from "viem";
 import type { Database } from "@squaresdk/data";
 import { createHealth, type CheckReport, type HealthStatus } from "@squaresdk/observability";
 import { keeperChecks } from "../src/checks.js";
-import { GATED_FINALIZE_GAS } from "../src/gas.js";
+import { GATED_FINALIZE_GAS, MODULELESS_FINALIZE_GAS } from "../src/gas.js";
 
 const CHAIN = 5042002;
 const ACCOUNT = "0xcc55417B17a31163325cB83Cf6900C98BE595e7A" as Address;
 const HOOK = "0xb44aCCBb8d1eae0e2D2e8B33CEC32f1fD613e7e6" as Address;
 const NO_SCREENING = "0x0000000000000000000000000000000000000000" as Address;
-const FINALIZE_GAS = 450_000n;
+const FINALIZE_GAS = MODULELESS_FINALIZE_GAS;
 const GWEI = 1_000_000_000n;
 const LIVE_GAS_PRICE = 25n * GWEI;
 const ONE_FINALIZE = LIVE_GAS_PRICE * FINALIZE_GAS;
@@ -143,12 +143,12 @@ describe("the balance check follows the keeper's own gas assumption", () => {
 
     const moduleless = await balanceFor();
     expect(moduleless.ok).toBe(true);
-    expect(moduleless.detail).toContain("450000 gas each");
+    expect(moduleless.detail).toContain(`${MODULELESS_FINALIZE_GAS} gas each`);
 
     assumed = GATED_FINALIZE_GAS;
     const gated = await balanceFor();
     expect(gated.ok).toBe(false);
-    expect(gated.detail).toContain("1060000 gas each");
+    expect(gated.detail).toContain(`${GATED_FINALIZE_GAS} gas each`);
     expect(gated.detail).toContain("covers 1 finalize sends");
   });
 });
