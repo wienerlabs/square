@@ -4,10 +4,20 @@ import type { SquareClient } from "@squaresdk/core";
 
 export type SettlementAction = "finalize" | "finalizeDecided";
 
-export const MODULELESS_FINALIZE_GAS = 450_000n;
-export const MODULELESS_FINALIZE_DECIDED_GAS = 500_000n;
-export const GATED_FINALIZE_GAS = 1_060_000n;
-export const GATED_FINALIZE_DECIDED_GAS = 1_110_000n;
+// The estimate a keeper starts from before its first receipt; from the first
+// receipt on the moving average below is what it uses. Since square#405 every
+// settled job writes an ERC-8004 evidence record from the hook's afterAction,
+// which the Foundry suite measures at +86 690 gas on a moduleless finalize (the
+// validation write is new there) and +29 359 on a gated one (the write was
+// already there; the evidence read and event are the difference). The
+// moduleless figure is the CI runner's reading of test_gas_finalizeWithHook
+// rounded up; the gated pair is the 1 052 107 receipt of #344's anvil
+// measurement plus that delta, rounded up. Being high here costs a keeper
+// work it could have taken; being low costs it money (docs/design/keeper-economics.md).
+export const MODULELESS_FINALIZE_GAS = 560_000n;
+export const MODULELESS_FINALIZE_DECIDED_GAS = 610_000n;
+export const GATED_FINALIZE_GAS = 1_090_000n;
+export const GATED_FINALIZE_DECIDED_GAS = 1_140_000n;
 export const DEFAULT_FINALIZE_GAS_SAMPLES = 5;
 
 export type GasSource = "operator" | "receipts" | "default";

@@ -196,8 +196,8 @@ export SQUARE_VERSION=0.1.0          # what /health and /version report, and wha
 export PORT=3011                     # where the endpoints below are served
 export POLL_INTERVAL_MS=15000
 export MINIMUM_MARGIN_BPS=2000
-export FINALIZE_GAS=450000
-export FINALIZE_DECIDED_GAS=500000
+export FINALIZE_GAS=560000           # the moduleless estimate before the first receipt; a gated stack starts from 1090000 (src/gas.ts)
+export FINALIZE_DECIDED_GAS=610000
 export MIN_ACTIONS_FUNDED=3          # the balance check demands gas for this many finalizes
 export RECORD_EXPIRIES=true
 export EXPIRY_INTERVAL_MS=60000      # how often the expiry sweep runs, between ticks
@@ -333,6 +333,8 @@ same code the service serves rather than a copy of it.
 ## Economics
 
 See [docs/design/keeper-economics.md](../../docs/design/keeper-economics.md).
-With the default 0.5 % evaluator fee and the measured 465 486 gas at 22.1728
-gwei, a job needs a budget of about 2.06 USDC to break even and about 6.2 USDC
-to clear a 3x margin.
+With the default 0.5 % evaluator fee, a moduleless finalize of 560 000 gas at
+22 gwei needs a budget of about 2.46 USDC to break even and about 7.4 USDC to
+clear a 3x margin; a gated finalize of 1 090 000 gas needs 4.80 and 14.4. The
+constants are the estimate before the first receipt; the receipts take over
+from there.

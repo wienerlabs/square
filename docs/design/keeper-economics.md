@@ -121,6 +121,34 @@ receipts do not. Until that change, a keeper on a gated stack believed every
 finalize cost 450 000 gas and took every job between 2.38 and 5.44 USDC at a
 loss, while its balance check funded 1.3 finalizes and claimed three (#344).
 
+### After the evidence record
+
+Since [#405](https://github.com/wienerlabs/square/pull/405) every settled job
+writes an ERC-8004 evidence record from the hook's `afterAction`, and the
+Foundry suite measures what that added, main against the change, same forge,
+optimizer on:
+
+| path | before | after | delta |
+|---|---|---|---|
+| hooked `finalize`, no module (`test_gas_hookShareOfComplete`) | 441 580 | 528 270 | +86 690 |
+| gated `complete`, real module and verifier (`test_gas_gatedCompleteFitsTheHookLimit`) | 1 097 209 | 1 126 568 | +29 359 |
+
+The two deltas differ because a moduleless stack wrote no validation response
+before #405 and writes one now, on top of the evidence read and event that both
+stacks pay. Applied to the receipts above, the 2026-09-09 optimistic `finalize`
+of 449 893 becomes about 537 000 and #344's verified gated release of
+1 052 107 about 1 081 500; both stay estimates until the redeployed stack's
+receipts replace them, and this section will quote those when they exist.
+
+The keeper's starting constants follow: `MODULELESS_FINALIZE_GAS` 560 000 and
+`MODULELESS_FINALIZE_DECIDED_GAS` 610 000, `GATED_FINALIZE_GAS` 1 090 000 and
+`GATED_FINALIZE_DECIDED_GAS` 1 140 000 (`services/keeper/src/gas.ts`): the CI
+runner's reading of `test_gas_finalizeWithHook` (556 564) rounded up, and the
+receipt plus the delta rounded up. At 22 gwei and the default fee the break-even
+budgets are 2.46 USDC moduleless and 4.80 USDC gated, 7.4 and 14.4 with a 3×
+margin. A constant that is high costs a keeper work it could have taken; one
+that is low costs it money, and the receipts correct either within one finalize.
+
 This table has now been wrong in both directions, which is why it is derived
 from receipts rather than estimated. It first quoted 1.68 USDC at the default
 fee, from the pre-measurement Foundry figure of 417 852 gas at 20 gwei, and that
@@ -151,13 +179,16 @@ it: it is keeper-side arithmetic, not part of the SDK surface, so a client that
 wants the floor before funding has to compute it the same way or ask a keeper.
 
 The keeper service does not use the table above. It reads the live gas price on
-every tick (`services/keeper/src/run.ts`) and multiplies it by `FINALIZE_GAS`,
-which defaults to 450 000 against the measured 449 893: 107 gas apart, where it
-was 15 486 gas under the 2026-09-07 receipt. The gap between that assumption and
-the receipt is exported as `square_finalize_gas_gap`, so a constant that drifts
-away from the chain shows up as a metric rather than as a keeper that quietly
-finalizes at a loss. That the default is now almost exactly right is a
-coincidence of #145's arithmetic, not a reason to stop watching the metric.
+every tick (`services/keeper/src/run.ts`) and multiplies it by the gas it
+assumes: an explicit `FINALIZE_GAS` if the operator set one, otherwise the
+moving average of its last receipts, and before the first receipt the constant
+for the stack it is on (560 000 moduleless, 1 090 000 gated, above). The gap
+between the assumption and the receipt is exported as `square_finalize_gas_gap`
+and alerted on past `MAX_GAS_OVERSHOOT_PERCENT`, so a constant that drifts away
+from the chain shows up as a metric rather than as a keeper that quietly
+finalizes at a loss. The 450 000 this section used to quote was 107 gas from
+the 2026-09-09 receipt, a coincidence of #145's arithmetic; #405 moved the
+receipt and the constant moved with it.
 
 ## Why this is enough and sponsorship is not needed for the keeper
 

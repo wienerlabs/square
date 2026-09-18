@@ -141,10 +141,11 @@ Two things the run needs on a shared chain that the local stack does not:
   runner times out on it (`LIFECYCLE_SETTLEMENT_TIMEOUT_MS`, 10 minutes). Since
   [#399](https://github.com/wienerlabs/square/pull/399) closed
   [#344](https://github.com/wienerlabs/square/issues/344) the keeper assumes a
-  gated finalize's real gas, 1.06 M and 1.11 M for a decided one, and from its
-  first receipt on averages what it measured. At Arc's 21 gwei with the
-  deployed fee and the default 20 % margin that is a bar of about 5.6 USDC a
-  job, and a receipt of 1.25 M gas, which the fork rehearsal came close to,
+  gated finalize's real gas, 1.09 M and 1.14 M for a decided one since the
+  evidence record of [#405](https://github.com/wienerlabs/square/pull/405), and
+  from its first receipt on averages what it measured. At Arc's 21 gwei with
+  the deployed fee and the default 20 % margin that is a bar of about 5.8 USDC
+  a job, and a receipt of 1.25 M gas, which the fork rehearsal came close to,
   would move it past 6. `BUDGET_USDC=10` clears it with room for the receipts
   and for gas up to about 39 gwei, and `FUND_CLIENT=70` covers six funded jobs,
   their bonds and the gas: the Arc script's keeper-mode defaults. The buyer is
