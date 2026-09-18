@@ -10,6 +10,7 @@ import { SCREENING_DOMAIN_NAME, SCREENING_DOMAIN_VERSION, SCREENING_TYPES, TRM_S
 
 const rpcUrl = process.env["ANVIL_RPC_URL"] ?? "http://127.0.0.1:8545";
 const here = dirname(fileURLToPath(import.meta.url));
+const RECEIPT_POLL_MS = 250;
 
 async function anvilReachable(): Promise<boolean> {
   try {
@@ -31,8 +32,8 @@ const reachable = await anvilReachable();
 describe.skipIf(!reachable)("ScreeningRegistry accepts what the screener signs", () => {
   // anvil's published development mnemonic; its keys guard nothing.
   const owner = mnemonicToAccount("test test test test test test test test test test test junk", { addressIndex: 0 });
-  const publicClient = createPublicClient({ chain: foundry, transport: http(rpcUrl) });
-  const wallet = createWalletClient({ chain: foundry, transport: http(rpcUrl), account: owner });
+  const publicClient = createPublicClient({ chain: foundry, transport: http(rpcUrl), pollingInterval: RECEIPT_POLL_MS });
+  const wallet = createWalletClient({ chain: foundry, transport: http(rpcUrl), account: owner, pollingInterval: RECEIPT_POLL_MS });
   const screener = privateKeyToAccount(generatePrivateKey());
   let registry: Address;
 
