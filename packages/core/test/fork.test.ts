@@ -224,7 +224,7 @@ describe.skipIf(!forkUrl)("lifecycle on an Arc Testnet fork with the real ERC-80
     expect(validator).toBe(deployment.squareHook);
     expect(agentId).toBe(smokeAgentId);
     expect(response).toBe(100);
-    expect(tag).toBe("square.compliance");
+    expect(tag).toBe("square.settlement");
 
     const released = eventsNamed(finalized.events, "PaymentReleased")[0];
     expect(released?.args.provider).toBe(smokeAgentOwner);

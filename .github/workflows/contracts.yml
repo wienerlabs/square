@@ -58,6 +58,8 @@ jobs:
       # than they are.
       - name: Coverage
         working-directory: contracts
+        env:
+          UNOPTIMIZED_BUILD: "true"
         run: |
           set -o pipefail
           forge coverage --ir-minimum --no-match-coverage "(script|test)/" | tee ../coverage.txt

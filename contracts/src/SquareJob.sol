@@ -322,6 +322,14 @@ contract SquareJob is ISquareJob, ReentrancyGuard, Ownable2Step {
         return _existing(jobId).provider;
     }
 
+    function payoutOf(uint256 jobId) external view returns (address payee, uint256 amount) {
+        JobRecord storage job = _existing(jobId);
+        payee = job.payee == address(0) ? job.provider : job.payee;
+        uint256 budget = job.budget;
+        uint256 net = budget - (budget * job.platformFeeBP) / BPS - (budget * job.evaluatorFeeBP) / BPS;
+        amount = (net * job.providerBps) / BPS;
+    }
+
     function netPayout(uint256 jobId) public view returns (uint256) {
         JobRecord storage job = _existing(jobId);
         uint256 amount = job.budget;

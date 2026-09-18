@@ -381,6 +381,8 @@ What the normative set does not carry and the indexer needs.
 | Event | Carries |
 |---|---|
 | `AgentBound(uint256 indexed jobId, uint256 indexed agentId, bytes32 validationRequestHash)` | at submit |
+| `EvidenceRecorded(uint256 indexed jobId, address indexed payee, uint256 amount, address token, bytes32 screening, uint8 complianceOutcome, uint8 screeningOutcome, bytes32 commitment)` | at complete and at reject, the preimage of the `responseHash` written to the ValidationRegistry under `square.settlement`. The commitment alone cannot be checked by a reader, so the values it hashes are emitted beside it: anyone can recompute `commitment` from this event and compare it with the record on the registry. `amount` is what the kernel credited the payee in the same transaction, so a record exists only where money moved, and forging one costs the job it names |
+| `EvidenceUnreadable(uint256 indexed jobId, bytes reason)` | the kernel reads that build the evidence reverted, so no validation record is written for this settlement. Settlement and the reputation write are untouched: a record that cannot be made honestly is not made |
 | `PolicyPinned(uint256 indexed jobId, address indexed client, bytes32 commitment)` | at fund, when a compliance module is installed: the policy commitment the client held at that moment, which is the one every later proof for this job is checked against. A client with no commitment cannot fund, so this event exists for every funded job on a gated stack |
 | `ComplianceChecked(uint256 indexed jobId, address indexed payee, uint256 amount, bool verified)` | at complete; `verified` is false while no module is installed |
 | `ReputationRecorded(uint256 indexed jobId, uint256 indexed agentId, uint8 outcome, int128 value)` | |
@@ -481,7 +483,7 @@ one without a consumer is incomplete, whatever the event records.
 |---|---|---|---|
 | `submit` with `optParams = abi.encode(agentId, validationRequestHash)` | none written; the hook checks `IdentityRegistry.ownerOf(agentId) == provider` (or `getAgentWallet(agentId) == provider`) and binds the job to the agent | | |
 | `complete`, in `afterAction` | `ReputationRegistry.giveFeedback(agentId, +1, 0, "square", "completed", "", "", reason)` | the job's **provider** agent, never the payee. A sold receivable moves the money, not the credit (#23, #29) |
-| `complete`, in `afterAction`, when the compliance module verified a proof | `ValidationRegistry.validationResponse(requestHash, 100, "", 0, "square.compliance")` | the agent that opened the request |
+| `complete`, in `afterAction`, for every settled job whose provider opened a validation request | `ValidationRegistry.validationResponse(requestHash, paid ? 100 : 0, "", evidence, "square.settlement")`, where `evidence` commits to the job, the payee, the amount the kernel credited, the token, the screening record and the two check outcomes | the agent that opened the request |
 | `reject` from Submitted, in `afterAction` | `giveFeedback(agentId, -1, …, "rejected")` and `validationResponse(requestHash, 0, …)` | provider agent |
 | `reject` from Open or Funded | nothing; no work was delivered, no signal is warranted | |
 | `claimRefund` (Expired) | not hookable, so nothing at the moment of expiry. `SquareHook.recordExpiry(jobId)` is permissionless, checks `status == Expired` on the kernel, and writes `giveFeedback(agentId, 0, …, "expired")` once. The keeper (#42) calls it. | provider agent |

@@ -239,7 +239,7 @@ async function main() {
     check('the net went back to the client', (await withdrawable(client.address)) - clientBefore, net);
     const [, , dResponse, , dTag] = await publicClient.readContract({ address: d.ValidationRegistry, abi: validationAbi, functionName: 'getValidationStatus', args: [requestD] });
     check('the ERC-8004 record attests the refusal: response 0', dResponse, 0);
-    check('under the hook\'s tag', dTag, 'square.compliance');
+    check('under the hook\'s tag', dTag, 'square.settlement');
 
     process.stdout.write('\nE  the honest release: the payee screened just before finalize\n');
     await screen(3112, [client.address]);

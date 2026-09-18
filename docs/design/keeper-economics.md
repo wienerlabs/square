@@ -66,6 +66,26 @@ lower, so treat it as a floor rather than a forecast: `finalize` 417 852 gas
 `SquareHook.recordExpiry` 47 953. The difference on `finalize` is the registry
 writes being real and touching a storage slot for the first time.
 
+### The same finalize measured in two places
+
+A gas assertion in the Foundry suite is measured by the runner, not by a laptop,
+and the two do not agree. The same `test_gas_finalizeWithHook`, same solc 0.8.28,
+same optimizer at 10 000 runs, same cancun:
+
+| where | gas |
+|---|---|
+| this machine, forge 1.3.2 | 463 560 |
+| ubuntu-latest, foundry stable | 556 564 |
+| ubuntu-latest, under `forge coverage --ir-minimum` | about 650 000 |
+
+The difference between the first two is roughly 90 000 and it is constant: the
+change that added the evidence record moved both by about 74 000. So a bound that
+is meant to catch a regression has to be set from the runner's number, because
+the runner is the gate, and a bound set from a laptop is either red on arrival or
+so loose it guards nothing. The coverage column has its own bound, selected by
+`UNOPTIMIZED_BUILD`, because a gas figure from a build with the optimizer off
+says nothing about the chain.
+
 ## The smallest job that pays
 
 The keeper breaks even when `budget × evaluatorFeeBP / 10 000 ≥ gas cost`, and

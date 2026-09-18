@@ -131,6 +131,7 @@ interface ISquareJob {
     function getJob(uint256 jobId) external view returns (Job memory);
     function getJobRecord(uint256 jobId) external view returns (JobRecord memory);
     function providerOf(uint256 jobId) external view returns (address);
+    function payoutOf(uint256 jobId) external view returns (address payee, uint256 amount);
     function netPayout(uint256 jobId) external view returns (uint256);
     function withdrawable(address account) external view returns (uint256);
     function totalWithdrawable() external view returns (uint256);
