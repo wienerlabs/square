@@ -51,12 +51,19 @@ if [ "$VERIFY" = "1" ]; then
   verify_args="--verify --verifier blockscout --verifier-url ${ARCSCAN_API_URL:-https://testnet.arcscan.app/api/}"
 fi
 
+BROADCAST="${BROADCAST:-1}"
+broadcast_args="--broadcast --slow"
+if [ "$BROADCAST" != "1" ]; then
+  broadcast_args=""
+  verify_args=""
+fi
+
 # The record keeps the commit it was compiled from, because that plus
 # foundry.toml is what a later verification needs and the explorer cannot
 # answer for us.
-GIT_COMMIT="$(git -C "$(dirname "$0")/.." rev-parse --short HEAD 2>/dev/null || echo unknown)"
+GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 export GIT_COMMIT
 
-echo "deployer=$DEPLOYER_ADDRESS chain=$actual_chain_id arbiters=$ARBITERS windows=$CHALLENGE_WINDOW/$DISPUTE_WINDOW/$FINALIZE_GRACE minReputationBudget=$MIN_REPUTATION_BUDGET commit=$GIT_COMMIT verify=$VERIFY screening=$INSTALL_SCREENING screeningMaxAge=$SCREENING_MAX_AGE screener=$SCREENER_ADDRESS"
+echo "deployer=$DEPLOYER_ADDRESS chain=$actual_chain_id arbiters=$ARBITERS windows=$CHALLENGE_WINDOW/$DISPUTE_WINDOW/$FINALIZE_GRACE minReputationBudget=$MIN_REPUTATION_BUDGET commit=$GIT_COMMIT broadcast=$BROADCAST verify=$VERIFY screening=$INSTALL_SCREENING screeningMaxAge=$SCREENING_MAX_AGE screener=$SCREENER_ADDRESS"
 # shellcheck disable=SC2086
-forge script script/DeploySettlement.s.sol --rpc-url "$ARC_TESTNET_RPC_URL" --chain "$EXPECTED_CHAIN_ID" --broadcast --slow $verify_args -vv "$@"
+forge script script/DeploySettlement.s.sol --rpc-url "$ARC_TESTNET_RPC_URL" --chain "$EXPECTED_CHAIN_ID" $broadcast_args $verify_args -vv "$@"
